@@ -49,6 +49,20 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertFalse(SidebarFilter.active.matches(waiting))
     }
 
+    func testSidebarFilterMatchesCategoriesAndRetryFlags() {
+        let video = DownloadTask(url: "https://a/v.mp4", filename: "v.mp4", category: .video, status: .complete)
+        let failed = DownloadTask(url: "https://a/x", status: .error, errorText: "410 Gone")
+        XCTAssertTrue(SidebarFilter.video.matches(video))
+        XCTAssertFalse(SidebarFilter.document.matches(video))
+        XCTAssertEqual(SidebarFilter.video.section, "Type")
+        XCTAssertEqual(SidebarFilter.all.section, "Status")
+
+        let row = TaskRowPresentation.make(task: failed, progress: nil)
+        XCTAssertTrue(row.canRetry)
+        XCTAssertTrue(row.canRenew)
+        XCTAssertEqual(row.statusTitle, "Failed")
+    }
+
     func testTaskRowPresentationFormatsLiveProgress() {
         let task = DownloadTask(
             url: "https://cdn.example.com/film.mkv",
@@ -76,20 +90,14 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertNotEqual(row.etaText, "—")
     }
 
-    func testTaskRowPresentationCompletedPrimaryActionIsOpenWhenFileExists() {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ndm-presentation-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let file = dir.appendingPathComponent("done.bin")
-        try! Data([1, 2, 3]).write(to: file)
-
+    func testTaskRowPresentationCompletedPrimaryActionIsOpenWhenDestinationKnown() {
+        // Presentation must not probe the filesystem; destination path is enough.
         let task = DownloadTask(
             url: "https://example.com/done.bin",
             filename: "done.bin",
             fileSize: 3,
             status: .complete,
-            folderPath: dir.path
+            folderPath: "/Users/example/Downloads"
         )
         let row = TaskRowPresentation.make(task: task, progress: nil)
         XCTAssertEqual(row.primaryAction, .open)

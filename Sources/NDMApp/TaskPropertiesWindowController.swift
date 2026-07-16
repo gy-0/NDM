@@ -6,6 +6,7 @@ import NDMEngine
 final class TaskPropertiesWindowController: NSWindowController {
     private let manager: DownloadManager
     private var task: DownloadTask
+    var taskID: Int64 { task.id }
 
     private let urlField = NSTextField(string: "")
     private let nameField = NSTextField(string: "")
@@ -17,17 +18,19 @@ final class TaskPropertiesWindowController: NSWindowController {
     init(manager: DownloadManager, task: DownloadTask) {
         self.manager = manager
         self.task = task
+        // defer: true avoids blocking the menu/toolbar click while the window
+        // server allocates backing stores.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 280),
             styleMask: [.titled, .closable],
             backing: .buffered,
-            defer: false
+            defer: true
         )
         window.title = "Task Properties — #\(task.id)"
-        window.center()
         super.init(window: window)
         buildUI()
         load()
+        window.center()
     }
 
     @available(*, unavailable)

@@ -47,8 +47,8 @@
 | ID | 功能 | 状态 |
 |----|------|------|
 | D01 | SQLite 任务持久化 | [x] |
-| D02 | 按状态分类 Complete / Incomplete | [x] 主窗侧栏：All / Active / Queued / Paused / Completed / Failed（含计数） |
-| D03 | 按类型 Video / Document / … | [x] `DownloadCategory.infer`；类型过滤待并入侧栏/搜索增强 |
+| D02 | 按状态分类 Complete / Incomplete | [x] 主窗侧栏 Status：All / Active / Queued / Paused / Completed / Failed（含计数） |
+| D03 | 按类型 Video / Document / … | [x] 侧栏 Type 分组：Video / Audio / Document / Compressed / App / Image + 搜索 |
 | D04 | 分类子文件夹 | [x] |
 | D05 | 删除任务（可选删文件） | [x] |
 | D06 | 任务属性面板 | [x] |
@@ -62,10 +62,10 @@
 | E01 | 主窗口任务表 | [x] 现代主窗：`NSToolbar` + 侧栏 + 任务列表 + 可折叠 inspector；行内真实总进度/速度/ETA/状态；双击与右键语义；可测试 `TaskPresentation` |
 | E02 | 新建 URL 窗口 | [x] Toolbar New / Alert |
 | E03 | 下载进度窗口（总进度+逐连接进度） | [x] 每条 Range 连接独立显示真实 `completed / length`、百分比、字节区间与状态；连接列表可滚动；支持运行中改连接数 / Renew；inspector 摘要复用同一 `SegmentState` |
-| E04 | 设置窗口 | [x] 代理凭据 / FTP / ShowPanel / Wait；分组重排仍待做 |
+| E04 | 设置窗口 | [x] General / Browser / Network / Advanced 分页；代理与导入原版 DB |
 | E05 | 菜单栏常驻（Agent） | [x] |
 | E06 | 完成对话框 | [x] `Open` 为默认主操作；另有 `Show in Finder` 与 `Close`，文件缺失时禁用无效操作 |
-| E07 | 错误对话框 | [x] 主列表/inspector 展示失败文案；独立错误窗仍为通用 Alert |
+| E07 | 错误对话框 | [x] 失败任务支持 Retry / Renew URL；列表与 inspector 展示错误文案 |
 | E08 | 退出确认 | [x] 有活跃下载时提示 |
 | E09 | Drag & Drop 链接/文件 | [x] URL/文本拖入主列表区，带 hover 高亮 |
 | E10 | 浏览器引导窗口 | [x] `BrowsersWindowController` |
@@ -98,7 +98,7 @@
 4. **M3** 设置 / 代理 / 认证 / 限速 — ✅（含 NTLMv2 / FTP 代理 / Proxy Basic）
 5. **M4** WebSocket 桥 + BetterNDM 联调 — 🟡 Wait 窗 + ShowPanel + WS 集成测试完成；`docs/BETTERNDM_SMOKE.md` 实机清单待人工走完
 6. **M5** HLS + 媒体合并 — ✅ C01–C03（C04 由 BetterNDM 面板负责）
-7. **M6** 打磨 UX、对等验收、打包 — 🟡 主窗已重构为现代 Toolbar/侧栏/列表/inspector；设置窗分组、类型侧栏、实机 Chrome 与长期稳定性仍需继续
+7. **M6** 打磨 UX、对等验收、打包 — 🟡 设置分页 / 类型侧栏 / Retry·Renew 已落地；BetterNDM 实机与长期稳定性仍需继续
 
 ## 本会话 P0 证据（2026-07-16）
 

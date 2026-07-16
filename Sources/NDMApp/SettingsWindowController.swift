@@ -8,27 +8,32 @@ final class SettingsWindowController: NSWindowController {
     private let manager: DownloadManager
     private var settings: AppSettings
 
+    // General
     private let dirField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
-    private let categoryCheck = NSButton(checkboxWithTitle: "Use category subfolders", target: nil, action: nil)
-    private let allAtOnceCheck = NSButton(checkboxWithTitle: "Download all at once", target: nil, action: nil)
-    private let completeCheck = NSButton(checkboxWithTitle: "Show completion dialog", target: nil, action: nil)
-    private let panelCheck = NSButton(checkboxWithTitle: "Show browser media panel (ShowPanel=1)", target: nil, action: nil)
-    private let confirmCheck = NSButton(checkboxWithTitle: "Confirm browser downloads (Wait window)", target: nil, action: nil)
-    private let uaCheck = NSButton(checkboxWithTitle: "Custom User-Agent", target: nil, action: nil)
+    private let categoryCheck = NSButton(checkboxWithTitle: "Organize into category subfolders", target: nil, action: nil)
+    private let allAtOnceCheck = NSButton(checkboxWithTitle: "Download multiple tasks at once", target: nil, action: nil)
+    private let completeCheck = NSButton(checkboxWithTitle: "Show dialog when a download finishes", target: nil, action: nil)
+
+    // Browser
+    private let panelCheck = NSButton(checkboxWithTitle: "Show floating media panel in browser", target: nil, action: nil)
+    private let confirmCheck = NSButton(checkboxWithTitle: "Confirm each browser capture (Wait window)", target: nil, action: nil)
+    private let uaCheck = NSButton(checkboxWithTitle: "Use custom User-Agent", target: nil, action: nil)
     private let uaField = NSTextField(string: "")
-    private let proxyCheck = NSButton(checkboxWithTitle: "HTTP(S) Proxy", target: nil, action: nil)
+
+    // Network
+    private let proxyCheck = NSButton(checkboxWithTitle: "HTTP(S) proxy", target: nil, action: nil)
     private let proxyHostField = NSTextField(string: "")
     private let proxyPortField = NSTextField(string: "8080")
     private let proxyUserField = NSTextField(string: "")
     private let proxyPassField = NSSecureTextField(string: "")
-    private let ftpProxyCheck = NSButton(checkboxWithTitle: "FTP Proxy (HTTP CONNECT)", target: nil, action: nil)
+    private let ftpProxyCheck = NSButton(checkboxWithTitle: "FTP proxy (HTTP CONNECT)", target: nil, action: nil)
     private let ftpHostField = NSTextField(string: "")
     private let ftpPortField = NSTextField(string: "8080")
     private let ftpUserField = NSTextField(string: "")
     private let ftpPassField = NSSecureTextField(string: "")
-    private let socksCheck = NSButton(checkboxWithTitle: "SOCKS Proxy (overrides HTTP)", target: nil, action: nil)
+    private let socksCheck = NSButton(checkboxWithTitle: "SOCKS proxy (overrides HTTP)", target: nil, action: nil)
     private let socksHostField = NSTextField(string: "")
     private let socksPortField = NSTextField(string: "1080")
     private let socksUserField = NSTextField(string: "")
@@ -39,16 +44,17 @@ final class SettingsWindowController: NSWindowController {
         self.manager = manager
         self.settings = settings
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 720),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
-            defer: false
+            defer: true
         )
         window.title = "Settings"
-        window.center()
+        window.minSize = NSSize(width: 520, height: 420)
         super.init(window: window)
         buildUI()
         loadFields()
+        window.center()
     }
 
     @available(*, unavailable)
@@ -56,58 +62,184 @@ final class SettingsWindowController: NSWindowController {
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
-        let browse = NSButton(title: "Choose…", target: self, action: #selector(chooseDir))
-        browse.bezelStyle = .rounded
+
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
-        let importLegacy = NSButton(title: "Import Original Neat DB…", target: self, action: #selector(importLegacy))
-        importLegacy.bezelStyle = .rounded
+
+        let tabView = NSTabView()
+        tabView.tabViewType = .topTabsBezelBorder
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+
+        tabView.addTabViewItem(makeTab("General", view: makeGeneralPane()))
+        tabView.addTabViewItem(makeTab("Browser", view: makeBrowserPane()))
+        tabView.addTabViewItem(makeTab("Network", view: makeNetworkPane()))
+        tabView.addTabViewItem(makeTab("Advanced", view: makeAdvancedPane()))
+
         let save = NSButton(title: "Save", target: self, action: #selector(saveClicked))
         save.bezelStyle = .rounded
+        save.keyEquivalent = "\r"
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
 
-        let scroll = NSScrollView(frame: content.bounds)
-        scroll.hasVerticalScroller = true
-        scroll.autoresizingMask = [.width, .height]
-        scroll.borderType = .noBorder
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 900))
-        scroll.documentView = doc
-        content.addSubview(scroll)
+        let buttons = NSStackView(views: [NSView(), cancel, save])
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        let grid = NSStackView(views: [
-            NSTextField(labelWithString: "Download folder"), dirField, browse,
-            NSTextField(labelWithString: "Max connections (1–32)"), connField,
-            NSTextField(labelWithString: "Global bandwidth limit bytes/s (0=∞)"), bwField,
-            categoryCheck, allAtOnceCheck, completeCheck, panelCheck, confirmCheck,
-            uaCheck, uaField,
-            proxyCheck,
-            NSTextField(labelWithString: "HTTP proxy host / port / user / pass"),
-            proxyHostField, proxyPortField, proxyUserField, proxyPassField,
-            ftpProxyCheck,
-            NSTextField(labelWithString: "FTP proxy host / port / user / pass"),
-            ftpHostField, ftpPortField, ftpUserField, ftpPassField,
-            socksCheck,
-            NSTextField(labelWithString: "SOCKS host / port / user / pass / version"),
-            socksHostField, socksPortField, socksUserField, socksPassField, socksVersionPopup,
-            importLegacy,
-            NSStackView(views: [save, cancel]),
-        ])
-        grid.orientation = .vertical
-        grid.alignment = .leading
-        grid.spacing = 5
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(grid)
+        content.addSubview(tabView)
+        content.addSubview(buttons)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: doc.topAnchor, constant: 12),
-            grid.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 12),
-            grid.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -12),
-            grid.widthAnchor.constraint(equalToConstant: 476),
+            tabView.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
+            tabView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            tabView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            tabView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
+
+            buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            save.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
+            cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
         ])
-        for f in [dirField, uaField, proxyHostField, proxyUserField, ftpHostField, ftpUserField, socksHostField, socksUserField] {
-            f.translatesAutoresizingMaskIntoConstraints = false
-            f.widthAnchor.constraint(equalToConstant: 460).isActive = true
+    }
+
+    private func makeTab(_ title: String, view: NSView) -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: title)
+        item.label = title
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.documentView = view
+        item.view = scroll
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            view.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            view.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        return item
+    }
+
+    private func makeGeneralPane() -> NSView {
+        let browse = NSButton(title: "Choose…", target: self, action: #selector(chooseDir))
+        browse.bezelStyle = .rounded
+        let dirRow = NSStackView(views: [dirField, browse])
+        dirRow.orientation = .horizontal
+        dirRow.spacing = 8
+
+        return formStack([
+            sectionLabel("Downloads"),
+            caption("Save files to"),
+            dirRow,
+            caption("Max connections per download (1–32)"),
+            connField,
+            caption("Global speed limit (bytes/s, 0 = unlimited)"),
+            bwField,
+            sectionLabel("Behavior"),
+            categoryCheck,
+            allAtOnceCheck,
+            completeCheck,
+        ])
+    }
+
+    private func makeBrowserPane() -> NSView {
+        return formStack([
+            sectionLabel("BetterNDM"),
+            panelCheck,
+            confirmCheck,
+            sectionLabel("Identity"),
+            uaCheck,
+            caption("User-Agent string"),
+            uaField,
+            footnote("These options are pushed to the browser extension over the local WebSocket bridge."),
+        ])
+    }
+
+    private func makeNetworkPane() -> NSView {
+        return formStack([
+            sectionLabel("HTTP(S)"),
+            proxyCheck,
+            caption("Host"),
+            proxyHostField,
+            proxyRow(port: proxyPortField, user: proxyUserField, pass: proxyPassField),
+            sectionLabel("FTP"),
+            ftpProxyCheck,
+            caption("Host"),
+            ftpHostField,
+            proxyRow(port: ftpPortField, user: ftpUserField, pass: ftpPassField),
+            sectionLabel("SOCKS"),
+            socksCheck,
+            caption("Host"),
+            socksHostField,
+            proxyRow(port: socksPortField, user: socksUserField, pass: socksPassField),
+            caption("Version"),
+            socksVersionPopup,
+        ])
+    }
+
+    private func makeAdvancedPane() -> NSView {
+        let importLegacy = NSButton(title: "Import Original Neat Database…", target: self, action: #selector(importLegacy))
+        importLegacy.bezelStyle = .rounded
+        return formStack([
+            sectionLabel("Migration"),
+            footnote("Import tasks from the original Neat Download Manager database. Your NDM data stays in ~/Library/Application Support/dev.ndm.open."),
+            importLegacy,
+        ])
+    }
+
+    private func proxyRow(port: NSTextField, user: NSTextField, pass: NSSecureTextField) -> NSView {
+        port.placeholderString = "Port"
+        user.placeholderString = "Username"
+        pass.placeholderString = "Password"
+        let row = NSStackView(views: [port, user, pass])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.distribution = .fillEqually
+        return row
+    }
+
+    private func formStack(_ views: [NSView]) -> NSView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 24, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        for field in [dirField, uaField, proxyHostField, ftpHostField, socksHostField] {
+            field.translatesAutoresizingMaskIntoConstraints = false
+            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
         }
+        return container
+    }
+
+    private func sectionLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        return label
+    }
+
+    private func caption(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        return label
+    }
+
+    private func footnote(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .tertiaryLabelColor
+        label.preferredMaxLayoutWidth = 480
+        return label
     }
 
     private func loadFields() {

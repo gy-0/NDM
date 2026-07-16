@@ -8,6 +8,12 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
     case paused
     case completed
     case failed
+    case video
+    case audio
+    case document
+    case compressed
+    case application
+    case image
 
     public var title: String {
         switch self {
@@ -17,6 +23,30 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
         case .paused: return "Paused"
         case .completed: return "Completed"
         case .failed: return "Failed"
+        case .video: return "Video"
+        case .audio: return "Audio"
+        case .document: return "Document"
+        case .compressed: return "Compressed"
+        case .application: return "App"
+        case .image: return "Image"
+        }
+    }
+
+    /// Sidebar section header; `nil` means this row is not a section break.
+    public var section: String? {
+        switch self {
+        case .all: return "Status"
+        case .video: return "Type"
+        default: return nil
+        }
+    }
+
+    public var isCategory: Bool {
+        switch self {
+        case .video, .audio, .document, .compressed, .application, .image:
+            return true
+        default:
+            return false
         }
     }
 
@@ -34,6 +64,18 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
             return task.status == .complete
         case .failed:
             return task.status == .error
+        case .video:
+            return task.category == .video
+        case .audio:
+            return task.category == .audio
+        case .document:
+            return task.category == .document
+        case .compressed:
+            return task.category == .compressed
+        case .application:
+            return task.category == .application
+        case .image:
+            return task.category == .image
         }
     }
 
@@ -71,6 +113,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var errorText: String?
     public var canStart: Bool
     public var canPause: Bool
+    public var canRetry: Bool
+    public var canRenew: Bool
     public var canOpen: Bool
     public var canShowInFinder: Bool
     public var canShowProgress: Bool
@@ -93,6 +137,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         errorText: String?,
         canStart: Bool,
         canPause: Bool,
+        canRetry: Bool,
+        canRenew: Bool,
         canOpen: Bool,
         canShowInFinder: Bool,
         canShowProgress: Bool,
@@ -114,6 +160,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.errorText = errorText
         self.canStart = canStart
         self.canPause = canPause
+        self.canRetry = canRetry
+        self.canRenew = canRenew
         self.canOpen = canOpen
         self.canShowInFinder = canShowInFinder
         self.canShowProgress = canShowProgress
@@ -124,33 +172,32 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public static func make(task: DownloadTask, progress: DownloadProgress?) -> TaskRowPresentation {
         let host = TaskPresentationFormatting.host(from: task.url)
         let statusTitle = TaskPresentationFormatting.statusTitle(task.status)
-        let fileExists = task.destinationFileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        // Do not call FileManager.fileExists here — presentation runs on every
+        // UI refresh and synchronous disk probes (Downloads / network / iCloud)
+        // stall the main thread. Open/Reveal verify existence at action time.
+        let hasDestination = task.destinationFileURL != nil
 
         let totalBytes = max(task.fileSize, progress?.totalBytes ?? 0)
         let completedBytes: Int64
         let fraction: Double
         let speed: Double
         let eta: TimeInterval?
-        let segments: [SegmentState]
 
         if task.status == .complete {
             completedBytes = totalBytes
             fraction = 1
             speed = 0
             eta = nil
-            segments = progress?.segmentStates ?? []
         } else if let progress {
             completedBytes = progress.completedBytes
             fraction = progress.fractionCompleted
             speed = progress.bytesPerSecond
             eta = progress.remainingTime
-            segments = progress.segmentStates
         } else {
             completedBytes = 0
             fraction = 0
             speed = 0
             eta = nil
-            segments = []
         }
 
         let errorText: String?
@@ -165,8 +212,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
             || task.status == .error
             || task.status == .waiting
         let canPause = task.status == .downloading || task.status == .waiting
-        let canOpen = task.status == .complete && fileExists
-        let canShowInFinder = task.status == .complete && fileExists
+        let canRetry = task.status == .error
+        let canRenew = task.status == .error || task.status == .paused || task.status == .incomplete
+        let canOpen = task.status == .complete && hasDestination
+        let canShowInFinder = task.status == .complete && hasDestination
         let canShowProgress = task.status != .complete
 
         let primary: TaskPrimaryAction
@@ -204,11 +253,15 @@ public struct TaskRowPresentation: Equatable, Sendable {
             errorText: errorText,
             canStart: canStart,
             canPause: canPause,
+            canRetry: canRetry,
+            canRenew: canRenew,
             canOpen: canOpen,
             canShowInFinder: canShowInFinder,
             canShowProgress: canShowProgress,
             primaryAction: primary,
-            segmentStates: segments.sorted { $0.id < $1.id }
+            // Per-connection detail belongs in the progress window; avoid
+            // copying/sorting segment arrays on every main-list refresh.
+            segmentStates: []
         )
     }
 }
@@ -296,6 +349,8 @@ public enum TaskPresentationFormatting {
 public struct TaskSelectionActions: Equatable, Sendable {
     public var canStart: Bool
     public var canPause: Bool
+    public var canRetry: Bool
+    public var canRenew: Bool
     public var canDelete: Bool
     public var canShowProgress: Bool
     public var canShowProperties: Bool
@@ -305,6 +360,8 @@ public struct TaskSelectionActions: Equatable, Sendable {
     public static let none = TaskSelectionActions(
         canStart: false,
         canPause: false,
+        canRetry: false,
+        canRenew: false,
         canDelete: false,
         canShowProgress: false,
         canShowProperties: false,
@@ -317,6 +374,8 @@ public struct TaskSelectionActions: Equatable, Sendable {
         return TaskSelectionActions(
             canStart: row.canStart,
             canPause: row.canPause,
+            canRetry: row.canRetry,
+            canRenew: row.canRenew,
             canDelete: true,
             canShowProgress: row.canShowProgress,
             canShowProperties: true,

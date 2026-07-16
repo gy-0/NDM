@@ -393,6 +393,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     private func deleteTask(_ id: Int64) {
+        let name = allTasks.first(where: { $0.id == id })?.filename ?? "this download"
+        let alert = NSAlert()
+        alert.messageText = "Remove “\(name)”?"
+        alert.informativeText = "The task is removed from the list. The downloaded file is kept."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             do {
                 try await manager.remove(taskID: id, deleteFile: false)
@@ -404,25 +411,75 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
     }
 
+    private func renewURL(for id: Int64) {
+        let current = allTasks.first(where: { $0.id == id })?.url ?? ""
+        let alert = NSAlert()
+        alert.messageText = "Renew URL"
+        alert.informativeText = "Paste a fresh URL. Partial segments are kept."
+        alert.addButton(withTitle: "Renew & Start")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+        field.stringValue = current
+        field.isEditable = true
+        field.isSelectable = true
+        field.usesSingleLineMode = true
+        alert.accessoryView = field
+        alert.layout()
+        alert.window.initialFirstResponder = field
+        _ = alert.window.makeFirstResponder(field)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return }
+        Task {
+            do {
+                try await manager.renewURL(taskID: id, newURL: url)
+                try await manager.start(taskID: id)
+                selectedTaskID = id
+                await reload()
+                showProgress(for: id)
+            } catch {
+                showAlert(error)
+                await reload()
+            }
+        }
+    }
+
     private func openTaskFile(_ id: Int64) {
         guard let task = allTasks.first(where: { $0.id == id }),
-              let url = task.destinationFileURL,
-              FileManager.default.fileExists(atPath: url.path) else { return }
+              let url = task.destinationFileURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showAlert(message: "File not found", detail: url.path)
+            return
+        }
         NSWorkspace.shared.open(url)
     }
 
     private func revealTaskFile(_ id: Int64) {
         guard let task = allTasks.first(where: { $0.id == id }),
-              let url = task.destinationFileURL,
-              FileManager.default.fileExists(atPath: url.path) else { return }
+              let url = task.destinationFileURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showAlert(message: "File not found", detail: url.path)
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func showProperties(for id: Int64) {
         guard let task = allTasks.first(where: { $0.id == id }) else { return }
-        let wc = TaskPropertiesWindowController(manager: manager, task: task)
-        propsWindow = wc
-        wc.showWindow(nil)
+        // Open after the current menu/toolbar event finishes. Showing a window
+        // synchronously from an NSMenu action commonly stalls for a beat.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let existing = self.propsWindow, existing.taskID == id {
+                existing.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                return
+            }
+            let wc = TaskPropertiesWindowController(manager: self.manager, task: task)
+            self.propsWindow = wc
+            wc.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func performPrimaryAction(for taskID: Int64) {
@@ -451,13 +508,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             openTaskFile(taskID)
         case .reveal:
             revealTaskFile(taskID)
-        case .start:
+        case .start, .retry:
             startTask(taskID)
         case .pause:
             Task {
                 await manager.pause(taskID: taskID)
                 await reload()
             }
+        case .renew:
+            renewURL(for: taskID)
         case .progress:
             showProgress(for: taskID)
         case .properties:
@@ -468,9 +527,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     private func showAlert(_ error: Error) {
+        showAlert(message: "Something went wrong", detail: error.localizedDescription)
+    }
+
+    private func showAlert(message: String, detail: String) {
         let alert = NSAlert()
-        alert.messageText = "Something went wrong"
-        alert.informativeText = error.localizedDescription
+        alert.messageText = message
+        alert.informativeText = detail
         alert.runModal()
     }
 }
@@ -488,6 +551,11 @@ private extension NSToolbarItem.Identifier {
 
 // MARK: - Sidebar
 
+private enum SidebarRow: Equatable {
+    case header(String)
+    case filter(SidebarFilter)
+}
+
 @MainActor
 private final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     var onSelectFilter: ((SidebarFilter) -> Void)?
@@ -496,8 +564,21 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
     private let scrollView = NSScrollView()
     private var counts: [SidebarFilter: Int] = [:]
     private var selected: SidebarFilter = .all
+    private var rows: [SidebarRow] = []
+
+    private static func buildRows() -> [SidebarRow] {
+        var rows: [SidebarRow] = []
+        for filter in SidebarFilter.allCases {
+            if let section = filter.section {
+                rows.append(.header(section))
+            }
+            rows.append(.filter(filter))
+        }
+        return rows
+    }
 
     override func loadView() {
+        rows = SidebarViewController.buildRows()
         view = NSView()
         tableView.style = .sourceList
         tableView.headerView = nil
@@ -525,41 +606,57 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         self.counts = counts
         self.selected = selected
         tableView.reloadData()
-        if let index = SidebarFilter.allCases.firstIndex(of: selected) {
+        if let index = rows.firstIndex(of: .filter(selected)) {
             tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         }
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { SidebarFilter.allCases.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        if case .header = rows[row] { return true }
+        return false
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        if case .header = rows[row] { return false }
+        return true
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let filter = SidebarFilter.allCases[row]
-        let count = counts[filter] ?? 0
-        let cell = NSTableCellView()
-        let title = NSTextField(labelWithString: filter.title)
-        title.font = .systemFont(ofSize: 13, weight: .medium)
-        title.translatesAutoresizingMaskIntoConstraints = false
-        let badge = NSTextField(labelWithString: "\(count)")
-        badge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        badge.textColor = .secondaryLabelColor
-        badge.alignment = .right
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(title)
-        cell.addSubview(badge)
-        NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-            title.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-            badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
-        ])
-        return cell
+        switch rows[row] {
+        case .header(let title):
+            let label = NSTextField(labelWithString: title.uppercased())
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = .secondaryLabelColor
+            return label
+        case .filter(let filter):
+            let count = counts[filter] ?? 0
+            let cell = NSTableCellView()
+            let title = NSTextField(labelWithString: filter.title)
+            title.font = .systemFont(ofSize: 13, weight: .medium)
+            title.translatesAutoresizingMaskIntoConstraints = false
+            let badge = NSTextField(labelWithString: "\(count)")
+            badge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            badge.textColor = .secondaryLabelColor
+            badge.alignment = .right
+            badge.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(title)
+            cell.addSubview(badge)
+            NSLayoutConstraint.activate([
+                title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                title.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
+            ])
+            return cell
+        }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         let row = tableView.selectedRow
-        guard row >= 0, row < SidebarFilter.allCases.count else { return }
-        let filter = SidebarFilter.allCases[row]
+        guard row >= 0, row < rows.count, case .filter(let filter) = rows[row] else { return }
         selected = filter
         onSelectFilter?(filter)
     }
@@ -568,7 +665,7 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
 // MARK: - Task list
 
 enum TaskListContextAction {
-    case open, reveal, start, pause, progress, properties, delete
+    case open, reveal, start, pause, retry, renew, progress, properties, delete
 }
 
 @MainActor
@@ -685,6 +782,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             ("Open", #selector(ctxOpen), "o"),
             ("Show in Finder", #selector(ctxReveal), "r"),
             nil,
+            ("Retry", #selector(ctxRetry), nil),
+            ("Renew URL…", #selector(ctxRenew), nil),
             ("Start", #selector(ctxStart), nil),
             ("Pause", #selector(ctxPause), nil),
             ("Progress Details", #selector(ctxProgress), nil),
@@ -715,7 +814,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             switch item.action {
             case #selector(ctxOpen): item.isEnabled = presentation.canOpen
             case #selector(ctxReveal): item.isEnabled = presentation.canShowInFinder
-            case #selector(ctxStart): item.isEnabled = presentation.canStart
+            case #selector(ctxRetry):
+                item.isEnabled = presentation.canRetry
+                item.title = presentation.canRetry ? "Retry" : "Retry"
+            case #selector(ctxRenew): item.isEnabled = presentation.canRenew
+            case #selector(ctxStart):
+                item.isEnabled = presentation.canStart && !presentation.canRetry
             case #selector(ctxPause): item.isEnabled = presentation.canPause
             case #selector(ctxProgress): item.isEnabled = presentation.canShowProgress
             case #selector(ctxProperties), #selector(ctxDelete): item.isEnabled = true
@@ -730,8 +834,16 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         return rows[row].taskID
     }
 
+    @objc func delete(_ sender: Any?) {
+        let row = tableView.selectedRow
+        guard row >= 0, row < rows.count else { return }
+        onContextAction?(.delete, rows[row].taskID)
+    }
+
     @objc private func ctxOpen() { if let id = currentContextTaskID() { onContextAction?(.open, id) } }
     @objc private func ctxReveal() { if let id = currentContextTaskID() { onContextAction?(.reveal, id) } }
+    @objc private func ctxRetry() { if let id = currentContextTaskID() { onContextAction?(.retry, id) } }
+    @objc private func ctxRenew() { if let id = currentContextTaskID() { onContextAction?(.renew, id) } }
     @objc private func ctxStart() { if let id = currentContextTaskID() { onContextAction?(.start, id) } }
     @objc private func ctxPause() { if let id = currentContextTaskID() { onContextAction?(.pause, id) } }
     @objc private func ctxProgress() { if let id = currentContextTaskID() { onContextAction?(.progress, id) } }
@@ -827,89 +939,60 @@ private final class TaskRowCellView: NSTableCellView {
 
 // MARK: - Inspector
 
+/// Compact selection panel: summary only. Per-connection detail lives in Progress…
 @MainActor
 private final class InspectorViewController: NSViewController {
     var onAction: ((TaskListContextAction) -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "Details")
     private let filenameLabel = NSTextField(wrappingLabelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let urlLabel = NSTextField(wrappingLabelWithString: "")
-    private let sizeLabel = NSTextField(labelWithString: "")
-    private let speedLabel = NSTextField(labelWithString: "")
-    private let etaLabel = NSTextField(labelWithString: "")
-    private let connectionsLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(wrappingLabelWithString: "")
     private let progressBar = NSProgressIndicator()
-    private let connectionsStack = NSStackView()
-    private let openButton = NSButton(title: "Open", target: nil, action: nil)
-    private let revealButton = NSButton(title: "Show in Finder", target: nil, action: nil)
-    private let startButton = NSButton(title: "Start", target: nil, action: nil)
-    private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
-    private let progressButton = NSButton(title: "Progress…", target: nil, action: nil)
-    private let propsButton = NSButton(title: "Properties…", target: nil, action: nil)
-    private let placeholderLabel = NSTextField(wrappingLabelWithString: "Select a download to inspect progress, connections, and file actions.")
+    private let summaryLabel = NSTextField(labelWithString: "")
+    private let primaryButton = NSButton(title: "Start", target: nil, action: nil)
+    private let secondaryButton = NSButton(title: "Pause", target: nil, action: nil)
+    private let progressButton = NSButton(title: "Details…", target: nil, action: nil)
+    private let placeholderLabel = NSTextField(wrappingLabelWithString: "Select a download.")
+    private var currentRow: TaskRowPresentation?
 
     override func loadView() {
         view = NSView()
         titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         titleLabel.textColor = .secondaryLabelColor
         filenameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        statusLabel.font = .systemFont(ofSize: 12)
-        urlLabel.font = .systemFont(ofSize: 11)
-        urlLabel.textColor = .secondaryLabelColor
-        sizeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        speedLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        etaLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        connectionsLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        summaryLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        summaryLabel.textColor = .secondaryLabelColor
         placeholderLabel.font = .systemFont(ofSize: 12)
         placeholderLabel.textColor = .secondaryLabelColor
-        placeholderLabel.alignment = .left
 
         progressBar.isIndeterminate = false
         progressBar.minValue = 0
         progressBar.maxValue = 1
         progressBar.controlSize = .small
 
-        connectionsStack.orientation = .vertical
-        connectionsStack.alignment = .leading
-        connectionsStack.spacing = 6
-
-        for button in [openButton, revealButton, startButton, pauseButton, progressButton, propsButton] {
+        for button in [primaryButton, secondaryButton, progressButton] {
             button.bezelStyle = .rounded
             button.target = self
         }
-        openButton.action = #selector(tapOpen)
-        revealButton.action = #selector(tapReveal)
-        startButton.action = #selector(tapStart)
-        pauseButton.action = #selector(tapPause)
+        primaryButton.action = #selector(tapPrimary)
+        secondaryButton.action = #selector(tapSecondary)
         progressButton.action = #selector(tapProgress)
-        propsButton.action = #selector(tapProps)
 
-        let actions = NSStackView(views: [openButton, revealButton])
+        let actions = NSStackView(views: [primaryButton, secondaryButton])
         actions.orientation = .horizontal
         actions.spacing = 8
-        let actions2 = NSStackView(views: [startButton, pauseButton])
-        actions2.orientation = .horizontal
-        actions2.spacing = 8
-        let actions3 = NSStackView(views: [progressButton, propsButton])
-        actions3.orientation = .horizontal
-        actions3.spacing = 8
 
         let stack = NSStackView(views: [
             titleLabel,
             placeholderLabel,
             filenameLabel,
-            statusLabel,
-            urlLabel,
+            subtitleLabel,
             progressBar,
-            sizeLabel,
-            speedLabel,
-            etaLabel,
-            connectionsLabel,
-            connectionsStack,
+            summaryLabel,
             actions,
-            actions2,
-            actions3,
+            progressButton,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -922,70 +1005,107 @@ private final class InspectorViewController: NSViewController {
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             progressBar.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
-            urlLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             filenameLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            subtitleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
         ])
         update(row: nil)
     }
 
     func update(row: TaskRowPresentation?) {
+        currentRow = row
         let hasSelection = row != nil
         placeholderLabel.isHidden = hasSelection
-        for view in [filenameLabel, statusLabel, urlLabel, progressBar, sizeLabel, speedLabel, etaLabel, connectionsLabel, connectionsStack, openButton, revealButton, startButton, pauseButton, progressButton, propsButton] {
+        for view in [filenameLabel, subtitleLabel, progressBar, summaryLabel, primaryButton, secondaryButton, progressButton] {
             view.isHidden = !hasSelection
         }
-        guard let row else {
-            connectionsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            return
-        }
-        filenameLabel.stringValue = row.filename
-        statusLabel.stringValue = row.statusTitle
-        urlLabel.stringValue = row.urlText
-        progressBar.doubleValue = row.progressFraction
-        sizeLabel.stringValue = "Size  \(row.sizeText)"
-        speedLabel.stringValue = "Speed  \(row.speedText)"
-        etaLabel.stringValue = "ETA  \(row.etaText)"
-        connectionsLabel.stringValue = "Connections  \(row.connectionsText)"
-        openButton.isEnabled = row.canOpen
-        revealButton.isEnabled = row.canShowInFinder
-        startButton.isEnabled = row.canStart
-        pauseButton.isEnabled = row.canPause
-        progressButton.isEnabled = row.canShowProgress
+        guard let row else { return }
 
-        connectionsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let segments = Array(row.segmentStates.prefix(8))
-        if segments.isEmpty {
-            let label = NSTextField(labelWithString: "No live connection data")
-            label.font = .systemFont(ofSize: 11)
-            label.textColor = .tertiaryLabelColor
-            connectionsStack.addArrangedSubview(label)
+        filenameLabel.stringValue = row.filename
+        if let error = row.errorText, !error.isEmpty {
+            subtitleLabel.stringValue = "\(row.statusTitle) · \(error)"
+            subtitleLabel.textColor = .systemRed
         } else {
-            for segment in segments {
-                let line = NSTextField(labelWithString: String(
-                    format: "Conn %d · %@ · %@",
-                    segment.id + 1,
-                    TaskPresentationFormatting.percent(segment.fractionCompleted),
-                    segment.isFinished ? "Done" : "Active"
-                ))
-                line.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-                line.textColor = .secondaryLabelColor
-                connectionsStack.addArrangedSubview(line)
-            }
-            if row.segmentStates.count > 8 {
-                let more = NSTextField(labelWithString: "+\(row.segmentStates.count - 8) more in Progress…")
-                more.font = .systemFont(ofSize: 11)
-                more.textColor = .tertiaryLabelColor
-                connectionsStack.addArrangedSubview(more)
-            }
+            let host = row.host.isEmpty ? row.statusTitle : "\(row.statusTitle) · \(row.host)"
+            subtitleLabel.stringValue = host
+            subtitleLabel.textColor = .secondaryLabelColor
+        }
+        progressBar.doubleValue = row.progressFraction
+
+        var parts = [row.progressText, row.sizeText]
+        if row.speedText != "—" { parts.append(row.speedText) }
+        if row.etaText != "—" { parts.append(row.etaText) }
+        summaryLabel.stringValue = parts.joined(separator: "  ·  ")
+
+        // One primary + one secondary action; connection detail stays in Details…
+        if row.canOpen {
+            primaryButton.title = "Open"
+            primaryButton.isEnabled = true
+            secondaryButton.title = "Show in Finder"
+            secondaryButton.isEnabled = row.canShowInFinder
+            progressButton.title = "Properties…"
+            progressButton.isEnabled = true
+        } else if row.canRetry {
+            primaryButton.title = "Retry"
+            primaryButton.isEnabled = true
+            secondaryButton.title = "Renew URL…"
+            secondaryButton.isEnabled = row.canRenew
+            progressButton.title = "Connection details…"
+            progressButton.isEnabled = row.canShowProgress
+        } else if row.canPause {
+            primaryButton.title = "Pause"
+            primaryButton.isEnabled = true
+            secondaryButton.title = "Details…"
+            secondaryButton.isEnabled = row.canShowProgress
+            progressButton.title = "Properties…"
+            progressButton.isEnabled = true
+        } else {
+            primaryButton.title = "Start"
+            primaryButton.isEnabled = row.canStart
+            secondaryButton.title = row.canRenew ? "Renew URL…" : "Details…"
+            secondaryButton.isEnabled = row.canRenew || row.canShowProgress
+            progressButton.title = "Properties…"
+            progressButton.isEnabled = true
         }
     }
 
-    @objc private func tapOpen() { onAction?(.open) }
-    @objc private func tapReveal() { onAction?(.reveal) }
-    @objc private func tapStart() { onAction?(.start) }
-    @objc private func tapPause() { onAction?(.pause) }
-    @objc private func tapProgress() { onAction?(.progress) }
-    @objc private func tapProps() { onAction?(.properties) }
+    @objc private func tapPrimary() {
+        guard let row = currentRow else { return }
+        if row.canOpen {
+            onAction?(.open)
+        } else if row.canRetry {
+            onAction?(.retry)
+        } else if row.canPause {
+            onAction?(.pause)
+        } else {
+            onAction?(.start)
+        }
+    }
+
+    @objc private func tapSecondary() {
+        guard let row = currentRow else { return }
+        if row.canShowInFinder {
+            onAction?(.reveal)
+        } else if row.canRenew && (row.canRetry || !row.canPause) {
+            onAction?(.renew)
+        } else if row.canShowProgress {
+            onAction?(.progress)
+        }
+    }
+
+    @objc private func tapProgress() {
+        guard let row = currentRow else { return }
+        if row.canRetry || row.canPause {
+            if row.canShowProgress {
+                onAction?(.progress)
+            } else {
+                onAction?(.properties)
+            }
+        } else if row.canShowProgress && progressButton.title.hasPrefix("Connection") {
+            onAction?(.progress)
+        } else {
+            onAction?(.properties)
+        }
+    }
 }
 
 // MARK: - Drop target
