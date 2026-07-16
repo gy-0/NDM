@@ -1,0 +1,10 @@
+2:INFO   2026-07-05 14:01:40 ( 1783231300 )   DownloadID = 4125 , Protocol = HTTPS , OS = MAC , AppVersion = MacVersion1324
+6:INFO   2026-07-05 14:01:40 ( 1783231300 )   New Socket(s) Created. MaxAllowedConnection = 32 And ActiveSockets = 1
+10:DEBUG  2026-07-05 14:01:40 ( 1783231300 )   SegmentManager Created a New Segment and now has 1 Segments.
+12:INFO   2026-07-05 14:01:40 ( 1783231300 )   Sending Http-GET  for Socket ( 1 )  Range = 0-
+48:Content-Range: bytes 0-18207336/18207337
+62:INFO   2026-07-05 14:01:40 ( 1783231300 )   New Socket(s) Created. MaxAllowedConnection = 32 And ActiveSockets = 2
+66:DEBUG  2026-07-05 14:01:41 ( 1783231301 )   SegmentManager Created a New Segment and now has 2 Segments.
+68:INFO   2026-07-05 14:01:41 ( 1783231301 )   Sending Http-GET  for Socket ( 2 )  Range = 9595188-18207336
+104:Content-Range: bytes 9595188-18207336/18207337
+116:INFO   2026-07-05 14:01:41 ( 1783231301 )   New Socket(s) Created. MaxAllowedConnection = 32 And ActiveSockets = 32

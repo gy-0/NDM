@@ -1,0 +1,35 @@
+{
+  "AppAutoStart" => 1
+  "AppleLanguages" => [
+    0 => "zh-Hans"
+  ]
+  "BandWidthLimit" => 0
+  "CategoryFolders" => 2
+  "ChromePanel" => 1
+  "CompletionDialog" => 1
+  "ConnectionsAtOnce" => 1
+  "DefaultAgent" => ""
+  "DownloadDirectory" => "/Users/gaoyuan/Downloads/"
+  "EdgePanel" => 1
+  "FoxPanel" => 1
+  "FTP_IsActive" => false
+  "FTP_ProxyAddress" => "10.8.8.121"
+  "FTP_ProxyPort" => 7890
+  "FTP_ProxyType" => 0
+  "FTP_UserName" => ""
+  "HTTP_IsActive" => false
+  "HTTP_ProxyAddress" => "10.8.8.121"
+  "HTTP_ProxyPort" => 7890
+  "HTTP_ProxyType" => 0
+  "HTTP_UserName" => ""
+  "HTTPS_IsActive" => false
+  "HTTPS_ProxyAddress" => "10.8.8.121"
+  "HTTPS_ProxyPort" => 7890
+  "HTTPS_ProxyType" => 0
+  "HTTPS_UserName" => ""
+  "LastDownloadID" => 4144
+  "MaxConnections" => 32
+  "NSNavPanelExpandedSizeForOpenMode" => "{955, 448}"
+  "NSStatusItem Preferred Position Item-0" => 393
+  "UseUAgent" => 2
+}

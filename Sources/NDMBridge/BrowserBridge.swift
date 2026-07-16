@@ -1,0 +1,282 @@
+import Foundation
+import Network
+import CryptoKit
+import NDMCore
+
+/// Local `NeatWebSocketServer` equivalent: `ws://127.0.0.1:10007/download` + `neatextension.v1`.
+public final class BrowserBridge: @unchecked Sendable {
+    public var onDownloadMessage: (@Sendable (ParsedBridgeMessage) -> Void)?
+    public var onClientCountChanged: (@Sendable (Int) -> Void)?
+
+    private let requestedPort: NWEndpoint.Port
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "dev.ndm.bridge", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<UInt8>()
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    /// Actual bound port (useful when `port == 0` for tests).
+    private var _boundPort: UInt16 = 0
+    public var boundPort: UInt16 { syncOnQueue { _boundPort } }
+
+    public init(port: UInt16 = BridgeConstants.port) {
+        // `0` means ephemeral — used by integration tests.
+        self.requestedPort = NWEndpoint.Port(rawValue: port) ?? 10_007
+        queue.setSpecific(key: queueKey, value: 1)
+    }
+
+    public func start() throws {
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: requestedPort)
+        let listener = try NWListener(using: params)
+        syncOnQueue { self.listener = listener }
+        let ready = DispatchSemaphore(value: 0)
+        var startError: Error?
+        listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?._boundPort = listener.port?.rawValue ?? 0
+                ready.signal()
+            case .failed(let err):
+                startError = err
+                ready.signal()
+            default:
+                break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] conn in
+            self?.accept(conn)
+        }
+        listener.start(queue: queue)
+        _ = ready.wait(timeout: .now() + 2)
+        if let startError { throw startError }
+        if boundPort == 0, let p = listener.port?.rawValue {
+            syncOnQueue { _boundPort = p }
+        }
+        guard boundPort != 0 else {
+            throw NSError(domain: "BrowserBridge", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to bind WebSocket port",
+            ])
+        }
+    }
+
+    public func stop() {
+        syncOnQueue {
+            listener?.cancel()
+            listener = nil
+            connections.values.forEach { $0.cancel() }
+            connections.removeAll()
+            _boundPort = 0
+        }
+    }
+
+    public func sendToAllClients(_ text: String) {
+        let frame = WebSocketFraming.encodeText(text)
+        asyncOnQueue { [weak self] in
+            guard let self else { return }
+            for conn in connections.values {
+                conn.send(content: frame, completion: .contentProcessed { _ in })
+            }
+        }
+    }
+
+    private func accept(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        connections[id] = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            if case .failed = state {
+                self?.connections[id] = nil
+                self?.onClientCountChanged?(self?.connections.count ?? 0)
+            }
+            if case .cancelled = state {
+                self?.connections[id] = nil
+                self?.onClientCountChanged?(self?.connections.count ?? 0)
+            }
+        }
+        connection.start(queue: queue)
+        receiveHTTPUpgrade(on: connection, buffer: Data())
+    }
+
+    private func receiveHTTPUpgrade(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            var accumulated = buffer
+            if let data { accumulated.append(data) }
+            guard accumulated.count <= 64 * 1024 else {
+                connection.cancel()
+                return
+            }
+            guard let headerRange = accumulated.range(of: Data("\r\n\r\n".utf8)) else {
+                if isComplete || error != nil { connection.cancel() }
+                else { self.receiveHTTPUpgrade(on: connection, buffer: accumulated) }
+                return
+            }
+            let headerData = accumulated[..<headerRange.upperBound]
+            let remainder = Data(accumulated[headerRange.upperBound...])
+            guard let req = String(data: headerData, encoding: .utf8) else {
+                connection.cancel()
+                return
+            }
+            // Expect WebSocket upgrade on `/download` (original NeatWebSocketServer path).
+            let firstLine = req.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
+            let pathOK = firstLine.contains(" /download") || firstLine.contains("GET /download")
+            let upgradeOK = req.lowercased().contains("upgrade: websocket")
+            guard pathOK, upgradeOK else {
+                connection.cancel()
+                return
+            }
+            let key = Self.headerValue(req, name: "Sec-WebSocket-Key") ?? ""
+            let accept = WebSocketFraming.acceptKey(clientKey: key)
+            var response = "HTTP/1.1 101 Switching Protocols\r\n"
+            response += "Upgrade: websocket\r\n"
+            response += "Connection: Upgrade\r\n"
+            response += "Sec-WebSocket-Accept: \(accept)\r\n"
+            // Original binary includes Sec-WebSocket-Protocol
+            if req.contains(BridgeConstants.subprotocol) {
+                response += "Sec-WebSocket-Protocol: \(BridgeConstants.subprotocol)\r\n"
+            }
+            response += "\r\n"
+            connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
+                guard let self, error == nil else {
+                    connection.cancel()
+                    return
+                }
+                self.onClientCountChanged?(self.connections.count)
+                self.receiveFrames(on: connection, buffer: remainder)
+            })
+        }
+    }
+
+    private func receiveFrames(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: BridgeConstants.maxMessageBytes + 14) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            var buf = buffer
+            if let data { buf.append(data) }
+            if buf.count > BridgeConstants.maxMessageBytes + 14
+                || (WebSocketFraming.declaredPayloadLength(from: buf) ?? 0) > BridgeConstants.maxMessageBytes {
+                connection.cancel()
+                return
+            }
+            while let (message, rest) = WebSocketFraming.decodeTextFrame(from: buf) {
+                buf = rest
+                if let parsed = try? BridgeMessageParser.parse(message) {
+                    self.onDownloadMessage?(parsed)
+                }
+            }
+            if isComplete || error != nil {
+                connection.cancel()
+            } else {
+                self.receiveFrames(on: connection, buffer: buf)
+            }
+        }
+    }
+
+    private static func headerValue(_ req: String, name: String) -> String? {
+        for line in req.components(separatedBy: "\r\n") {
+            if line.lowercased().hasPrefix(name.lowercased() + ":") {
+                return line.split(separator: ":", maxSplits: 1).last?
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private func syncOnQueue<T>(_ body: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            return try body()
+        }
+        return try queue.sync(execute: body)
+    }
+
+    private func asyncOnQueue(_ body: @escaping @Sendable () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            body()
+        } else {
+            queue.async(execute: body)
+        }
+    }
+}
+
+enum WebSocketFraming {
+    static let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    static func acceptKey(clientKey: String) -> String {
+        let combined = clientKey + magic
+        let digest = Insecure.SHA1.hash(data: Data(combined.utf8))
+        return Data(digest).base64EncodedString()
+    }
+
+    static func encodeText(_ text: String) -> Data {
+        let payload = Data(text.utf8)
+        var frame = Data()
+        frame.append(0x81) // FIN + text
+        if payload.count < 126 {
+            frame.append(UInt8(payload.count))
+        } else if payload.count <= 0xffff {
+            frame.append(126)
+            frame.append(UInt8((payload.count >> 8) & 0xff))
+            frame.append(UInt8(payload.count & 0xff))
+        } else {
+            frame.append(127)
+            var len = UInt64(payload.count).bigEndian
+            withUnsafeBytes(of: &len) { frame.append(contentsOf: $0) }
+        }
+        frame.append(payload)
+        return frame
+    }
+
+    static func declaredPayloadLength(from data: Data) -> Int? {
+        guard data.count >= 2 else { return nil }
+        let marker = Int(data[1] & 0x7f)
+        if marker < 126 { return marker }
+        if marker == 126 {
+            guard data.count >= 4 else { return nil }
+            return (Int(data[2]) << 8) | Int(data[3])
+        }
+        guard data.count >= 10 else { return nil }
+        var length: UInt64 = 0
+        for i in 0..<8 {
+            length = (length << 8) | UInt64(data[2 + i])
+        }
+        return length > UInt64(Int.max) ? Int.max : Int(length)
+    }
+
+    /// Returns (text, remaining) if a full client frame is available.
+    static func decodeTextFrame(from data: Data) -> (String, Data)? {
+        guard data.count >= 2 else { return nil }
+        let b0 = data[0]
+        let b1 = data[1]
+        let opcode = b0 & 0x0f
+        let masked = (b1 & 0x80) != 0
+        var len = Int(b1 & 0x7f)
+        var offset = 2
+        if len == 126 {
+            guard data.count >= 4 else { return nil }
+            len = (Int(data[2]) << 8) | Int(data[3])
+            offset = 4
+        } else if len == 127 {
+            guard data.count >= 10 else { return nil }
+            len = 0
+            for i in 0..<8 { len = (len << 8) | Int(data[2 + i]) }
+            offset = 10
+        }
+        let maskLen = masked ? 4 : 0
+        guard data.count >= offset + maskLen + len else { return nil }
+        var payload = Data(data[(offset + maskLen)..<(offset + maskLen + len)])
+        if masked {
+            let mask = data[offset..<(offset + 4)]
+            for i in 0..<payload.count {
+                payload[i] ^= mask[mask.startIndex + (i % 4)]
+            }
+        }
+        let rest = data[(offset + maskLen + len)...]
+        if opcode == 0x8 { // close
+            return nil
+        }
+        if opcode == 0x1 || opcode == 0x0 {
+            if let text = String(data: payload, encoding: .utf8) {
+                return (text, Data(rest))
+            }
+        }
+        return ("", Data(rest))
+    }
+}

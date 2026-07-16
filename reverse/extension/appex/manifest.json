@@ -1,0 +1,31 @@
+{
+  
+   "author" : "Javad Motallebi",
+   "version": "1.8.0",
+   "description": "Sends Download Links to Neat Download Manager",
+   "name": "NeatDownloadManager Extension",
+    
+    "browser_action": {
+        "default_icon": {
+            "16": "img/icon16.png"
+        }
+    },
+    
+    "background" : { "scripts": [ "bg.js" ] },
+    "content_scripts" : [ { "js": [ "ct.js" ], "matches": [ "http://*/*", "https://*/*", "ftp://*/*", "file:///*" ], "all_frames": true, "run_at": "document_start" } ],
+    
+    "web_accessible_resources": [ "img/icon16.png","img/icon16_2x.png","img/close16.png","img/close16_2x.png"],
+    
+    "permissions": [ "\u003Call_urls>", "cookies" ,"contextMenus", "webRequest" ],
+    
+   "icons": {
+      "128": "img/icon128.png",
+      "16" : "img/icon16.png",
+      "48" : "img/icon48.png"
+   },
+    
+    "homepage_url": "https://www.neatdownloadmanager.com/",
+    
+   "manifest_version": 2
+}
+

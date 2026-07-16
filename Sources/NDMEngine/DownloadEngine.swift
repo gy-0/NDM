@@ -1,0 +1,802 @@
+import Foundation
+import NDMCore
+
+/// Multi-connection HTTP(S) engine aligned with NDM behaviour recovered from
+/// LogFile + Ghidra (`BuildDownloadEngine`, Range builders, Merging stage).
+///
+/// State path (log): Unknown → Starting... → Downloading... → Merging... → Completed
+/// Resume: reload `segments.bin` + partial `seg.xN` (log: "Segments were loaded from segments.bin file.").
+public actor DownloadEngine {
+    public private(set) var progress: DownloadProgress
+    public private(set) var engineState: EngineState = .unknown
+
+    private let request: DownloadRequest
+    private let taskID: Int64
+    private let workDirectory: URL
+    private var session: URLSession
+    private let token = CancelToken()
+    private var logHandle: FileHandle?
+    /// Per-segment completed bytes (for live aggregate progress).
+    private var segmentCompleted: [Int16: Int64] = [:]
+    private var speedWindowStart = Date()
+    private var speedWindowBytes: Int64 = 0
+    private var lastSpeedSample: Int64 = 0
+    private let limiter: BandwidthLimiter
+    /// Extra Authorization header after Digest / NTLM negotiate.
+    private var authAuthorization: String?
+    private var authIsProxy = false
+    private let httpProxyCredentials: ProxySettings?
+    /// Mutable runtime equivalent of MaxAllowedConnection.
+    private var currentConnections: Int
+    /// Cancels only the active transfer round; pause/cancel continue to use `token`.
+    private var activePlanToken: CancelToken?
+    private var planGeneration: UInt64 = 0
+    private var isBootstrappingDynamicPlan = false
+
+    private enum ReplanSignal: Error {
+        case requested
+    }
+
+    public enum EngineState: String, Sendable {
+        case unknown = "Unknown"
+        case starting = "Starting..."
+        case downloading = "Downloading..."
+        case merging = "Merging..."
+        case completed = "Completed"
+        case paused = "Paused"
+        case error = "Error"
+    }
+
+    public init(
+        taskID: Int64,
+        request: DownloadRequest,
+        workDirectory: URL,
+        httpProxy: ProxySettings? = nil,
+        socksProxy: SocksProxySettings? = nil,
+        globalBandwidthLimit: Int64 = 0
+    ) {
+        self.taskID = taskID
+        self.request = request
+        self.workDirectory = workDirectory
+        self.httpProxyCredentials = httpProxy
+        self.currentConnections = max(1, min(request.connections, 32))
+        self.progress = DownloadProgress(taskID: taskID, status: .waiting)
+        let perTask = request.bandwidthLimitBytesPerSecond
+        let limit = perTask > 0 ? perTask : globalBandwidthLimit
+        self.limiter = BandwidthLimiter(bytesPerSecond: limit)
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 60
+        config.httpMaximumConnectionsPerHost = max(1, request.connections)
+        config.httpAdditionalHeaders = ["Accept-Encoding": "identity"]
+        config.connectionProxyDictionary = Self.proxyDictionary(http: httpProxy, socks: socksProxy)
+        self.session = URLSession(configuration: config)
+    }
+
+    /// URL without userinfo so URLSession won't auto-handle 401 with embedded credentials.
+    private var cleanURL: URL {
+        guard var comps = URLComponents(url: request.url, resolvingAgainstBaseURL: false) else {
+            return request.url
+        }
+        comps.user = nil
+        comps.password = nil
+        return comps.url ?? request.url
+    }
+
+    private static func proxyDictionary(
+        http: ProxySettings?,
+        socks: SocksProxySettings?
+    ) -> [AnyHashable: Any]? {
+        if let socks, socks.enabled, !socks.host.isEmpty {
+            var dict: [AnyHashable: Any] = [
+                kCFStreamPropertySOCKSProxyHost as String: socks.host,
+                kCFStreamPropertySOCKSProxyPort as String: NSNumber(value: socks.port),
+            ]
+            if socks.version == .v5 {
+                dict[kCFStreamPropertySOCKSVersion as String] = kCFStreamSocketSOCKSVersion5
+            } else {
+                dict[kCFStreamPropertySOCKSVersion as String] = kCFStreamSocketSOCKSVersion4
+            }
+            if let u = socks.username { dict[kCFStreamPropertySOCKSUser as String] = u }
+            if let p = socks.password { dict[kCFStreamPropertySOCKSPassword as String] = p }
+            return dict
+        }
+        if let proxy = http, proxy.enabled, !proxy.host.isEmpty {
+            return [
+                kCFNetworkProxiesHTTPEnable as String: true,
+                kCFNetworkProxiesHTTPProxy as String: proxy.host,
+                kCFNetworkProxiesHTTPPort as String: NSNumber(value: proxy.port),
+                kCFNetworkProxiesHTTPSEnable as String: true,
+                kCFNetworkProxiesHTTPSProxy as String: proxy.host,
+                kCFNetworkProxiesHTTPSPort as String: NSNumber(value: proxy.port),
+            ]
+        }
+        return nil
+    }
+
+    public func pause() {
+        token.pause()
+        engineState = .paused
+        progress.status = .paused
+        log("DownloadEngine State Changed : Downloading... -> Paused")
+    }
+
+    public func cancel() {
+        token.cancel()
+        progress.status = .incomplete
+        log("Download Canceled By User.")
+    }
+
+    @discardableResult
+    public func start() async throws -> URL {
+        try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
+        token.reset()
+        openLog()
+        defer { closeLog() }
+        setState(.starting)
+        log("DownloadID = \(taskID) , Protocol = HTTPS , OS = MAC , AppVersion = MacOpenRE")
+        log("DownloadEngine is Starting...")
+        log("Trying to Start Download for -> \(request.url.absoluteString)")
+
+        let probe = try await probeRemoteWithAuth()
+        let total = probe.contentLength ?? 0
+        progress.totalBytes = total
+        progress.status = .downloading
+
+        let acceptRanges = probe.acceptRanges && total > 0
+
+        let filename = request.suggestedFilename
+            ?? probe.suggestedFilename
+            ?? nonEmptyName(request.url.lastPathComponent)
+        let finalURL = request.destinationDirectory.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(
+            at: request.destinationDirectory,
+            withIntermediateDirectories: true
+        )
+
+        setState(.downloading)
+
+        if acceptRanges {
+            var segments: [SegmentRecord]
+            if let existing = try loadSegmentsForResume(total: total) {
+                segments = existing
+            } else if currentConnections > 1 {
+                // The original starts Range 0-, lets socket 1 make progress, then socket 2
+                // steals half of the remaining tail. A bounded bootstrap makes that timing
+                // dependent boundary deterministic and append-safe under URLSession.
+                let bootstrapBytes = dynamicBootstrapBytes(total: total)
+                let bootstrap = SegmentRecord(
+                    order: 0,
+                    segmentId: 0,
+                    nextId: SegmentRecord.endOfList,
+                    start: 0,
+                    end: bootstrapBytes - 1
+                )
+                installProgressPlan([bootstrap])
+                try writeSegmentsBin([bootstrap])
+                log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
+                log("SegmentManager Created a New Segment and now has 1 Segments.")
+                isBootstrappingDynamicPlan = true
+                do {
+                    try await downloadSegmentStreaming(bootstrap, planToken: nil)
+                } catch {
+                    isBootstrappingDynamicPlan = false
+                    throw error
+                }
+                isBootstrappingDynamicPlan = false
+                try throwIfStopped()
+
+                segments = SegmentFileFormat.planDynamicConnections(
+                    totalBytes: total,
+                    connections: currentConnections,
+                    completedPrefixBytes: bootstrapBytes
+                )
+                installProgressPlan(segments)
+                try writeSegmentsBin(segments)
+                log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(min(currentConnections, segments.count))")
+                log("SegmentManager Created a New Segment and now has \(segments.count) Segments.")
+            } else {
+                segments = SegmentFileFormat.planEqualSegments(totalBytes: total, connections: 1)
+                installProgressPlan(segments)
+                try writeSegmentsBin(segments)
+            }
+
+            let finalSegments = try await downloadSegmentsWithReplanning(segments, total: total)
+            try throwIfStopped()
+
+            setState(.merging)
+            log("DownloadEngine State Changed : Downloading... -> Merging...")
+            try mergeSegments(finalSegments, to: finalURL, total: total)
+        } else {
+            let seg = SegmentRecord(
+                order: 0, segmentId: 0, nextId: SegmentRecord.endOfList,
+                start: 0, end: max(total - 1, 0)
+            )
+            try writeSegmentsBin([seg])
+            log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
+            let dest = SegmentFileFormat.segmentFileURL(id: 0, in: workDirectory)
+            let have = SegmentFileFormat.existingByteCount(for: seg, in: workDirectory)
+            segmentCompleted[0] = have
+            if have < seg.length || total == 0 {
+                if have > 0 {
+                    log("Sending Http-GET  for Socket ( 1 )  Range = \(seg.start + have)-")
+                } else {
+                    log("Sending Http-GET  for Socket ( 1 )  Range = 0-")
+                }
+                try await downloadSegmentStreaming(seg, planToken: nil)
+            }
+            try throwIfStopped()
+            setState(.merging)
+            if FileManager.default.fileExists(atPath: finalURL.path) {
+                try FileManager.default.removeItem(at: finalURL)
+            }
+            try FileManager.default.copyItem(at: dest, to: finalURL)
+        }
+
+        progress.status = .complete
+        progress.completedBytes = progress.totalBytes
+        setState(.completed)
+        log("DownloadEngine State Changed : Merging... -> Completed")
+        return finalURL
+    }
+
+    public func currentProgress() -> DownloadProgress { progress }
+
+    // MARK: - Segments plan / resume
+
+    private func loadSegmentsForResume(total: Int64) throws -> [SegmentRecord]? {
+        if let existing = try SegmentFileFormat.loadSegmentsBin(from: workDirectory), !existing.isEmpty {
+            let sorted = existing.sorted { $0.start < $1.start }
+            let contiguous = sorted.first?.start == 0 && zip(sorted, sorted.dropFirst()).allSatisfy {
+                $0.end + 1 == $1.start
+            }
+            let covered = sorted.last.map { $0.end + 1 } ?? 0
+            if total > 0, covered == total, contiguous {
+                log("Segments were loaded from segments.bin file.")
+                installProgressPlan(sorted)
+                return sorted
+            }
+            log("segments.bin size mismatch with remote (\(covered) vs \(total)); replanning.")
+        }
+        return nil
+    }
+
+    /// Runtime `applyConnectionsCount:` — replan unfinished ranges (pause soft-stop not required).
+    public func applyConnectionsCount(_ count: Int) throws {
+        let n = max(1, min(count, 32))
+        currentConnections = n
+        planGeneration &+= 1
+        if isBootstrappingDynamicPlan {
+            log("applyConnectionsCount: \(n) — deferred until initial Range bootstrap completes.")
+            return
+        }
+        if let activePlanToken {
+            log("applyConnectionsCount: \(n) — cancelling active Range round for live replan.")
+            activePlanToken.cancel()
+            return
+        }
+        guard let existing = try SegmentFileFormat.loadSegmentsBin(from: workDirectory), !existing.isEmpty else {
+            return
+        }
+        let total = progress.totalBytes > 0
+            ? progress.totalBytes
+            : (existing.map(\.end).max().map { $0 + 1 } ?? 0)
+        let replanned = try replanPersistedSegments(existing, total: total)
+        log("applyConnectionsCount: \(n) — SegmentManager now has \(replanned.count) Segments.")
+    }
+
+    // MARK: - Probe
+
+    private struct Probe {
+        var contentLength: Int64?
+        var acceptRanges: Bool
+        var suggestedFilename: String?
+    }
+
+    private func probeRemoteWithAuth() async throws -> Probe {
+        var lastChallenge: String?
+        for _ in 0..<3 {
+            do {
+                return try await probeRemote()
+            } catch let EngineError.authRequired(status, challenge) {
+                lastChallenge = challenge
+                try prepareChallengeAuth(status: status, header: challenge)
+            }
+        }
+        throw EngineError.authRequired(status: 401, challenge: lastChallenge)
+    }
+
+    private func probeRemote() async throws -> Probe {
+        var req = URLRequest(url: cleanURL)
+        req.httpMethod = "HEAD"
+        applyHeaders(to: &req)
+        do {
+            let (_, response) = try await session.data(for: req)
+            if let http = response as? HTTPURLResponse {
+                if http.statusCode == 401 || http.statusCode == 407 {
+                    throw EngineError.authRequired(
+                        status: http.statusCode,
+                        challenge: http.value(forHTTPHeaderField: "WWW-Authenticate")
+                            ?? http.value(forHTTPHeaderField: "Proxy-Authenticate")
+                    )
+                }
+                if (200..<400).contains(http.statusCode) {
+                    let length = http.value(forHTTPHeaderField: "Content-Length").flatMap(Int64.init)
+                    let accept = (http.value(forHTTPHeaderField: "Accept-Ranges") ?? "")
+                        .lowercased().contains("bytes")
+                    return Probe(
+                        contentLength: length,
+                        acceptRanges: accept || length != nil,
+                        suggestedFilename: http.suggestedFilename
+                    )
+                }
+            }
+        } catch let e as EngineError {
+            throw e
+        } catch {
+            // fall through
+        }
+        return try await probeWithRangeGet()
+    }
+
+    private func probeWithRangeGet() async throws -> Probe {
+        var req = URLRequest(url: cleanURL)
+        req.httpMethod = "GET"
+        req.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        applyHeaders(to: &req)
+        let (_, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw EngineError.invalidResponse }
+        if http.statusCode == 401 || http.statusCode == 407 {
+            throw EngineError.authRequired(
+                status: http.statusCode,
+                challenge: http.value(forHTTPHeaderField: "WWW-Authenticate")
+                    ?? http.value(forHTTPHeaderField: "Proxy-Authenticate")
+            )
+        }
+        var length: Int64?
+        if let range = http.value(forHTTPHeaderField: "Content-Range"),
+           let total = range.split(separator: "/").last,
+           let n = Int64(total), n > 0 {
+            length = n
+        }
+        return Probe(
+            contentLength: length,
+            acceptRanges: http.statusCode == 206,
+            suggestedFilename: http.suggestedFilename
+        )
+    }
+
+    /// Advance Digest (1-shot) or NTLM (Type1 → Type3) state from a WWW/Proxy-Authenticate header.
+    private func prepareChallengeAuth(status: Int, header: String?) throws {
+        authIsProxy = (status == 407)
+        let user = request.username ?? request.url.user
+        let pass = request.password ?? request.url.password ?? ""
+        guard let user, !user.isEmpty else {
+            throw EngineError.authRequired(status: status, challenge: header)
+        }
+
+        if let header, let digest = DigestAuth.parseChallenge(from: header, isProxy: authIsProxy) {
+            let uri = request.url.path.isEmpty ? "/" : request.url.path
+            authAuthorization = DigestAuth.authorizationHeader(
+                challenge: digest,
+                username: user,
+                password: pass,
+                method: request.method,
+                uri: uri
+            )
+            log("Applied Digest auth for realm=\(digest.realm)")
+            return
+        }
+
+        if NTLMAuth.isNTLMChallenge(header) {
+            if let type2 = NTLMAuth.parseType2(from: header) {
+                authAuthorization = NTLMAuth.type3AuthorizationHeader(
+                    type2: type2,
+                    username: user,
+                    password: pass,
+                    isProxy: authIsProxy
+                )
+                log("Applied NTLM Type3 auth")
+            } else {
+                authAuthorization = NTLMAuth.type1AuthorizationHeader(isProxy: authIsProxy)
+                log("Applied NTLM Type1 negotiate")
+            }
+            return
+        }
+
+        throw EngineError.authRequired(status: status, challenge: header)
+    }
+
+    // MARK: - Download
+
+    private func downloadSegmentsWithReplanning(
+        _ initial: [SegmentRecord],
+        total: Int64
+    ) async throws -> [SegmentRecord] {
+        var segments = initial
+        while true {
+            try throwIfStopped()
+            let generation = planGeneration
+            let roundToken = CancelToken()
+            activePlanToken = roundToken
+            do {
+                try await downloadRound(
+                    segments,
+                    maxConcurrent: currentConnections,
+                    planToken: roundToken
+                )
+            } catch ReplanSignal.requested {
+                // Expected control flow: all URLSession tasks have acknowledged cancellation
+                // and closed their FileHandles before the next plan reads file sizes.
+            } catch {
+                activePlanToken = nil
+                roundToken.cancel()
+                throw error
+            }
+            activePlanToken = nil
+            try throwIfStopped()
+
+            if generation != planGeneration || roundToken.isCancelled {
+                segments = try replanPersistedSegments(segments, total: total)
+                log("Replanned active transfers: MaxAllowedConnection = \(currentConnections), Segments = \(segments.count).")
+                continue
+            }
+            return segments
+        }
+    }
+
+    private func downloadRound(
+        _ segments: [SegmentRecord],
+        maxConcurrent: Int,
+        planToken: CancelToken
+    ) async throws {
+        let pending = segments.filter {
+            SegmentFileFormat.existingByteCount(for: $0, in: workDirectory) < $0.length
+        }
+        guard !pending.isEmpty else { return }
+        let limit = max(1, min(maxConcurrent, pending.count))
+        log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(limit)")
+
+        do {
+            try await withThrowingTaskGroup(of: Int16.self) { group in
+                var next = 0
+                func enqueue(_ segment: SegmentRecord) {
+                    group.addTask {
+                        do {
+                            try await self.downloadSegmentStreaming(segment, planToken: planToken)
+                            return segment.segmentId
+                        } catch {
+                            planToken.cancel()
+                            throw error
+                        }
+                    }
+                }
+                while next < limit {
+                    enqueue(pending[next])
+                    next += 1
+                }
+                while let segmentID = try await group.next() {
+                    markSegmentFinished(segmentID)
+                    if next < pending.count {
+                        enqueue(pending[next])
+                        next += 1
+                    }
+                }
+            }
+        } catch {
+            planToken.cancel()
+            throw error
+        }
+        recountProgress()
+    }
+
+    private func markSegmentFinished(_ segmentID: Int16) {
+        if let idx = progress.segmentStates.firstIndex(where: { $0.id == Int(segmentID) }) {
+            progress.segmentStates[idx].isFinished = true
+            progress.segmentStates[idx].completed = progress.segmentStates[idx].length
+        }
+    }
+
+    private func downloadSegmentStreaming(
+        _ segment: SegmentRecord,
+        planToken: CancelToken?
+    ) async throws {
+        let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+        segmentCompleted[segment.segmentId] = have
+        guard let remaining = SegmentFileFormat.remainingRange(for: segment, have: have) else {
+            // Already complete
+            return
+        }
+
+        var req = URLRequest(url: cleanURL)
+        req.httpMethod = "GET"
+        if remaining.end < 0 {
+            req.setValue("bytes=\(remaining.start)-", forHTTPHeaderField: "Range")
+        } else {
+            req.setValue("bytes=\(remaining.start)-\(remaining.end)", forHTTPHeaderField: "Range")
+        }
+        applyHeaders(to: &req)
+        log("Sending Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) Range = \(remaining.start)-\(remaining.end)")
+
+        let fileURL = SegmentFileFormat.segmentFileURL(id: segment.segmentId, in: workDirectory)
+        let engine = self
+        let token = self.token
+        let cancellationTokens = [token] + (planToken.map { [$0] } ?? [])
+        do {
+            var lastChallenge: (Int, String?)?
+            for _ in 0..<3 {
+                do {
+                    _ = try await RangeStreamDownloader.download(
+                        request: req,
+                        to: fileURL,
+                        append: have > 0,
+                        isCancelled: {
+                            token.isCancelled || (planToken?.isCancelled ?? false)
+                        },
+                        cancellationTokens: cancellationTokens,
+                        limiter: limiter,
+                        onBytes: { deltaWritten in
+                            Task {
+                                await engine.noteSegmentProgress(
+                                    segmentID: segment.segmentId,
+                                    base: have,
+                                    written: deltaWritten
+                                )
+                            }
+                        }
+                    )
+                    lastChallenge = nil
+                    break
+                } catch let EngineError.authRequired(status, challenge) {
+                    lastChallenge = (status, challenge)
+                    try prepareChallengeAuth(status: status, header: challenge)
+                    applyHeaders(to: &req)
+                }
+            }
+            if let (status, challenge) = lastChallenge {
+                throw EngineError.authRequired(status: status, challenge: challenge)
+            }
+        } catch {
+            if token.isPaused { throw EngineError.paused }
+            if token.isCancelled { throw EngineError.cancelled }
+            if planToken?.isCancelled == true { throw ReplanSignal.requested }
+            throw error
+        }
+        if token.isCancelled {
+            if token.isPaused { throw EngineError.paused }
+            throw EngineError.cancelled
+        }
+        let finalHave = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+        segmentCompleted[segment.segmentId] = finalHave
+        recountProgress()
+    }
+
+    private func noteSegmentProgress(segmentID: Int16, base: Int64, written: Int64) {
+        let completed = max(segmentCompleted[segmentID] ?? 0, base + written)
+        segmentCompleted[segmentID] = completed
+        if let idx = progress.segmentStates.firstIndex(where: { $0.id == Int(segmentID) }) {
+            progress.segmentStates[idx].completed = min(
+                progress.segmentStates[idx].length,
+                completed
+            )
+        }
+        recountProgress()
+    }
+
+    private func recountProgress() {
+        let sum = segmentCompleted.values.reduce(Int64(0), +)
+        let delta = sum - lastSpeedSample
+        if delta > 0 {
+            speedWindowBytes += delta
+            lastSpeedSample = sum
+        }
+        let dt = Date().timeIntervalSince(speedWindowStart)
+        if dt >= 0.5 {
+            progress.bytesPerSecond = Double(speedWindowBytes) / max(dt, 0.001)
+            speedWindowStart = Date()
+            speedWindowBytes = 0
+        }
+        progress.completedBytes = sum
+    }
+
+    private func installProgressPlan(_ segments: [SegmentRecord]) {
+        segmentCompleted.removeAll(keepingCapacity: true)
+        progress.segmentStates = segments.map { segment in
+            let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+            segmentCompleted[segment.segmentId] = have
+            return SegmentState(
+                id: Int(segment.segmentId),
+                start: segment.start,
+                end: segment.end,
+                completed: have,
+                isFinished: have >= segment.length
+            )
+        }
+        recountProgress()
+    }
+
+    private func replanPersistedSegments(
+        _ existing: [SegmentRecord],
+        total: Int64
+    ) throws -> [SegmentRecord] {
+        var completed: [Int16: Int64] = [:]
+        for segment in existing {
+            completed[segment.segmentId] = SegmentFileFormat.existingByteCount(
+                for: segment,
+                in: workDirectory
+            )
+        }
+        let replanned = SegmentFileFormat.replanConnections(
+            existing: existing,
+            totalBytes: total,
+            newConnections: currentConnections,
+            completedByID: completed
+        )
+        try writeSegmentsBin(replanned)
+        installProgressPlan(replanned)
+        return replanned
+    }
+
+    /// 960 KiB is the exact observed socket-1 prefix for fixture 4125. For small
+    /// files use one quarter so the second socket still gets meaningful work.
+    private func dynamicBootstrapBytes(total: Int64) -> Int64 {
+        min(960 * 1024, max(1, total / 4))
+    }
+
+    private func mergeSegments(_ segments: [SegmentRecord], to finalURL: URL, total: Int64) throws {
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            try FileManager.default.removeItem(at: finalURL)
+        }
+        FileManager.default.createFile(atPath: finalURL.path, contents: nil)
+        let out = try FileHandle(forWritingTo: finalURL)
+        defer { try? out.close() }
+        if total > 0 {
+            try out.truncate(atOffset: UInt64(total))
+        }
+
+        let ordered = segments.sorted { $0.start < $1.start }
+        for seg in ordered {
+            let part = SegmentFileFormat.segmentFileURL(id: seg.segmentId, in: workDirectory)
+            guard FileManager.default.fileExists(atPath: part.path) else {
+                throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
+            }
+            let have = SegmentFileFormat.existingByteCount(for: seg, in: workDirectory)
+            guard have >= seg.length || seg.length == 0 else {
+                throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
+            }
+            try out.seek(toOffset: UInt64(seg.start))
+            do {
+                let input = try FileHandle(forReadingFrom: part)
+                defer { try? input.close() }
+                while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                    try out.write(contentsOf: chunk)
+                }
+            }
+        }
+        progress.completedBytes = total
+        progress.totalBytes = total
+        progress.segmentStates = segments.map {
+            SegmentState(id: Int($0.segmentId), start: $0.start, end: $0.end, completed: $0.length, isFinished: true)
+        }
+    }
+
+    private func writeSegmentsBin(_ segments: [SegmentRecord]) throws {
+        let data = SegmentFileFormat.serialize(segments)
+        try data.write(to: workDirectory.appendingPathComponent("segments.bin"), options: .atomic)
+    }
+
+    private func throwIfStopped() throws {
+        if token.isPaused { throw EngineError.paused }
+        if token.isCancelled { throw EngineError.cancelled }
+    }
+
+    // MARK: - Helpers
+
+    private func setState(_ s: EngineState) {
+        let old = engineState
+        engineState = s
+        if old != s {
+            log("DownloadEngine State Changed : \(old.rawValue) -> \(s.rawValue)")
+        }
+    }
+
+    private func applyHeaders(to req: inout URLRequest) {
+        if let ua = request.userAgent {
+            req.setValue(ua, forHTTPHeaderField: "User-Agent")
+        } else {
+            req.setValue(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+                forHTTPHeaderField: "User-Agent"
+            )
+        }
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        req.setValue("*", forHTTPHeaderField: "Accept-Charset")
+        if let auth = authAuthorization {
+            let field = authIsProxy ? "Proxy-Authorization" : "Authorization"
+            req.setValue(auth, forHTTPHeaderField: field)
+        } else {
+            // Preemptive Basic for simple servers; Digest/NTLM overwrite via authAuthorization.
+            let user = request.username ?? request.url.user
+            let pass = request.password ?? request.url.password ?? ""
+            if let user, !user.isEmpty {
+                let raw = "\(user):\(pass)"
+                if let data = raw.data(using: .utf8) {
+                    req.setValue("Basic \(data.base64EncodedString())", forHTTPHeaderField: "Authorization")
+                }
+            }
+        }
+        // B05 — HTTP proxy Basic credentials (independent of origin Authorization).
+        if let proxy = httpProxyCredentials, proxy.enabled,
+           let u = proxy.username, !u.isEmpty {
+            let raw = "\(u):\(proxy.password ?? "")"
+            if let data = raw.data(using: .utf8) {
+                req.setValue("Basic \(data.base64EncodedString())", forHTTPHeaderField: "Proxy-Authorization")
+            }
+        }
+        for (k, v) in request.headers {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
+        if let page = request.pageURL {
+            req.setValue(page.absoluteString, forHTTPHeaderField: "Referer")
+            if let host = page.host {
+                req.setValue("\(page.scheme ?? "https")://\(host)", forHTTPHeaderField: "Origin")
+            }
+        }
+    }
+
+    private func nonEmptyName(_ s: String) -> String {
+        s.isEmpty ? "download.bin" : s
+    }
+
+    private func openLog() {
+        let url = workDirectory.appendingPathComponent("LogFile.txt")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        logHandle = try? FileHandle(forWritingTo: url)
+        _ = try? logHandle?.seekToEnd()
+        log("Opening LogFile...")
+    }
+
+    private func closeLog() {
+        try? logHandle?.close()
+        logHandle = nil
+    }
+
+    private func log(_ line: String) {
+        let ts = Int(Date().timeIntervalSince1970)
+        let formatted = "INFO   \(isoNow()) ( \(ts) )   \(line)\n"
+        if let data = formatted.data(using: .utf8) {
+            try? logHandle?.write(contentsOf: data)
+        }
+    }
+
+    private func isoNow() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f.string(from: Date())
+    }
+}
+
+public enum EngineError: Error, LocalizedError {
+    case invalidResponse
+    case httpStatus(Int)
+    case cancelled
+    case paused
+    case notResumable
+    case mergeFailed(String)
+    case authRequired(status: Int, challenge: String?)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidResponse: return "Invalid HTTP response"
+        case .httpStatus(let c): return "HTTP status \(c)"
+        case .cancelled: return "Download Canceled By User."
+        case .paused: return "Download paused"
+        case .notResumable: return "Server does not support resume"
+        case .mergeFailed(let m): return m
+        case .authRequired(let s, _): return "Authentication required (HTTP \(s))"
+        }
+    }
+}

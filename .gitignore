@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+.idea/
+*.log
+
+# Original proprietary app (reference only; not part of the open-source host)
+NeatDownloadManager.app/
+
+# Large reverse-engineering dumps / extracted binaries
+reverse/dumps/
+reverse/bin/
