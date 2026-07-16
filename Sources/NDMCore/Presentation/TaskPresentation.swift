@@ -17,26 +17,26 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
 
     public var title: String {
         switch self {
-        case .all: return "All"
-        case .active: return "Active"
-        case .queued: return "Queued"
-        case .paused: return "Paused"
-        case .completed: return "Completed"
-        case .failed: return "Failed"
-        case .video: return "Video"
-        case .audio: return "Audio"
-        case .document: return "Document"
-        case .compressed: return "Compressed"
-        case .application: return "App"
-        case .image: return "Image"
+        case .all: return L10n.all
+        case .active: return L10n.active
+        case .queued: return L10n.queued
+        case .paused: return L10n.paused
+        case .completed: return L10n.completed
+        case .failed: return L10n.failed
+        case .video: return L10n.video
+        case .audio: return L10n.audio
+        case .document: return L10n.document
+        case .compressed: return L10n.compressed
+        case .application: return L10n.appCategory
+        case .image: return L10n.image
         }
     }
 
     /// Sidebar section header; `nil` means this row is not a section break.
     public var section: String? {
         switch self {
-        case .all: return "Status"
-        case .video: return "Type"
+        case .all: return L10n.status
+        case .video: return L10n.type
         default: return nil
         }
     }
@@ -118,8 +118,12 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var canOpen: Bool
     public var canShowInFinder: Bool
     public var canShowProgress: Bool
+    public var isComplete: Bool
     public var primaryAction: TaskPrimaryAction
     public var segmentStates: [SegmentState]
+
+    /// Completed downloads don't need a progress bar in list / inspector.
+    public var showsProgressBar: Bool { !isComplete }
 
     public init(
         taskID: Int64,
@@ -142,6 +146,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         canOpen: Bool,
         canShowInFinder: Bool,
         canShowProgress: Bool,
+        isComplete: Bool,
         primaryAction: TaskPrimaryAction,
         segmentStates: [SegmentState]
     ) {
@@ -165,6 +170,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.canOpen = canOpen
         self.canShowInFinder = canShowInFinder
         self.canShowProgress = canShowProgress
+        self.isComplete = isComplete
         self.primaryAction = primaryAction
         self.segmentStates = segmentStates
     }
@@ -237,15 +243,22 @@ public struct TaskRowPresentation: Equatable, Sendable {
             statusDetail = statusTitle
         }
 
+        let sizeText: String
+        if task.status == .complete, totalBytes > 0 {
+            sizeText = TaskPresentationFormatting.byteCount(totalBytes)
+        } else {
+            sizeText = TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes)
+        }
+
         return TaskRowPresentation(
             taskID: task.id,
-            filename: task.filename.isEmpty ? "Untitled" : task.filename,
+            filename: task.filename.isEmpty ? L10n.untitled : task.filename,
             host: host,
             statusTitle: statusTitle,
             statusDetail: statusDetail,
             progressFraction: fraction,
-            progressText: TaskPresentationFormatting.percent(fraction),
-            sizeText: TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes),
+            progressText: task.status == .complete ? L10n.completed : TaskPresentationFormatting.percent(fraction),
+            sizeText: sizeText,
             speedText: TaskPresentationFormatting.speed(speed, status: task.status),
             etaText: TaskPresentationFormatting.eta(eta, status: task.status),
             connectionsText: "\(task.connections)",
@@ -258,6 +271,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
             canOpen: canOpen,
             canShowInFinder: canShowInFinder,
             canShowProgress: canShowProgress,
+            isComplete: task.status == .complete,
             primaryAction: primary,
             // Per-connection detail belongs in the progress window; avoid
             // copying/sorting segment arrays on every main-list refresh.
@@ -276,12 +290,34 @@ public enum TaskPresentationFormatting {
 
     public static func statusTitle(_ status: DownloadStatus) -> String {
         switch status {
-        case .incomplete: return "Incomplete"
-        case .complete: return "Completed"
-        case .paused: return "Paused"
-        case .downloading: return "Downloading"
-        case .error: return "Failed"
-        case .waiting: return "Queued"
+        case .incomplete: return L10n.incomplete
+        case .complete: return L10n.completed
+        case .paused: return L10n.paused
+        case .downloading: return L10n.downloading
+        case .error: return L10n.failed
+        case .waiting: return L10n.queued
+        }
+    }
+
+    public static func categoryTitle(_ category: DownloadCategory) -> String {
+        switch category {
+        case .video: return L10n.video
+        case .audio: return L10n.audio
+        case .document: return L10n.document
+        case .compressed: return L10n.compressed
+        case .application: return L10n.appCategory
+        case .image: return L10n.image
+        case .misc: return L10n.other
+        }
+    }
+
+    public static func linkTypeTitle(_ ltype: String) -> String? {
+        switch ltype.lowercased() {
+        case "", "normal": return nil
+        case "hls", "m3u8": return L10n.hlsStream
+        case "mkv", "mkva", "mkvv": return L10n.multiTrackMedia
+        case "ftp": return L10n.ftp
+        default: return ltype.uppercased()
         }
     }
 
@@ -291,7 +327,13 @@ public enum TaskPresentationFormatting {
     }
 
     public static func byteCount(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowedUnits = .useAll
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        // ByteCountFormatter picks unit labels from the process locale; keep numeric style consistent.
+        return formatter.string(fromByteCount: max(0, bytes))
     }
 
     public static func sizePair(completed: Int64, total: Int64) -> String {
@@ -301,17 +343,30 @@ public enum TaskPresentationFormatting {
         if completed > 0 {
             return byteCount(completed)
         }
-        return "—"
+        return L10n.emDash
     }
 
     public static func speed(_ bytesPerSecond: Double, status: DownloadStatus) -> String {
-        guard status == .downloading, bytesPerSecond > 0 else { return "—" }
-        let formatted = ByteCountFormatter.string(fromByteCount: Int64(bytesPerSecond), countStyle: .file)
-        return "\(formatted)/s"
+        guard status == .downloading, bytesPerSecond > 0 else { return L10n.emDash }
+        let formatted = byteCount(Int64(bytesPerSecond))
+        return L10n.usesChinese ? "\(formatted)/秒" : "\(formatted)/s"
     }
 
     public static func eta(_ interval: TimeInterval?, status: DownloadStatus) -> String {
-        guard status == .downloading, let interval, interval.isFinite, interval > 0 else { return "—" }
+        guard status == .downloading, let interval, interval.isFinite, interval > 0 else { return L10n.emDash }
+        if L10n.usesChinese {
+            if interval < 60 {
+                return String(format: "%.0f秒", interval)
+            }
+            if interval < 3600 {
+                let minutes = Int(interval) / 60
+                let seconds = Int(interval) % 60
+                return "\(minutes)分 \(String(format: "%02d", seconds))秒"
+            }
+            let hours = Int(interval) / 3600
+            let minutes = (Int(interval) % 3600) / 60
+            return "\(hours)小时 \(String(format: "%02d", minutes))分"
+        }
         if interval < 60 {
             return String(format: "%.0fs", interval)
         }

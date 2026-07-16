@@ -1,5 +1,20 @@
 import Foundation
 
+/// Quiet Finder appearance preference. Default follows macOS System Settings.
+public enum AppearanceMode: String, Codable, Sendable, Equatable, CaseIterable {
+    case system
+    case light
+    case dark
+
+    public var settingsTitle: String {
+        switch self {
+        case .system: return L10n.t("System", "跟随系统")
+        case .light: return L10n.t("Light", "浅色")
+        case .dark: return L10n.t("Dark", "深色")
+        }
+    }
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var downloadDirectory: URL
     public var maxConnections: Int
@@ -20,6 +35,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var showBrowserMediaPanel: Bool
     /// Confirm each browser-captured download before starting (`NeatWaitWindow`).
     public var confirmBrowserDownloads: Bool
+    /// Window chrome: System (default) / Light / Dark.
+    public var appearanceMode: AppearanceMode
+    /// UI language: System (default) / English / 简体中文.
+    public var languageMode: AppLanguageMode
 
     public init(
         downloadDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0],
@@ -37,7 +56,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
         bridgePort: UInt16 = 10_007,
         bandwidthLimitBytesPerSecond: Int64 = 0,
         showBrowserMediaPanel: Bool = true,
-        confirmBrowserDownloads: Bool = true
+        confirmBrowserDownloads: Bool = false,
+        appearanceMode: AppearanceMode = .system,
+        languageMode: AppLanguageMode = .system
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -55,6 +76,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.bandwidthLimitBytesPerSecond = bandwidthLimitBytesPerSecond
         self.showBrowserMediaPanel = showBrowserMediaPanel
         self.confirmBrowserDownloads = confirmBrowserDownloads
+        self.appearanceMode = appearanceMode
+        self.languageMode = languageMode
     }
 }
 

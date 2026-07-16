@@ -12,28 +12,30 @@ final class SettingsWindowController: NSWindowController {
     private let dirField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
-    private let categoryCheck = NSButton(checkboxWithTitle: "Organize into category subfolders", target: nil, action: nil)
-    private let allAtOnceCheck = NSButton(checkboxWithTitle: "Download multiple tasks at once", target: nil, action: nil)
-    private let completeCheck = NSButton(checkboxWithTitle: "Show dialog when a download finishes", target: nil, action: nil)
+    private let categoryCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let allAtOnceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let completeCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let appearancePopup = NSPopUpButton()
+    private let languagePopup = NSPopUpButton()
 
     // Browser
-    private let panelCheck = NSButton(checkboxWithTitle: "Show floating media panel in browser", target: nil, action: nil)
-    private let confirmCheck = NSButton(checkboxWithTitle: "Confirm each browser capture (Wait window)", target: nil, action: nil)
-    private let uaCheck = NSButton(checkboxWithTitle: "Use custom User-Agent", target: nil, action: nil)
+    private let panelCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let confirmCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let uaCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let uaField = NSTextField(string: "")
 
     // Network
-    private let proxyCheck = NSButton(checkboxWithTitle: "HTTP(S) proxy", target: nil, action: nil)
+    private let proxyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let proxyHostField = NSTextField(string: "")
     private let proxyPortField = NSTextField(string: "8080")
     private let proxyUserField = NSTextField(string: "")
     private let proxyPassField = NSSecureTextField(string: "")
-    private let ftpProxyCheck = NSButton(checkboxWithTitle: "FTP proxy (HTTP CONNECT)", target: nil, action: nil)
+    private let ftpProxyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let ftpHostField = NSTextField(string: "")
     private let ftpPortField = NSTextField(string: "8080")
     private let ftpUserField = NSTextField(string: "")
     private let ftpPassField = NSSecureTextField(string: "")
-    private let socksCheck = NSButton(checkboxWithTitle: "SOCKS proxy (overrides HTTP)", target: nil, action: nil)
+    private let socksCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let socksHostField = NSTextField(string: "")
     private let socksPortField = NSTextField(string: "1080")
     private let socksUserField = NSTextField(string: "")
@@ -49,12 +51,26 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: true
         )
-        window.title = "Settings"
+        window.title = L10n.settings
         window.minSize = NSSize(width: 520, height: 420)
+        NDMChrome.applyWindowChrome(window)
         super.init(window: window)
+        applyLocalizedChrome()
         buildUI()
         loadFields()
         window.center()
+    }
+
+    private func applyLocalizedChrome() {
+        categoryCheck.title = L10n.organizeCategories
+        allAtOnceCheck.title = L10n.downloadAllAtOnce
+        completeCheck.title = L10n.showCompletionDialog
+        panelCheck.title = L10n.showMediaPanel
+        confirmCheck.title = L10n.confirmBrowserCaptures
+        uaCheck.title = L10n.useCustomUA
+        proxyCheck.title = L10n.httpProxy
+        ftpProxyCheck.title = L10n.ftpProxy
+        socksCheck.title = L10n.socksProxy
     }
 
     @available(*, unavailable)
@@ -70,15 +86,15 @@ final class SettingsWindowController: NSWindowController {
         tabView.tabViewType = .topTabsBezelBorder
         tabView.translatesAutoresizingMaskIntoConstraints = false
 
-        tabView.addTabViewItem(makeTab("General", view: makeGeneralPane()))
-        tabView.addTabViewItem(makeTab("Browser", view: makeBrowserPane()))
-        tabView.addTabViewItem(makeTab("Network", view: makeNetworkPane()))
-        tabView.addTabViewItem(makeTab("Advanced", view: makeAdvancedPane()))
+        tabView.addTabViewItem(makeTab(L10n.general, view: makeGeneralPane()))
+        tabView.addTabViewItem(makeTab(L10n.browser, view: makeBrowserPane()))
+        tabView.addTabViewItem(makeTab(L10n.network, view: makeNetworkPane()))
+        tabView.addTabViewItem(makeTab(L10n.advanced, view: makeAdvancedPane()))
 
-        let save = NSButton(title: "Save", target: self, action: #selector(saveClicked))
+        let save = NSButton(title: L10n.save, target: self, action: #selector(saveClicked))
         save.bezelStyle = .rounded
         save.keyEquivalent = "\r"
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked))
+        let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
         cancel.keyEquivalent = "\u{1b}"
 
@@ -122,21 +138,38 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func makeGeneralPane() -> NSView {
-        let browse = NSButton(title: "Choose…", target: self, action: #selector(chooseDir))
+        let browse = NSButton(title: L10n.choose, target: self, action: #selector(chooseDir))
         browse.bezelStyle = .rounded
         let dirRow = NSStackView(views: [dirField, browse])
         dirRow.orientation = .horizontal
         dirRow.spacing = 8
 
+        appearancePopup.removeAllItems()
+        for mode in AppearanceMode.allCases {
+            appearancePopup.addItem(withTitle: mode.settingsTitle)
+        }
+        languagePopup.removeAllItems()
+        for mode in AppLanguageMode.allCases {
+            languagePopup.addItem(withTitle: mode.settingsTitle)
+        }
+
         return formStack([
-            sectionLabel("Downloads"),
-            caption("Save files to"),
+            sectionLabel(L10n.language),
+            caption(L10n.t("Interface language", "界面语言")),
+            languagePopup,
+            footnote(L10n.languageFootnote),
+            sectionLabel(L10n.appearance),
+            caption(L10n.theme),
+            appearancePopup,
+            footnote(L10n.appearanceFootnote),
+            sectionLabel(L10n.downloads),
+            caption(L10n.saveFilesTo),
             dirRow,
-            caption("Max connections per download (1–32)"),
+            caption(L10n.maxConnectionsCaption),
             connField,
-            caption("Global speed limit (bytes/s, 0 = unlimited)"),
+            caption(L10n.globalSpeedCaption),
             bwField,
-            sectionLabel("Behavior"),
+            sectionLabel(L10n.behavior),
             categoryCheck,
             allAtOnceCheck,
             completeCheck,
@@ -148,11 +181,12 @@ final class SettingsWindowController: NSWindowController {
             sectionLabel("BetterNDM"),
             panelCheck,
             confirmCheck,
-            sectionLabel("Identity"),
+            footnote(L10n.confirmBrowserFootnote),
+            sectionLabel(L10n.identity),
             uaCheck,
-            caption("User-Agent string"),
+            caption(L10n.userAgentString),
             uaField,
-            footnote("These options are pushed to the browser extension over the local WebSocket bridge."),
+            footnote(L10n.browserSettingsFootnote),
         ])
     }
 
@@ -160,38 +194,38 @@ final class SettingsWindowController: NSWindowController {
         return formStack([
             sectionLabel("HTTP(S)"),
             proxyCheck,
-            caption("Host"),
+            caption(L10n.host),
             proxyHostField,
             proxyRow(port: proxyPortField, user: proxyUserField, pass: proxyPassField),
             sectionLabel("FTP"),
             ftpProxyCheck,
-            caption("Host"),
+            caption(L10n.host),
             ftpHostField,
             proxyRow(port: ftpPortField, user: ftpUserField, pass: ftpPassField),
             sectionLabel("SOCKS"),
             socksCheck,
-            caption("Host"),
+            caption(L10n.host),
             socksHostField,
             proxyRow(port: socksPortField, user: socksUserField, pass: socksPassField),
-            caption("Version"),
+            caption(L10n.version),
             socksVersionPopup,
         ])
     }
 
     private func makeAdvancedPane() -> NSView {
-        let importLegacy = NSButton(title: "Import Original Neat Database…", target: self, action: #selector(importLegacy))
+        let importLegacy = NSButton(title: L10n.importLegacyDB, target: self, action: #selector(importLegacy))
         importLegacy.bezelStyle = .rounded
         return formStack([
-            sectionLabel("Migration"),
-            footnote("Import tasks from the original Neat Download Manager database. Your NDM data stays in ~/Library/Application Support/dev.ndm.open."),
+            sectionLabel(L10n.migration),
+            footnote(L10n.migrationFootnote),
             importLegacy,
         ])
     }
 
     private func proxyRow(port: NSTextField, user: NSTextField, pass: NSSecureTextField) -> NSView {
-        port.placeholderString = "Port"
-        user.placeholderString = "Username"
-        pass.placeholderString = "Password"
+        port.placeholderString = L10n.portPlaceholder
+        user.placeholderString = L10n.usernamePlaceholder
+        pass.placeholderString = L10n.passwordPlaceholder
         let row = NSStackView(views: [port, user, pass])
         row.orientation = .horizontal
         row.spacing = 8
@@ -249,6 +283,12 @@ final class SettingsWindowController: NSWindowController {
         categoryCheck.state = settings.useCategoryFolders ? .on : .off
         allAtOnceCheck.state = settings.downloadAllAtOnce ? .on : .off
         completeCheck.state = settings.showCompletionDialog ? .on : .off
+        if let index = AppearanceMode.allCases.firstIndex(of: settings.appearanceMode) {
+            appearancePopup.selectItem(at: index)
+        }
+        if let index = AppLanguageMode.allCases.firstIndex(of: settings.languageMode) {
+            languagePopup.selectItem(at: index)
+        }
         panelCheck.state = settings.showBrowserMediaPanel ? .on : .off
         confirmCheck.state = settings.confirmBrowserDownloads ? .on : .off
         uaCheck.state = settings.useCustomUserAgent ? .on : .off
@@ -289,17 +329,17 @@ final class SettingsWindowController: NSWindowController {
         }
         panel.canChooseDirectories = false
         panel.directoryURL = LegacyDBImporter.defaultOriginalDB.deletingLastPathComponent()
-        panel.message = "Select original neatdb.sqlite"
+        panel.message = L10n.selectLegacyDB
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
                 let n = try await manager.importLegacyDB(from: url)
                 let alert = NSAlert()
-                alert.messageText = "Imported \(n) downloads"
+                alert.messageText = L10n.importedCount(n)
                 alert.runModal()
             } catch {
                 let alert = NSAlert()
-                alert.messageText = "Import failed"
+                alert.messageText = L10n.importFailed
                 alert.informativeText = error.localizedDescription
                 alert.runModal()
             }
@@ -314,10 +354,20 @@ final class SettingsWindowController: NSWindowController {
         next.useCategoryFolders = categoryCheck.state == .on
         next.downloadAllAtOnce = allAtOnceCheck.state == .on
         next.showCompletionDialog = completeCheck.state == .on
+        let appearanceIndex = appearancePopup.indexOfSelectedItem
+        if AppearanceMode.allCases.indices.contains(appearanceIndex) {
+            next.appearanceMode = AppearanceMode.allCases[appearanceIndex]
+        }
+        let languageIndex = languagePopup.indexOfSelectedItem
+        if AppLanguageMode.allCases.indices.contains(languageIndex) {
+            next.languageMode = AppLanguageMode.allCases[languageIndex]
+        }
         next.showBrowserMediaPanel = panelCheck.state == .on
         next.confirmBrowserDownloads = confirmCheck.state == .on
         next.useCustomUserAgent = uaCheck.state == .on
         next.customUserAgent = uaField.stringValue.isEmpty ? nil : uaField.stringValue
+        AppearanceApplicator.apply(next.appearanceMode)
+        L10n.apply(next.languageMode)
         let pport = UInt16(proxyPortField.stringValue) ?? 8080
         next.httpProxy = ProxySettings(
             host: proxyHostField.stringValue,

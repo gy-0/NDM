@@ -1,7 +1,7 @@
 import AppKit
 import NDMCore
 
-/// `NeatWaitWindow` — confirm browser-captured download before start.
+/// Confirm browser-captured download before start.
 @MainActor
 final class WaitWindowController: NSWindowController, NSWindowDelegate {
     enum Result {
@@ -13,22 +13,24 @@ final class WaitWindowController: NSWindowController, NSWindowDelegate {
     private let completion: (Result) -> Void
     private let urlField = NSTextField(string: "")
     private let titleLabel = NSTextField(labelWithString: "")
+    private let metaLabel = NSTextField(wrappingLabelWithString: "")
     private var didFinish = false
 
     init(message: ParsedBridgeMessage, completion: @escaping (Result) -> Void) {
         self.message = message
         self.completion = completion
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 180),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 220),
             styleMask: [.titled, .closable],
             backing: .buffered,
-            defer: false
+            defer: true
         )
-        window.title = "New Download from Browser"
-        window.center()
+        window.title = L10n.confirmDownload
+        NDMChrome.applyWindowChrome(window)
         super.init(window: window)
         window.delegate = self
         buildUI()
+        window.center()
     }
 
     @available(*, unavailable)
@@ -36,36 +38,58 @@ final class WaitWindowController: NSWindowController, NSWindowDelegate {
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
-        titleLabel.stringValue = message.pageTitle.isEmpty ? "Confirm download" : message.pageTitle
-        titleLabel.font = .boldSystemFont(ofSize: 13)
+        titleLabel.stringValue = message.pageTitle.isEmpty ? L10n.downloadFromBrowser : message.pageTitle
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+
         urlField.stringValue = message.url
         urlField.isEditable = true
+        urlField.isSelectable = true
         urlField.lineBreakMode = .byTruncatingMiddle
 
-        let info = NSTextField(labelWithString: [
-            message.filename.isEmpty ? nil : "File: \(message.filename)",
-            message.ltype == "normal" ? nil : "Type: \(message.ltype)",
-            message.alternateURL.isEmpty ? nil : "Audio track: yes",
-        ].compactMap { $0 }.joined(separator: " · "))
-        info.textColor = .secondaryLabelColor
+        var parts: [String] = []
+        if !message.filename.isEmpty { parts.append(message.filename) }
+        if message.fileSize > 0 {
+            parts.append(TaskPresentationFormatting.byteCount(Int64(message.fileSize)))
+        }
+        if let kind = TaskPresentationFormatting.linkTypeTitle(message.ltype) {
+            parts.append(kind)
+        }
+        if !message.alternateURL.isEmpty {
+            parts.append(L10n.includesAudioTrack)
+        }
+        metaLabel.stringValue = parts.isEmpty ? L10n.capturedByBetterNDM : parts.joined(separator: " · ")
+        metaLabel.font = .systemFont(ofSize: 12)
+        metaLabel.textColor = .secondaryLabelColor
 
-        let ok = NSButton(title: "Download", target: self, action: #selector(okClicked))
+        let ok = NSButton(title: L10n.download, target: self, action: #selector(okClicked))
         ok.bezelStyle = .rounded
         ok.keyEquivalent = "\r"
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked))
+        let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
 
-        let stack = NSStackView(views: [titleLabel, urlField, info, NSStackView(views: [ok, cancel])])
+        let buttons = NSStackView(views: [NSView(), cancel, ok])
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.distribution = .fill
+
+        let stack = NSStackView(views: [titleLabel, metaLabel, urlField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
             urlField.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            metaLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            ok.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
+            cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
     }
 
@@ -81,8 +105,9 @@ final class WaitWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Closing with the title-bar button must resume the checked continuation too.
-        finish(.cancel)
+        if !didFinish {
+            finish(.cancel)
+        }
     }
 
     private func finish(_ result: Result) {

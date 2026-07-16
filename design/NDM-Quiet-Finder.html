@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NDM · Quiet Finder</title>
+<style>
+  :root {
+    --accent: #2563eb;
+    --ink: #14161a;
+    --muted: #5c6370;
+    --surface: #f2f3f6;
+    --sidebar: #e8ebf0;
+    --titlebar: linear-gradient(#f4f5f8, #e9ecf2);
+    --panel: #f6f7fa;
+    --row-active: rgba(37, 99, 235, 0.10);
+    --nav-active: #2563eb;
+    --nav-active-ink: #fff;
+    --card: #f8f9fc;
+    --card-border: rgba(20, 28, 45, 0.08);
+    --track: rgba(20, 28, 45, 0.06);
+    --seg: #2f9e6b;
+    --page-bg: #e4e7ee;
+    --chrome-shadow: 0 40px 90px rgba(20, 28, 45, 0.18);
+  }
+  html.dark {
+    --accent: #5b9aff;
+    --ink: #e8eaed;
+    --muted: #8b919c;
+    --surface: #1c1e22;
+    --sidebar: #16181c;
+    --titlebar: linear-gradient(#2a2d33, #22252a);
+    --panel: #181a1e;
+    --row-active: rgba(91, 154, 255, 0.16);
+    --nav-active: rgba(91, 154, 255, 0.22);
+    --nav-active-ink: #dce9ff;
+    --card: rgba(255, 255, 255, 0.04);
+    --card-border: rgba(255, 255, 255, 0.10);
+    --track: rgba(255, 255, 255, 0.08);
+    --seg: #2f9e6b;
+    --page-bg: #0f1114;
+    --chrome-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 480px at 12% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%),
+      var(--page-bg);
+    min-height: 100vh;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 36px 28px 72px; }
+  .top {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 16px; margin-bottom: 28px; flex-wrap: wrap;
+  }
+  .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  h1 { margin: 0; font-size: 32px; letter-spacing: -0.02em; font-weight: 650; }
+  .lede { margin: 8px 0 0; max-width: 560px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .toggle {
+    display: inline-flex; border: 1px solid var(--card-border); border-radius: 10px; overflow: hidden;
+    background: var(--surface);
+  }
+  .toggle button {
+    border: 0; background: transparent; color: var(--muted); padding: 8px 12px;
+    font-size: 12px; cursor: pointer;
+  }
+  .toggle button.on { background: var(--ink); color: var(--page-bg); }
+  .stage { display: flex; flex-direction: column; gap: 28px; align-items: center; }
+  .cap { font-size: 12px; color: var(--muted); font-style: italic; margin-top: -14px; }
+
+  .mac {
+    width: min(1000px, 100%);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+    box-shadow: var(--chrome-shadow), 0 0 0 1px var(--card-border);
+  }
+  .titlebar {
+    height: 42px; display: flex; align-items: center; padding: 0 14px;
+    background: var(--titlebar); position: relative;
+  }
+  .lights { display: flex; gap: 8px; z-index: 2; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .tb-title {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 13px; font-weight: 500; pointer-events: none; color: var(--ink);
+  }
+  .toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .tool {
+    border: 0; border-radius: 8px; padding: 6px 10px; font-size: 12px;
+    cursor: pointer; background: transparent; color: var(--ink);
+  }
+  .tool:hover { background: var(--track); }
+  .tool.primary { background: var(--accent); color: #fff; }
+  .search {
+    margin-left: auto; width: 180px; border-radius: 8px; border: 1px solid var(--card-border);
+    background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 6px 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .body { display: grid; grid-template-columns: 168px 1fr 240px; min-height: 440px; }
+  .side { background: var(--sidebar); padding: 14px 10px; border-right: 1px solid var(--card-border); }
+  .side h4 {
+    margin: 14px 8px 6px; font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+  }
+  .side h4:first-child { margin-top: 0; }
+  .nav {
+    display: flex; justify-content: space-between; padding: 7px 8px;
+    border-radius: 8px; font-size: 13px; cursor: pointer; color: var(--ink);
+  }
+  .nav .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .nav.on { background: var(--nav-active); color: var(--nav-active-ink); }
+  .nav.on .n { color: color-mix(in srgb, var(--nav-active-ink) 75%, transparent); }
+  .list { padding: 10px; }
+  .row {
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 12px;
+    padding: 12px; border-radius: 10px; cursor: pointer; margin-bottom: 4px;
+  }
+  .row.on { background: var(--row-active); }
+  .row .name { font-size: 13px; font-weight: 600; }
+  .row .pct { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .row .sub { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+  .bar { grid-column: 1 / -1; height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .insp { padding: 16px; border-left: 1px solid var(--card-border); background: var(--panel); }
+  .insp .label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .insp h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .insp p { margin: 0 0 12px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .insp .stat { font-size: 12px; font-variant-numeric: tabular-nums; margin-bottom: 14px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { border: 0; border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; }
+  .btn.main { background: var(--accent); color: #fff; }
+  .btn.ghost { background: var(--track); color: var(--ink); }
+
+  .progress-wrap { width: min(520px, 100%); }
+  .prog-body { padding: 18px 20px 20px; }
+  .big { font-size: 40px; font-weight: 650; letter-spacing: -0.03em; line-height: 1; margin-bottom: 4px; }
+  .fname { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
+  .pill {
+    display: inline-flex; padding: 3px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; margin-bottom: 14px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  }
+  .card {
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+    font-size: 12px; background: var(--card); border: 1px solid var(--card-border);
+  }
+  .kv { display: grid; grid-template-columns: 88px 1fr; gap: 8px; margin-bottom: 6px; }
+  .kv span { color: var(--muted); }
+  .overall { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; margin-bottom: 10px; }
+  .overall > i { display: block; height: 100%; width: 37%; background: var(--accent); }
+  .seg-cap { font-size: 11px; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  .seg { height: 14px; border-radius: 4px; background: var(--track); position: relative; overflow: hidden; margin-bottom: 16px; }
+  .seg .fill { position: absolute; inset: 0 auto 0 0; width: 37%; background: var(--seg); }
+  .seg .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.35); }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .actions .btn { padding: 10px; font-size: 13px; }
+
+  .notes {
+    margin-top: 40px; padding: 16px 18px; border-radius: 12px;
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    border: 1px solid var(--card-border); font-size: 13px; line-height: 1.55; color: var(--muted);
+  }
+  .notes strong { color: var(--ink); }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <div>
+        <div class="eyebrow">Quiet Finder · Locked</div>
+        <h1>NDM</h1>
+        <p class="lede">跟随系统外观。词标暂用 NDM，改名时只换标题与 About。右侧可预览浅色 / 深色。</p>
+      </div>
+      <div class="toggle" role="group" aria-label="Appearance">
+        <button type="button" data-mode="system" class="on">System</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="mac" id="main"></div>
+      <div class="cap">主窗口 · 侧栏过滤 · 列表 · Inspector</div>
+      <div class="mac progress-wrap" id="prog"></div>
+      <div class="cap">进度窗口 · 大号百分比 · 单色绿 Segments · Close 始终可点</div>
+    </div>
+
+    <div class="notes">
+      <strong>已确认</strong>：方向 A · 跟随系统 · 词标 NDM（可改名）。<br />
+      AppKit 落地：语义色 + Settings「Appearance」= System / Light / Dark；Segments 保持 <code>systemGreen</code>。
+    </div>
+  </div>
+<script>
+const tasks = [
+  { name: "fdm.dmg", sub: "Downloading · files2.freedownloadmanager.org", pct: "37%", w: 37 },
+  { name: "archive-2026.zip", sub: "Queued · cdn.example.com", pct: "—", w: 0 },
+  { name: "lecture-03.mp4", sub: "Completed · university.edu", pct: "100%", w: 100 },
+];
+
+function traffic(title) {
+  return `<div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">${title}</div></div>`;
+}
+
+document.getElementById("main").innerHTML = `
+  ${traffic("NDM")}
+  <div class="toolbar">
+    <button class="tool primary">New</button>
+    <button class="tool">Start</button>
+    <button class="tool">Pause</button>
+    <div class="search">Search downloads</div>
+  </div>
+  <div class="body">
+    <aside class="side">
+      <h4>Status</h4>
+      <div class="nav on"><span>All</span><span class="n">12</span></div>
+      <div class="nav"><span>Active</span><span class="n">1</span></div>
+      <div class="nav"><span>Completed</span><span class="n">8</span></div>
+      <div class="nav"><span>Failed</span><span class="n">0</span></div>
+      <h4>Type</h4>
+      <div class="nav"><span>Video</span><span class="n">3</span></div>
+      <div class="nav"><span>Document</span><span class="n">2</span></div>
+    </aside>
+    <section class="list">
+      ${tasks.map((t, i) => `
+        <div class="row${i === 0 ? " on" : ""}" data-i="${i}">
+          <div class="name">${t.name}</div>
+          <div class="pct">${t.pct}</div>
+          <div class="sub">${t.sub}</div>
+          <div class="bar"><i style="width:${t.w}%"></i></div>
+        </div>`).join("")}
+    </section>
+    <aside class="insp">
+      <div class="label">Details</div>
+      <h3>fdm.dmg</h3>
+      <p>Downloading · files2.freedownloadmanager.org</p>
+      <div class="stat">37% · 20.4 MB / 55.3 MB · 548 KB/s · 1m 33s</div>
+      <div class="btns">
+        <button class="btn main">Pause</button>
+        <button class="btn ghost">Details…</button>
+        <button class="btn ghost">Copy URL</button>
+      </div>
+    </aside>
+  </div>`;
+
+document.getElementById("prog").innerHTML = `
+  ${traffic("37% fdm.dmg")}
+  <div class="prog-body">
+    <div class="big">37%</div>
+    <div class="fname">fdm.dmg</div>
+    <div class="pill">Downloading</div>
+    <div class="card">
+      <div class="kv"><span>URL</span><div>https://files2.freedownloadmanager.org/…/fdm.dmg</div></div>
+      <div class="kv"><span>Size</span><div>55.3 MB</div></div>
+      <div class="kv"><span>Downloaded</span><div>20.4 MB (37%)</div></div>
+      <div class="kv"><span>Speed</span><div>548 KB/s</div></div>
+      <div class="kv"><span>Time left</span><div>1 min 33 sec</div></div>
+    </div>
+    <div class="overall"><i></i></div>
+    <div class="seg-cap">Segments · 16</div>
+    <div class="seg">
+      <div class="fill"></div>
+      <div class="tick" style="left:12%"></div>
+      <div class="tick" style="left:25%"></div>
+      <div class="tick" style="left:40%"></div>
+      <div class="tick" style="left:55%"></div>
+      <div class="tick" style="left:70%"></div>
+      <div class="tick" style="left:85%"></div>
+    </div>
+    <div class="actions">
+      <button class="btn main">Pause</button>
+      <button class="btn ghost">Close</button>
+    </div>
+  </div>`;
+
+document.querySelector(".list").addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  document.querySelectorAll(".row").forEach((r) => r.classList.remove("on"));
+  row.classList.add("on");
+  const t = tasks[+row.dataset.i];
+  document.querySelector(".insp h3").textContent = t.name;
+  document.querySelector(".insp p").textContent = t.sub;
+});
+
+document.querySelector(".side").addEventListener("click", (e) => {
+  const nav = e.target.closest(".nav");
+  if (!nav) return;
+  document.querySelectorAll(".side .nav").forEach((n) => n.classList.remove("on"));
+  nav.classList.add("on");
+});
+
+function applyMode(mode) {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = mode === "dark" || (mode === "system" && prefersDark);
+  document.documentElement.classList.toggle("dark", dark);
+  document.querySelectorAll(".toggle button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.mode === mode);
+  });
+  localStorage.setItem("ndm-qf-appearance", mode);
+}
+
+document.querySelector(".toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  applyMode(btn.dataset.mode);
+});
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if ((localStorage.getItem("ndm-qf-appearance") || "system") === "system") applyMode("system");
+});
+
+applyMode(localStorage.getItem("ndm-qf-appearance") || "system");
+</script>
+</body>
+</html>

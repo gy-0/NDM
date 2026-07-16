@@ -12,21 +12,21 @@ final class TaskPropertiesWindowController: NSWindowController {
     private let nameField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
-    private let statusLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let pathLabel = NSTextField(wrappingLabelWithString: "")
     private let altURLField = NSTextField(string: "")
 
     init(manager: DownloadManager, task: DownloadTask) {
         self.manager = manager
         self.task = task
-        // defer: true avoids blocking the menu/toolbar click while the window
-        // server allocates backing stores.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: true
         )
-        window.title = "Task Properties — #\(task.id)"
+        window.title = task.filename.isEmpty ? L10n.properties : task.filename
+        NDMChrome.applyWindowChrome(window)
         super.init(window: window)
         buildUI()
         load()
@@ -38,25 +38,29 @@ final class TaskPropertiesWindowController: NSWindowController {
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
-        let labels = [
-            NSTextField(labelWithString: "URL"),
-            urlField,
-            NSTextField(labelWithString: "Filename"),
-            nameField,
-            NSTextField(labelWithString: "Connections (1–32)"),
-            connField,
-            NSTextField(labelWithString: "Bandwidth limit bytes/s (0=unlimited)"),
-            bwField,
-            NSTextField(labelWithString: "Alternate URL (urla)"),
-            altURLField,
-            statusLabel,
-        ]
-        let save = NSButton(title: "Save", target: self, action: #selector(saveClicked))
-        save.bezelStyle = .rounded
-        let cancel = NSButton(title: "Close", target: self, action: #selector(closeClicked))
-        cancel.bezelStyle = .rounded
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabelColor
+        pathLabel.font = .systemFont(ofSize: 11)
+        pathLabel.textColor = .tertiaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
 
-        let stack = NSStackView(views: labels + [NSStackView(views: [save, cancel])])
+        let save = NSButton(title: L10n.save, target: self, action: #selector(saveClicked))
+        save.bezelStyle = .rounded
+        save.keyEquivalent = "\r"
+        let cancel = NSButton(title: L10n.close, target: self, action: #selector(closeClicked))
+        cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
+
+        let stack = NSStackView(views: [
+            label(L10n.url), urlField,
+            label(L10n.filename), nameField,
+            label(L10n.connectionsRange), connField,
+            label(L10n.speedLimitCaption), bwField,
+            label(L10n.alternateAudioURL), altURLField,
+            statusLabel,
+            pathLabel,
+            NSStackView(views: [save, cancel]),
+        ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -70,7 +74,16 @@ final class TaskPropertiesWindowController: NSWindowController {
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            pathLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
+    }
+
+    private func label(_ text: String) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = .systemFont(ofSize: 11)
+        field.textColor = .secondaryLabelColor
+        return field
     }
 
     private func load() {
@@ -79,8 +92,16 @@ final class TaskPropertiesWindowController: NSWindowController {
         connField.stringValue = "\(task.connections)"
         bwField.stringValue = "\(task.bandwidthLimit)"
         altURLField.stringValue = task.alternateURL ?? ""
-        statusLabel.stringValue = "Status: \(task.status.rawValue) · Size: \(task.fileSize)"
-        statusLabel.textColor = .secondaryLabelColor
+        let size = task.fileSize > 0 ? TaskPresentationFormatting.byteCount(task.fileSize) : L10n.unknown
+        let type = TaskPresentationFormatting.categoryTitle(task.category)
+        statusLabel.stringValue = "\(TaskPresentationFormatting.statusTitle(task.status)) · \(type) · \(size)"
+        if let path = task.destinationFileURL?.path {
+            pathLabel.stringValue = path
+        } else if let folder = task.folderPath, !folder.isEmpty {
+            pathLabel.stringValue = folder
+        } else {
+            pathLabel.stringValue = L10n.saveLocationPending
+        }
     }
 
     @objc private func saveClicked() {
@@ -95,8 +116,7 @@ final class TaskPropertiesWindowController: NSWindowController {
                 try await manager.updateTask(task)
                 window?.close()
             } catch {
-                let alert = NSAlert(error: error)
-                alert.runModal()
+                NSAlert(error: error).runModal()
             }
         }
     }

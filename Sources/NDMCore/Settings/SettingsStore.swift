@@ -22,6 +22,8 @@ public enum SettingsStore {
         var bandwidthLimitBytesPerSecond: Int64?
         var showBrowserMediaPanel: Bool?
         var confirmBrowserDownloads: Bool?
+        var appearanceMode: String?
+        var languageMode: String?
     }
 
     public static func load() -> AppSettings {
@@ -46,7 +48,9 @@ public enum SettingsStore {
             bridgePort: disk.bridgePort,
             bandwidthLimitBytesPerSecond: disk.bandwidthLimitBytesPerSecond ?? 0,
             showBrowserMediaPanel: disk.showBrowserMediaPanel ?? true,
-            confirmBrowserDownloads: disk.confirmBrowserDownloads ?? true
+            confirmBrowserDownloads: disk.confirmBrowserDownloads ?? false,
+            appearanceMode: AppearanceMode(rawValue: disk.appearanceMode ?? "") ?? .system,
+            languageMode: AppLanguageMode(rawValue: disk.languageMode ?? "") ?? .system
         )
     }
 
@@ -67,7 +71,9 @@ public enum SettingsStore {
             bridgePort: settings.bridgePort,
             bandwidthLimitBytesPerSecond: settings.bandwidthLimitBytesPerSecond,
             showBrowserMediaPanel: settings.showBrowserMediaPanel,
-            confirmBrowserDownloads: settings.confirmBrowserDownloads
+            confirmBrowserDownloads: settings.confirmBrowserDownloads,
+            appearanceMode: settings.appearanceMode.rawValue,
+            languageMode: settings.languageMode.rawValue
         )
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         if let data = try? JSONEncoder().encode(disk) {

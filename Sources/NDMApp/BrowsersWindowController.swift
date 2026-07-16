@@ -1,64 +1,80 @@
 import AppKit
+import NDMCore
 
-/// Browser extension install guide (`NeatBrowsersWindow`).
+/// Browser extension setup for BetterNDM.
 @MainActor
 final class BrowsersWindowController: NSWindowController {
-    init() {
+    private let statusLabel = NSTextField(labelWithString: "")
+
+    init(bridgeRunning: Bool = true) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 320),
             styleMask: [.titled, .closable],
             backing: .buffered,
-            defer: false
+            defer: true
         )
-        window.title = "Browser Extension"
-        window.center()
+        window.title = L10n.browserExtension
+        NDMChrome.applyWindowChrome(window)
         super.init(window: window)
-        buildUI()
+        buildUI(bridgeRunning: bridgeRunning)
+        window.center()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func buildUI() {
+    private func buildUI(bridgeRunning: Bool) {
         guard let content = window?.contentView else { return }
-        let title = NSTextField(labelWithString: "Connect BetterNDM")
-        title.font = .boldSystemFont(ofSize: 15)
-        let body = NSTextField(wrappingLabelWithString: """
-        NDM listens on ws://127.0.0.1:10007/download (subprotocol neatextension.v1).
+        let title = NSTextField(labelWithString: L10n.connectBetterNDM)
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
 
-        1. Open Chrome / Edge / Firefox
-        2. Load unpacked extension from:
-           reverse/extension/BetterNDM/
-        3. Keep NDM running — the extension auto-connects
-        4. Captured media appears in the page panel when ShowPanel=1
-        """)
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        if bridgeRunning {
+            statusLabel.stringValue = L10n.bridgeReady("ws://127.0.0.1:\(BridgeConstants.port)/download")
+            statusLabel.textColor = .systemGreen
+        } else {
+            statusLabel.stringValue = L10n.bridgeUnavailable(BridgeConstants.port)
+            statusLabel.textColor = .systemOrange
+        }
+
+        let body = NSTextField(wrappingLabelWithString: L10n.browsersBody)
         body.font = .systemFont(ofSize: 12)
+        body.textColor = .labelColor
 
-        let openFolder = NSButton(title: "Reveal BetterNDM Folder", target: self, action: #selector(reveal))
+        let openFolder = NSButton(title: L10n.showExtensionFolder, target: self, action: #selector(reveal))
         openFolder.bezelStyle = .rounded
-        let close = NSButton(title: "Close", target: self, action: #selector(closeClicked))
+        let copyEndpoint = NSButton(title: L10n.copyBridgeAddress, target: self, action: #selector(copyEndpoint))
+        copyEndpoint.bezelStyle = .rounded
+        let close = NSButton(title: L10n.close, target: self, action: #selector(closeClicked))
         close.bezelStyle = .rounded
+        close.keyEquivalent = "\u{1b}"
 
-        let stack = NSStackView(views: [title, body, NSStackView(views: [openFolder, close])])
+        let buttons = NSStackView(views: [openFolder, copyEndpoint, NSView(), close])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        let stack = NSStackView(views: [title, statusLabel, body, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
             body.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
 
     @objc private func reveal() {
         let candidates = [
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM/reverse/extension/BetterNDM"),
-            Bundle.main.bundleURL.deletingLastPathComponent()
-                .appendingPathComponent("reverse/extension/BetterNDM"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("reverse/extension/BetterNDM"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM/reverse/extension/BetterNDM"),
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
                 .appendingPathComponent("reverse/extension/BetterNDM"),
         ]
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {
@@ -66,9 +82,15 @@ final class BrowsersWindowController: NSWindowController {
             return
         }
         let alert = NSAlert()
-        alert.messageText = "BetterNDM folder not found"
-        alert.informativeText = "Clone/open the NDM repo and load reverse/extension/BetterNDM as an unpacked extension."
+        alert.messageText = L10n.extensionFolderMissing
+        alert.informativeText = L10n.extensionFolderHint
         alert.runModal()
+    }
+
+    @objc private func copyEndpoint() {
+        let value = "ws://127.0.0.1:\(BridgeConstants.port)\(BridgeConstants.path)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     @objc private func closeClicked() { window?.close() }

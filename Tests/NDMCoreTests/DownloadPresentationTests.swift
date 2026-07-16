@@ -2,6 +2,16 @@ import XCTest
 @testable import NDMCore
 
 final class DownloadPresentationTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        L10n.apply(.english)
+    }
+
+    override func tearDown() {
+        L10n.apply(.system)
+        super.tearDown()
+    }
+
     func testSegmentFractionRepresentsIndividualConnectionProgress() {
         let quarter = SegmentState(id: 2, start: 1_000, end: 1_399, completed: 100)
         XCTAssertEqual(quarter.length, 400)
@@ -103,7 +113,10 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertEqual(row.primaryAction, .open)
         XCTAssertTrue(row.canOpen)
         XCTAssertTrue(row.canShowInFinder)
-        XCTAssertEqual(row.progressText, "100%")
+        XCTAssertTrue(row.isComplete)
+        XCTAssertFalse(row.showsProgressBar)
+        XCTAssertEqual(row.progressText, "Completed")
+        XCTAssertEqual(row.sizeText, TaskPresentationFormatting.byteCount(3))
     }
 
     func testSearchMatchesFilenameHostAndURL() {

@@ -50,7 +50,7 @@
 | D02 | 按状态分类 Complete / Incomplete | [x] 主窗侧栏 Status：All / Active / Queued / Paused / Completed / Failed（含计数） |
 | D03 | 按类型 Video / Document / … | [x] 侧栏 Type 分组：Video / Audio / Document / Compressed / App / Image + 搜索 |
 | D04 | 分类子文件夹 | [x] |
-| D05 | 删除任务（可选删文件） | [x] |
+| D05 | 删除任务（可选删文件） | [x] 确认框：Remove Task / Remove & Trash File |
 | D06 | 任务属性面板 | [x] |
 | D07 | 默认下载目录 | [x] |
 | D08 | 导入/兼容原版 DB（可选） | [x] `LegacyDBImporter` + 设置入口 |
@@ -98,7 +98,7 @@
 4. **M3** 设置 / 代理 / 认证 / 限速 — ✅（含 NTLMv2 / FTP 代理 / Proxy Basic）
 5. **M4** WebSocket 桥 + BetterNDM 联调 — 🟡 Wait 窗 + ShowPanel + WS 集成测试完成；`docs/BETTERNDM_SMOKE.md` 实机清单待人工走完
 6. **M5** HLS + 媒体合并 — ✅ C01–C03（C04 由 BetterNDM 面板负责）
-7. **M6** 打磨 UX、对等验收、打包 — 🟡 设置分页 / 类型侧栏 / Retry·Renew 已落地；BetterNDM 实机与长期稳定性仍需继续
+7. **M6** 打磨 UX、对等验收、打包 — 🟡 菜单快捷键、菜单栏状态、删除进废纸篓、Wait/Properties 文案已补；BetterNDM 实机与长期稳定性仍需继续
 
 ## 本会话 P0 证据（2026-07-16）
 

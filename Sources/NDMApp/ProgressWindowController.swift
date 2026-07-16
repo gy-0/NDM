@@ -11,7 +11,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var filename: String
 
     private let tabControl = NSSegmentedControl(
-        labels: ["Download", "Options", "Connections"],
+        labels: [L10n.tabDownload, L10n.tabOptions, L10n.tabConnections],
         trackingMode: .selectOne,
         target: nil,
         action: nil
@@ -29,17 +29,20 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let etaValue = NSTextField(labelWithString: "—")
     private let resumeValue = NSTextField(labelWithString: "—")
     private let overallProgress = NSProgressIndicator()
-    private let segmentsCaption = NSTextField(labelWithString: "Segments")
+    private let segmentsCaption = NSTextField(labelWithString: L10n.segments)
     private let segmentStrip = SegmentStripView()
-    private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
-    private let revealButton = NSButton(image: NSImage(systemSymbolName: "folder", accessibilityDescription: "Show in Finder")!, target: nil, action: nil)
+    private let pauseButton = NSButton(title: L10n.pause, target: nil, action: nil)
+    private let cancelButton = NSButton(title: L10n.close, target: nil, action: nil)
+    private let openButton = NSButton(title: L10n.open, target: nil, action: nil)
+    private let revealActionButton = NSButton(title: L10n.showInFinder, target: nil, action: nil)
+    private let revealButton = NSButton(image: NSImage(systemSymbolName: "folder", accessibilityDescription: L10n.showInFinder)!, target: nil, action: nil)
+    private var actionsStack: NSStackView?
 
     // Options tab
     private let connectionsPopup = NSPopUpButton()
-    private let applyConnButton = NSButton(title: "Apply", target: nil, action: nil)
-    private let renewButton = NSButton(title: "Renew URL…", target: nil, action: nil)
-    private let optionsNote = NSTextField(wrappingLabelWithString: "Change connection count while downloading to replan active Range transfers. Renew replaces an expired URL without discarding partial segments.")
+    private let applyConnButton = NSButton(title: L10n.apply, target: nil, action: nil)
+    private let renewButton = NSButton(title: L10n.renewURLEllipsis, target: nil, action: nil)
+    private let optionsNote = NSTextField(wrappingLabelWithString: L10n.optionsNote)
 
     // Connections tab
     private let connectionScrollView = NSScrollView()
@@ -50,8 +53,11 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var downloadPane: NSView!
     private var optionsPane: NSView!
     private var connectionsPane: NSView!
+    private var statsCard: NSView?
     private var pollTask: Task<Void, Never>?
     private var lastStatus: DownloadStatus = .waiting
+    /// Cleared by MainWindowController so the cache does not retain closed windows.
+    var onWindowClose: (() -> Void)?
 
     init(manager: DownloadManager, taskID: Int64, filename: String) {
         self.manager = manager
@@ -66,6 +72,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 460, height: 420)
         window.title = filename
         window.titlebarAppearsTransparent = false
+        NDMChrome.applyWindowChrome(window)
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -83,7 +90,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         guard let content = window?.contentView else { return }
         content.wantsLayer = true
 
-        tabControl.segmentStyle = .texturedRounded
+        tabControl.segmentStyle = .rounded
         tabControl.selectedSegment = 0
         tabControl.target = self
         tabControl.action = #selector(tabChanged)
@@ -120,7 +127,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func makeDownloadPane() -> NSView {
-        percentLabel.font = .systemFont(ofSize: 36, weight: .semibold)
+        // Quiet Finder: hero percentage leads the progress window.
+        percentLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
         percentLabel.textColor = .labelColor
         nameLabel.font = .systemFont(ofSize: 15, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingMiddle
@@ -151,26 +159,41 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         pauseButton.bezelStyle = .rounded
         pauseButton.setButtonType(.momentaryPushIn)
-        pauseButton.keyEquivalent = ""
+        pauseButton.keyEquivalent = "\r"
         pauseButton.target = self
         pauseButton.action = #selector(pauseClicked)
         pauseButton.controlSize = .large
+
+        openButton.bezelStyle = .rounded
+        openButton.target = self
+        openButton.action = #selector(openClicked)
+        openButton.controlSize = .large
+        openButton.keyEquivalent = ""
+        openButton.isHidden = true
+
+        revealActionButton.bezelStyle = .rounded
+        revealActionButton.target = self
+        revealActionButton.action = #selector(revealClicked)
+        revealActionButton.controlSize = .large
+        revealActionButton.isHidden = true
 
         cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
         cancelButton.controlSize = .large
+        cancelButton.keyEquivalent = "\u{1b}"
 
         revealButton.bezelStyle = .flexiblePush
         revealButton.isBordered = true
         revealButton.target = self
         revealButton.action = #selector(revealClicked)
-        revealButton.toolTip = "Show in Finder"
+        revealButton.toolTip = L10n.showInFinder
 
-        let actions = NSStackView(views: [pauseButton, cancelButton])
+        let actions = NSStackView(views: [pauseButton, openButton, revealActionButton, cancelButton])
         actions.orientation = .horizontal
         actions.spacing = 10
         actions.distribution = .fillEqually
+        actionsStack = actions
 
         let stripBlock = NSStackView(views: [segmentsCaption, segmentStrip])
         stripBlock.orientation = .vertical
@@ -203,19 +226,49 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             segmentStrip.heightAnchor.constraint(equalToConstant: 18),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pauseButton.heightAnchor.constraint(equalToConstant: 32),
+            openButton.heightAnchor.constraint(equalToConstant: 32),
+            revealActionButton.heightAnchor.constraint(equalToConstant: 32),
             cancelButton.heightAnchor.constraint(equalToConstant: 32),
         ])
         return pane
     }
 
+    /// Called when the download finishes while this window is already open.
+    /// Keeps completion in-window so a modal alert cannot block Close.
+    func presentCompleted(task: DownloadTask) {
+        filename = task.filename.isEmpty ? filename : task.filename
+        nameLabel.stringValue = filename
+        percentLabel.stringValue = "100%"
+        window?.title = L10n.doneTitle(filename)
+        overallProgress.doubleValue = 1
+        statusPill.setStatus(.complete, error: nil)
+        speedValue.stringValue = L10n.emDash
+        etaValue.stringValue = L10n.emDash
+        if task.fileSize > 0 {
+            sizeValue.stringValue = TaskPresentationFormatting.byteCount(task.fileSize)
+            downloadedValue.stringValue = "\(TaskPresentationFormatting.byteCount(task.fileSize))  (100%)"
+        }
+        // File is merged — paint a solid strip even if the last live snapshot
+        // still had unfinished Range chunks.
+        let total = max(0, task.fileSize)
+        segmentStrip.update(segments: [], totalBytes: total, forceFilled: true)
+        segmentsCaption.stringValue = L10n.segments
+        lastStatus = .complete
+        configureActionButtons(for: .complete, task: task)
+        pollTask?.cancel()
+        pollTask = nil
+        showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func makeStatsCard() -> NSView {
         let rows: [(String, NSView)] = [
-            ("URL", urlValue),
-            ("Size", sizeValue),
-            ("Downloaded", downloadedValue),
-            ("Speed", speedValue),
-            ("Time left", etaValue),
-            ("Resumable", resumeValue),
+            (L10n.url, urlValue),
+            (L10n.size, sizeValue),
+            (L10n.downloaded, downloadedValue),
+            (L10n.speed, speedValue),
+            (L10n.timeLeft, etaValue),
+            (L10n.resumable, resumeValue),
         ]
 
         let grid = NSStackView()
@@ -247,7 +300,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
 
         // Status row with pill + reveal
-        let statusKey = NSTextField(labelWithString: "Status")
+        let statusKey = NSTextField(labelWithString: L10n.status)
         statusKey.font = .systemFont(ofSize: 12)
         statusKey.textColor = .secondaryLabelColor
         statusKey.widthAnchor.constraint(equalToConstant: 88).isActive = true
@@ -260,11 +313,12 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         revealButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
         revealButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
-        let card = NSView()
+        let card = AppearanceAwareCardView()
         card.wantsLayer = true
         card.layer?.cornerRadius = 10
         card.layer?.borderWidth = 1
-        updateCardChrome(card)
+        card.refreshChrome()
+        statsCard = card
         grid.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(grid)
         NSLayoutConstraint.activate([
@@ -275,16 +329,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         ])
 
         return card
-    }
-
-    private func updateCardChrome(_ card: NSView) {
-        let isDark = card.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        card.layer?.backgroundColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.06)
-            : NSColor.black.withAlphaComponent(0.03)).cgColor
-        card.layer?.borderColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.10)
-            : NSColor.black.withAlphaComponent(0.08)).cgColor
     }
 
     private func makeOptionsPane() -> NSView {
@@ -301,7 +345,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         optionsNote.font = .systemFont(ofSize: 12)
         optionsNote.textColor = .secondaryLabelColor
 
-        let connLabel = NSTextField(labelWithString: "Connections")
+        let connLabel = NSTextField(labelWithString: L10n.connections)
         connLabel.font = .systemFont(ofSize: 12, weight: .medium)
         let connRow = NSStackView(views: [connLabel, connectionsPopup, applyConnButton])
         connRow.orientation = .horizontal
@@ -380,7 +424,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             filename = task.filename.isEmpty ? filename : task.filename
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
-            resumeValue.stringValue = task.resumable ? "Yes" : "No"
+            resumeValue.stringValue = task.resumable ? L10n.yes : L10n.no
             resumeValue.textColor = task.resumable ? .systemGreen : .secondaryLabelColor
             let n = max(1, min(32, task.connections))
             connectionsPopup.selectItem(at: n - 1)
@@ -396,7 +440,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         pollTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refresh()
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                // ~20 fps — smooth enough for the strip; higher mainly burns CPU.
+                try? await Task.sleep(nanoseconds: 50_000_000)
             }
         }
     }
@@ -407,7 +452,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             filename = task.filename.isEmpty ? filename : task.filename
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
-            resumeValue.stringValue = task.resumable ? "Yes" : "No"
+            resumeValue.stringValue = task.resumable ? L10n.yes : L10n.no
             resumeValue.textColor = task.resumable ? .systemGreen : .secondaryLabelColor
             if task.fileSize > 0 {
                 sizeValue.stringValue = TaskPresentationFormatting.byteCount(task.fileSize)
@@ -416,11 +461,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         if let progress = await manager.progress(taskID: taskID) {
             apply(progress: progress, task: task)
-            if progress.status == .complete || progress.status == .error || progress.status == .paused {
-                // Keep showing final state; pause polling for terminal-ish states except allow resume view.
-                if progress.status == .complete || progress.status == .error {
-                    pollTask?.cancel()
-                }
+            if progress.status == .complete || progress.status == .error {
+                pollTask?.cancel()
             }
             return
         }
@@ -442,16 +484,20 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
     private func apply(progress: DownloadProgress, task: DownloadTask?) {
         lastStatus = progress.status
-        let fraction = progress.fractionCompleted
+        let fraction = progress.status == .complete ? 1 : progress.fractionCompleted
         let pct = Int((fraction * 100).rounded(.down))
         percentLabel.stringValue = "\(pct)%"
-        window?.title = "\(pct)% \(filename)"
+        if progress.status == .complete {
+            window?.title = L10n.doneTitle(filename)
+        } else {
+            window?.title = "\(pct)% \(filename)"
+        }
 
         overallProgress.doubleValue = fraction
         statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
 
         let total = max(progress.totalBytes, task?.fileSize ?? 0)
-        let done = progress.completedBytes
+        let done = progress.status == .complete ? total : progress.completedBytes
         if total > 0 {
             sizeValue.stringValue = TaskPresentationFormatting.byteCount(total)
         }
@@ -464,16 +510,52 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         etaValue.stringValue = TaskPresentationFormatting.eta(progress.remainingTime, status: progress.status)
 
         let segments = progress.segmentStates.sorted { $0.id < $1.id }
-        segmentsCaption.stringValue = segments.isEmpty ? "Segments" : "Segments · \(segments.count)"
-        segmentStrip.update(segments: segments, totalBytes: total)
+        let forceFilled = progress.status == .complete
+        segmentsCaption.stringValue = segments.isEmpty
+            ? L10n.segments
+            : L10n.segmentsCount(segments.count)
+        // On complete, always solid-fill: live Range snapshots can lag behind merge.
+        segmentStrip.update(segments: segments, totalBytes: total, forceFilled: forceFilled)
 
-        pauseButton.title = (progress.status == .paused || progress.status == .incomplete || progress.status == .error)
-            ? "Resume"
-            : "Pause"
-        pauseButton.isEnabled = progress.status != .complete
-        cancelButton.isEnabled = progress.status != .complete
-
+        configureActionButtons(for: progress.status, task: task)
         renderConnections(segments, downloadStatus: progress.status)
+    }
+
+    private func configureActionButtons(for status: DownloadStatus, task: DownloadTask?) {
+        cancelButton.title = L10n.close
+        cancelButton.isEnabled = true
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        let fileExists = task?.destinationFileURL.map {
+            FileManager.default.fileExists(atPath: $0.path)
+        } ?? false
+
+        switch status {
+        case .complete:
+            pauseButton.isHidden = true
+            pauseButton.keyEquivalent = ""
+            openButton.isHidden = false
+            openButton.isEnabled = fileExists
+            openButton.keyEquivalent = "\r"
+            revealActionButton.isHidden = false
+            revealActionButton.isEnabled = fileExists || task?.destinationFileURL != nil
+        case .paused, .incomplete, .error:
+            pauseButton.isHidden = false
+            openButton.isHidden = true
+            revealActionButton.isHidden = true
+            pauseButton.title = status == .error ? L10n.retry : L10n.resume
+            pauseButton.isEnabled = true
+            pauseButton.keyEquivalent = "\r"
+            openButton.keyEquivalent = ""
+        default:
+            pauseButton.isHidden = false
+            openButton.isHidden = true
+            revealActionButton.isHidden = true
+            pauseButton.title = L10n.pause
+            pauseButton.isEnabled = true
+            pauseButton.keyEquivalent = "\r"
+            openButton.keyEquivalent = ""
+        }
     }
 
     private func renderConnections(_ states: [SegmentState], downloadStatus: DownloadStatus) {
@@ -516,9 +598,23 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func cancelClicked() {
-        Task {
-            await manager.pause(taskID: taskID)
+        // Close always works — including after completion. Active transfers pause first.
+        if lastStatus == .downloading || lastStatus == .waiting {
+            Task {
+                await manager.pause(taskID: taskID)
+                window?.close()
+            }
+        } else {
             window?.close()
+        }
+    }
+
+    @objc private func openClicked() {
+        Task {
+            guard let task = try? await manager.task(id: taskID),
+                  let url = task.destinationFileURL,
+                  FileManager.default.fileExists(atPath: url.path) else { return }
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -550,10 +646,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func renewClicked() {
         let alert = NSAlert()
-        alert.messageText = "Renew URL"
-        alert.informativeText = "Paste a fresh URL for this task (keeps partial segments)."
-        alert.addButton(withTitle: "Renew")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L10n.renewURL
+        alert.informativeText = L10n.renewURLBodyProgress
+        alert.addButton(withTitle: L10n.renew)
+        alert.addButton(withTitle: L10n.cancel)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         field.isEditable = true
         field.isSelectable = true
@@ -580,6 +676,29 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         pollTask?.cancel()
         pollTask = nil
+        onWindowClose?()
+        onWindowClose = nil
+    }
+}
+
+// MARK: - Stats card chrome
+
+/// Soft surface that refreshes when System / Light / Dark changes.
+private final class AppearanceAwareCardView: NSView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshChrome()
+    }
+
+    func refreshChrome() {
+        wantsLayer = true
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = (isDark
+            ? NSColor.white.withAlphaComponent(0.06)
+            : NSColor.black.withAlphaComponent(0.03)).cgColor
+        layer?.borderColor = (isDark
+            ? NSColor.white.withAlphaComponent(0.10)
+            : NSColor.black.withAlphaComponent(0.08)).cgColor
     }
 }
 
@@ -589,6 +708,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 private final class SegmentStripView: NSView {
     private var segments: [SegmentState] = []
     private var totalBytes: Int64 = 0
+    /// When true, paint a solid green bar (download finished / merged).
+    private var forceFilled = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -600,9 +721,10 @@ private final class SegmentStripView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(segments: [SegmentState], totalBytes: Int64) {
+    func update(segments: [SegmentState], totalBytes: Int64, forceFilled: Bool = false) {
         self.segments = segments
         self.totalBytes = totalBytes
+        self.forceFilled = forceFilled
         needsDisplay = true
     }
 
@@ -612,31 +734,30 @@ private final class SegmentStripView: NSView {
         track.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
 
-        guard totalBytes > 0, !segments.isEmpty else { return }
+        let fill = NSColor.systemGreen.withAlphaComponent(0.9)
+        fill.setFill()
 
-        let accent = NSColor.controlAccentColor
-        let done = NSColor.systemGreen.withAlphaComponent(0.85)
-
-        for segment in segments {
-            let startFrac = Double(segment.start) / Double(totalBytes)
-            let completedFrac = Double(min(segment.length, max(0, segment.completed))) / Double(totalBytes)
-            let x = bounds.minX + CGFloat(startFrac) * bounds.width
-            let w = max(1, CGFloat(completedFrac) * bounds.width)
-            let rect = NSRect(x: x, y: bounds.minY, width: w, height: bounds.height)
-            let color = (segment.isFinished || segment.fractionCompleted >= 1) ? done : accent
-            color.setFill()
-            rect.fill()
+        // Completed downloads must read as fully filled — last Range snapshots
+        // often lag merge, and uncovered gaps would look like a bug.
+        if forceFilled {
+            NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+            return
         }
 
-        // Subtle separators between planned segment starts.
-        NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
-        for segment in segments.dropFirst() {
-            let x = bounds.minX + CGFloat(Double(segment.start) / Double(totalBytes)) * bounds.width
-            let path = NSBezierPath()
-            path.move(to: NSPoint(x: x, y: bounds.minY))
-            path.line(to: NSPoint(x: x, y: bounds.maxY))
-            path.lineWidth = 1
-            path.stroke()
+        guard totalBytes > 0, !segments.isEmpty else { return }
+
+        for segment in segments {
+            // Prefer full range when the engine marked the chunk finished,
+            // even if `completed` briefly lags behind `length`.
+            let paintedBytes = segment.isFinished
+                ? segment.length
+                : min(segment.length, max(0, segment.completed))
+            let startFrac = Double(segment.start) / Double(totalBytes)
+            let paintedFrac = Double(paintedBytes) / Double(totalBytes)
+            guard paintedFrac > 0 else { continue }
+            let x = bounds.minX + CGFloat(startFrac) * bounds.width
+            let w = max(1, CGFloat(paintedFrac) * bounds.width)
+            NSRect(x: x, y: bounds.minY, width: w, height: bounds.height).fill()
         }
     }
 }
@@ -645,6 +766,8 @@ private final class SegmentStripView: NSView {
 
 private final class StatusPillView: NSView {
     private let label = NSTextField(labelWithString: "")
+    private var lastStatus: DownloadStatus = .waiting
+    private var lastError: String?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -667,39 +790,48 @@ private final class StatusPillView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setStatus(_ status: DownloadStatus, error: String?) {
+        lastStatus = status
+        lastError = error
         let title: String
         let fg: NSColor
         let bg: NSColor
+        // One accent voice: active uses controlAccent; others stay neutral ink on soft track.
+        let track = NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
         switch status {
         case .downloading:
-            title = "Downloading"
-            fg = .systemBlue
-            bg = NSColor.systemBlue.withAlphaComponent(0.14)
+            title = L10n.downloading
+            fg = .controlAccentColor
+            bg = NSColor.controlAccentColor.withAlphaComponent(0.12)
         case .paused:
-            title = "Paused"
-            fg = .systemOrange
-            bg = NSColor.systemOrange.withAlphaComponent(0.14)
+            title = L10n.paused
+            fg = .secondaryLabelColor
+            bg = track
         case .complete:
-            title = "Completed"
-            fg = .systemGreen
-            bg = NSColor.systemGreen.withAlphaComponent(0.14)
+            title = L10n.completed
+            fg = .secondaryLabelColor
+            bg = track
         case .error:
-            title = error?.isEmpty == false ? "Failed" : "Failed"
-            fg = .systemRed
-            bg = NSColor.systemRed.withAlphaComponent(0.14)
+            title = L10n.failed
+            fg = .labelColor
+            bg = track
         case .waiting:
-            title = "Queued"
+            title = L10n.queued
             fg = .secondaryLabelColor
-            bg = NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
+            bg = track
         case .incomplete:
-            title = "Incomplete"
+            title = L10n.incomplete
             fg = .secondaryLabelColor
-            bg = NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
+            bg = track
         }
         label.stringValue = title
         label.textColor = fg
         layer?.backgroundColor = bg.cgColor
         toolTip = error
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        setStatus(lastStatus, error: lastError)
     }
 }
 
@@ -801,39 +933,37 @@ private final class ConnectionProgressRowView: NSView {
     func update(state: SegmentState, downloadStatus: DownloadStatus) {
         let fraction = state.fractionCompleted
         let percent = Int((fraction * 100).rounded(.down))
-        titleLabel.stringValue = "Connection \(state.id + 1)"
+        titleLabel.stringValue = L10n.connectionN(state.id + 1)
         progress.doubleValue = fraction
 
         let status: String
         let statusColor: NSColor
         if state.isFinished || fraction >= 1 {
-            status = "Complete"
+            status = L10n.complete
             statusColor = .systemGreen
         } else {
             switch downloadStatus {
             case .paused:
-                status = "Paused"
+                status = L10n.paused
                 statusColor = .systemOrange
             case .error:
-                status = "Error"
+                status = L10n.error
                 statusColor = .systemRed
             case .waiting:
-                status = "Waiting"
+                status = L10n.waiting
                 statusColor = .secondaryLabelColor
             default:
-                status = state.completed > 0 ? "Downloading" : "Waiting"
+                status = state.completed > 0 ? L10n.downloading : L10n.waiting
                 statusColor = state.completed > 0 ? .controlAccentColor : .secondaryLabelColor
             }
         }
         stateLabel.stringValue = "\(status) · \(percent)%"
         stateLabel.textColor = statusColor
 
-        let completed = ByteCountFormatter.string(
-            fromByteCount: max(0, min(state.length, state.completed)),
-            countStyle: .file
-        )
-        let length = ByteCountFormatter.string(fromByteCount: state.length, countStyle: .file)
-        rangeLabel.stringValue = "Range \(Self.integer(state.start))–\(Self.integer(state.end)) · \(completed) / \(length)"
+        let completed = TaskPresentationFormatting.byteCount(max(0, min(state.length, state.completed)))
+        let length = TaskPresentationFormatting.byteCount(state.length)
+        let rangeWord = L10n.t("Range", "范围")
+        rangeLabel.stringValue = "\(rangeWord) \(Self.integer(state.start))–\(Self.integer(state.end)) · \(completed) / \(length)"
     }
 
     private static func integer(_ value: Int64) -> String {

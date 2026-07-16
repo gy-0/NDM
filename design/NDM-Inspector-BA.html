@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NDM · Inspector B+A（选定）</title>
+<style>
+  :root {
+    --accent: #2563eb;
+    --ink: #14161a;
+    --muted: #5c6370;
+    --surface: #f2f3f6;
+    --panel: #f6f7fa;
+    --hair: rgba(20, 28, 45, 0.08);
+    --track: rgba(20, 28, 45, 0.06);
+    --row: rgba(37, 99, 235, 0.10);
+    --page: #e4e7ee;
+    --shadow: 0 28px 70px rgba(20, 28, 45, 0.16);
+  }
+  html.dark {
+    --accent: #61a5ff;
+    --ink: #e8eaed;
+    --muted: #8b919c;
+    --surface: #1a1c20;
+    --panel: #1e2024;
+    --hair: rgba(255, 255, 255, 0.10);
+    --track: rgba(255, 255, 255, 0.08);
+    --row: rgba(97, 165, 255, 0.16);
+    --page: #0f1114;
+    --shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background: var(--page);
+    min-height: 100vh;
+  }
+  .page { max-width: 720px; margin: 0 auto; padding: 32px 24px 64px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
+  .lede { margin: 8px 0 20px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--hair); border-radius: 10px;
+    overflow: hidden; background: var(--surface); margin-bottom: 22px;
+  }
+  .seg button {
+    border: 0; background: transparent; color: var(--muted);
+    padding: 8px 12px; font-size: 12px; cursor: pointer;
+  }
+  .seg button.on { background: var(--ink); color: var(--page); }
+  .shell {
+    border-radius: 12px; overflow: hidden; background: var(--surface);
+    box-shadow: var(--shadow), 0 0 0 1px var(--hair);
+  }
+  .tb {
+    height: 38px; display: flex; align-items: center; padding: 0 12px;
+    background: linear-gradient(#f0f1f3, #e6e7ea); position: relative;
+    border-bottom: 1px solid var(--hair);
+  }
+  html.dark .tb { background: linear-gradient(#2a2d33, #22252a); }
+  .lights { display: flex; gap: 7px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .tb-title {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 12px; font-weight: 500; pointer-events: none;
+  }
+  .body { display: grid; grid-template-columns: 1fr 280px; min-height: 460px; }
+  .list { padding: 10px; border-right: 1px solid var(--hair); }
+  .ghost { padding: 10px 12px; border-radius: 10px; margin-bottom: 4px; opacity: 0.4; }
+  .ghost.on { background: var(--row); opacity: 1; }
+  .ghost .n { font-size: 12px; font-weight: 600; }
+  .ghost .s { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  .insp {
+    background: var(--panel); padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .label {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .big {
+    font-size: 36px; font-weight: 650; letter-spacing: -0.03em; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .big span { font-size: 15px; font-weight: 560; margin-left: 4px; letter-spacing: 0; }
+  .big-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .head { display: flex; gap: 12px; align-items: center; margin-top: 4px; }
+  .ico {
+    width: 40px; height: 40px; border-radius: 9px;
+    background: linear-gradient(180deg, #6aa8ff, #2f6fed);
+    display: grid; place-items: center; color: #fff;
+    font-size: 10px; font-weight: 700; flex: 0 0 auto;
+  }
+  .ico.app { background: linear-gradient(180deg, #c5c9d1, #8b919c); }
+  .name { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.25; }
+  .status { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .bar { height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .kv {
+    display: grid; grid-template-columns: 64px 1fr; gap: 8px 10px;
+    font-size: 12px; padding: 12px 0;
+    border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair);
+  }
+  .kv span { color: var(--muted); }
+  .kv div { font-variant-numeric: tabular-nums; word-break: break-all; }
+  .dock {
+    margin-top: auto; padding: 12px; border-radius: 10px;
+    background: color-mix(in srgb, var(--track) 55%, transparent);
+    border: 1px solid var(--hair);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .softs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .btn {
+    border: 0; border-radius: 8px; padding: 9px 10px; font-size: 12px;
+    cursor: pointer; font-family: inherit; width: 100%;
+  }
+  .btn.main { background: var(--accent); color: #fff; font-weight: 600; }
+  .btn.ghost { background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--ink); border: 1px solid var(--hair); }
+  .btn.soft {
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    color: var(--ink); border: 1px solid var(--hair);
+    padding: 8px 6px; font-size: 10px; font-weight: 500;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .btn.soft .ic { font-size: 13px; opacity: 0.75; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="eyebrow">选定 · B 数字 + A 结构</div>
+    <h1>Inspector</h1>
+    <p class="lede">大号数字当锚点；下方沿用 Get Info 的头图、键值表与主按钮。属性 / 复制链接 / 移除 一律做成带边框的次级按钮。</p>
+    <div class="seg">
+      <button type="button" data-state="done" class="on">已完成</button>
+      <button type="button" data-state="active">下载中</button>
+      <button type="button" data-theme="light" class="on">浅色</button>
+      <button type="button" data-theme="dark">深色</button>
+    </div>
+    <div id="stage"></div>
+  </div>
+<script>
+const DATA = {
+  done: {
+    big: "20.1", unit: "MB", sub: "体积",
+    name: "WWDC25-103-zh_cn.mp4", ext: "MP4", kind: "video",
+    status: "已完成", bar: null,
+    kv: [["大小","20.1 MB"],["来源","devstreaming-cdn.apple.com"],["类型","MPEG-4 影片"],["位置","Downloads"]],
+    primary: "打开", secondary: "在访达中显示",
+  },
+  active: {
+    big: "37%", unit: "", sub: "进度",
+    name: "fdm.dmg", ext: "DMG", kind: "app",
+    status: "下载中", bar: 37,
+    kv: [["进度","37%"],["速度","548 KB/s"],["剩余","1 分 33 秒"],["大小","20.4 / 55.3 MB"]],
+    primary: "暂停", secondary: "进度详情…",
+  },
+};
+let state = "done";
+function render() {
+  const d = DATA[state];
+  document.getElementById("stage").innerHTML = `
+  <div class="shell">
+    <div class="tb">
+      <div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="tb-title">NDM · B+A</div>
+    </div>
+    <div class="body">
+      <div class="list">
+        <div class="ghost on"><div class="n">${d.name}</div><div class="s">${d.status}</div></div>
+        <div class="ghost"><div class="n">archive.zip</div><div class="s">已完成</div></div>
+      </div>
+      <aside class="insp">
+        <div class="label">详情</div>
+        <div>
+          <div class="big">${d.big}${d.unit ? `<span>${d.unit}</span>` : ""}</div>
+          <div class="big-sub">${d.sub}</div>
+        </div>
+        <div class="head">
+          <div class="ico ${d.kind === "app" ? "app" : ""}">${d.ext}</div>
+          <div>
+            <div class="name">${d.name}</div>
+            <div class="status">${d.status}</div>
+          </div>
+        </div>
+        ${d.bar != null ? `<div class="bar"><i style="width:${d.bar}%"></i></div>` : ""}
+        <div class="kv">${d.kv.map(([k,v]) => `<span>${k}</span><div>${v}</div>`).join("")}</div>
+        <div class="dock">
+          <div class="pair">
+            <button class="btn main">${d.primary}</button>
+            <button class="btn ghost">${d.secondary}</button>
+          </div>
+          <div class="softs">
+            <button class="btn soft"><span class="ic">ⓘ</span>属性</button>
+            <button class="btn soft"><span class="ic">⧉</span>拷贝</button>
+            <button class="btn soft"><span class="ic">⌫</span>删除</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>`;
+}
+document.querySelectorAll("[data-state]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("[data-state]").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); state = b.dataset.state; render();
+}));
+document.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("[data-theme]").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  document.documentElement.classList.toggle("dark", b.dataset.theme === "dark");
+}));
+render();
+</script>
+</body>
+</html>

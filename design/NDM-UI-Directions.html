@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NDM · UI Directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #e8eaed;
+    --ink: #14161a;
+    --muted: #5c6370;
+    --panel: #f4f5f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 500px at 10% -10%, #dfe5ee 0%, transparent 55%),
+      radial-gradient(700px 400px at 90% 0%, #e4ebe4 0%, transparent 50%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-family: Newsreader, Georgia, serif;
+    font-weight: 600;
+    font-size: 40px;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+  }
+  .lede {
+    max-width: 720px;
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--muted);
+    margin-bottom: 28px;
+  }
+  .assumptions {
+    background: rgba(255,255,255,0.55);
+    border: 1px solid rgba(20,22,26,0.08);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 36px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #333;
+  }
+  .assumptions strong { color: var(--ink); }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    border: 1px solid rgba(20,22,26,0.12);
+    background: rgba(255,255,255,0.7);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--muted);
+  }
+  .tab.active {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+  .dir-meta {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 28px;
+    margin-bottom: 28px;
+    align-items: start;
+  }
+  @media (max-width: 960px) {
+    .dir-meta { grid-template-columns: 1fr; }
+  }
+  .dir-copy h2 {
+    font-family: Newsreader, Georgia, serif;
+    font-size: 28px;
+    margin: 0 0 8px;
+    letter-spacing: -0.02em;
+  }
+  .dir-copy .why {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .chip {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(20,22,26,0.06);
+    color: #333;
+  }
+  .traits {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #333;
+  }
+  .stage {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    align-items: center;
+  }
+  .caption {
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+    margin-top: -12px;
+  }
+
+  /* Shared mac window */
+  .mac {
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow:
+      0 40px 90px rgba(20,22,26,0.22),
+      0 0 0 1px rgba(20,22,26,0.08);
+    width: min(980px, 100%);
+  }
+  .titlebar {
+    height: 42px;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    position: relative;
+    user-select: none;
+  }
+  .lights { display: flex; gap: 8px; z-index: 2; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; }
+  .dot.y { background: #febc2e; }
+  .dot.g { background: #28c840; }
+  .tb-title {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    font-size: 13px; font-weight: 500;
+    pointer-events: none;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .tool {
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .tool:hover { background: rgba(0,0,0,0.05); }
+  .tool.primary {
+    color: #fff;
+  }
+  .search {
+    margin-left: auto;
+    border: 1px solid rgba(0,0,0,0.1);
+    background: rgba(255,255,255,0.7);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    width: 180px;
+    color: var(--muted);
+  }
+  .body {
+    display: grid;
+    grid-template-columns: 168px 1fr 240px;
+    min-height: 420px;
+  }
+  .side {
+    padding: 14px 10px;
+    border-right: 1px solid rgba(0,0,0,0.06);
+  }
+  .side h4 {
+    margin: 14px 8px 6px;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .side h4:first-child { margin-top: 0; }
+  .nav {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .nav .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .list { padding: 10px; }
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    padding: 12px 12px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+  .row .name { font-size: 13px; font-weight: 600; }
+  .row .sub { font-size: 11px; color: var(--muted); grid-column: 1 / -1; }
+  .row .pct { font-size: 12px; font-variant-numeric: tabular-nums; align-self: start; }
+  .bar {
+    grid-column: 1 / -1;
+    height: 4px;
+    border-radius: 99px;
+    background: rgba(0,0,0,0.06);
+    overflow: hidden;
+  }
+  .bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 99px;
+  }
+  .insp {
+    padding: 16px;
+    border-left: 1px solid rgba(0,0,0,0.06);
+  }
+  .insp .label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .insp h3 {
+    margin: 0 0 6px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  .insp p {
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .insp .stat {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 14px;
+    color: #333;
+  }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    border: 0;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  /* Progress window smaller */
+  .progress-wrap { width: min(520px, 100%); }
+  .prog-body { padding: 18px 20px 20px; }
+  .big {
+    font-size: 40px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .fname { font-size: 14px; font-weight: 500; margin-bottom: 12px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .card {
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    font-size: 12px;
+  }
+  .kv { display: grid; grid-template-columns: 88px 1fr; gap: 8px; margin-bottom: 6px; }
+  .kv span { color: var(--muted); }
+  .overall {
+    height: 8px;
+    border-radius: 99px;
+    background: rgba(0,0,0,0.06);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .overall > i { display: block; height: 100%; width: 37%; }
+  .seg-cap { font-size: 11px; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  .seg {
+    height: 14px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.06);
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .seg .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 37%;
+    background: #2f9e6b;
+  }
+  .seg .tick {
+    position: absolute;
+    top: 0; bottom: 0; width: 1px;
+    background: rgba(255,255,255,0.35);
+  }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .actions .btn { padding: 10px; font-size: 13px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ===== A: Quiet Finder ===== */
+  .a .mac { background: #f6f7f9; }
+  .a .titlebar { background: linear-gradient(#f0f1f3, #e6e7ea); }
+  .a .tb-title { color: #3a3d44; }
+  .a .toolbar { background: #f6f7f9; }
+  .a .tool.primary { background: #2f6fed; }
+  .a .side { background: #eceef2; }
+  .a .nav.active { background: #2f6fed; color: #fff; }
+  .a .nav.active .n { color: rgba(255,255,255,0.75); }
+  .a .row.active { background: rgba(47,111,237,0.1); }
+  .a .bar > i { background: #2f6fed; width: 37%; }
+  .a .insp { background: #fafbfc; }
+  .a .btn.main { background: #2f6fed; color: #fff; }
+  .a .btn.ghost { background: rgba(0,0,0,0.05); }
+  .a .pill { background: rgba(47,111,237,0.12); color: #2f6fed; }
+  .a .card { background: #fff; border: 1px solid rgba(0,0,0,0.06); }
+  .a .overall > i { background: #2f6fed; }
+  .a .actions .btn.main { background: #2f6fed; color: #fff; }
+  .a .actions .btn.ghost { background: rgba(0,0,0,0.06); }
+
+  /* ===== B: Editorial Utility ===== */
+  .b .mac { background: #f3f4f2; }
+  .b .titlebar { background: #ebece8; }
+  .b .tb-title { font-family: Newsreader, Georgia, serif; color: #222; }
+  .b .toolbar { background: #f3f4f2; border-bottom-color: rgba(0,0,0,0.08); }
+  .b .tool.primary { background: #1f3d2a; }
+  .b .side { background: #e7e8e3; }
+  .b .nav.active { background: #1f3d2a; color: #f4f5f0; }
+  .b .nav.active .n { color: rgba(244,245,240,0.7); }
+  .b .row .name { font-family: Newsreader, Georgia, serif; font-weight: 500; font-size: 15px; }
+  .b .row.active { background: rgba(31,61,42,0.08); box-shadow: inset 3px 0 0 #1f3d2a; border-radius: 0 10px 10px 0; }
+  .b .bar > i { background: #2f9e6b; width: 37%; }
+  .b .insp { background: #f7f7f4; }
+  .b .insp h3 { font-family: Newsreader, Georgia, serif; font-weight: 500; }
+  .b .btn.main { background: #1f3d2a; color: #f4f5f0; }
+  .b .btn.ghost { background: transparent; border: 1px solid rgba(31,61,42,0.25); }
+  .b .pill { background: rgba(47,158,107,0.15); color: #1f3d2a; }
+  .b .card { background: transparent; border-top: 1px solid rgba(0,0,0,0.08); border-bottom: 1px solid rgba(0,0,0,0.08); border-radius: 0; padding-left: 0; padding-right: 0; }
+  .b .big { font-family: Newsreader, Georgia, serif; font-weight: 500; }
+  .b .overall > i { background: #2f9e6b; }
+  .b .actions .btn.main { background: #1f3d2a; color: #f4f5f0; }
+  .b .actions .btn.ghost { background: transparent; border: 1px solid rgba(31,61,42,0.25); }
+
+  /* ===== C: Night Workshop ===== */
+  .c .mac { background: #1c1e22; color: #e8eaed; }
+  .c .titlebar { background: linear-gradient(#2a2d33, #22252a); border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .c .tb-title { color: #c8ccd4; }
+  .c .toolbar { background: #1c1e22; border-bottom-color: rgba(255,255,255,0.06); }
+  .c .tool { color: #c8ccd4; }
+  .c .tool:hover { background: rgba(255,255,255,0.06); }
+  .c .tool.primary { background: #d4a35c; color: #1a1408; }
+  .c .search { background: #14161a; border-color: rgba(255,255,255,0.08); color: #8b919c; }
+  .c .side { background: #16181c; border-right-color: rgba(255,255,255,0.06); }
+  .c .nav { color: #c8ccd4; }
+  .c .nav.active { background: rgba(212,163,92,0.16); color: #f0d6a8; }
+  .c .nav.active .n { color: rgba(240,214,168,0.65); }
+  .c .list { background: #1c1e22; }
+  .c .row .sub, .c .insp p, .c .n { color: #8b919c; }
+  .c .row.active { background: rgba(255,255,255,0.05); }
+  .c .bar { background: rgba(255,255,255,0.08); }
+  .c .bar > i { background: #d4a35c; width: 37%; }
+  .c .insp { background: #181a1e; border-left-color: rgba(255,255,255,0.06); }
+  .c .insp .stat { color: #c8ccd4; }
+  .c .btn.main { background: #d4a35c; color: #1a1408; }
+  .c .btn.ghost { background: rgba(255,255,255,0.06); color: #e8eaed; }
+  .c .pill { background: rgba(212,163,92,0.18); color: #f0d6a8; }
+  .c .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); color: #c8ccd4; }
+  .c .kv span { color: #8b919c; }
+  .c .overall { background: rgba(255,255,255,0.08); }
+  .c .overall > i { background: #d4a35c; }
+  .c .seg { background: rgba(255,255,255,0.08); }
+  .c .seg .fill { background: #2f9e6b; }
+  .c .actions .btn.main { background: #d4a35c; color: #1a1408; }
+  .c .actions .btn.ghost { background: rgba(255,255,255,0.08); color: #e8eaed; border: 0; }
+  .c .seg-cap { color: #8b919c; }
+
+  .questions {
+    margin-top: 48px;
+    padding: 20px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.65);
+    border: 1px solid rgba(20,22,26,0.08);
+  }
+  .questions h3 {
+    font-family: Newsreader, Georgia, serif;
+    margin: 0 0 10px;
+    font-size: 20px;
+  }
+  .questions ol { margin: 0; padding-left: 20px; color: #333; line-height: 1.7; font-size: 14px; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="eyebrow">Huashu-Design · NDM</div>
+    <h1>优雅的 Mac 下载工具 · 三个方向</h1>
+    <p class="lede">
+      不是复刻 Neat / FDM 的旧工具感，而是把「多连接、断点、浏览器接管」藏进成熟的 macOS 产品语言里。
+      下面三个方向来自不同设计流派，请选一个深化，或混搭（例如 B 的排版 + A 的侧栏）。
+    </p>
+
+    <div class="assumptions">
+      <strong>Assumptions（请拍板）</strong><br />
+      1. 品牌暂无正式 Logo → 用词标 <em>NDM</em>，后续可替换。<br />
+      2. 能力基线保持：侧栏过滤、真实进度/速度/ETA、进度窗分段条、浏览器直开下载。<br />
+      3. 默认浅色工作面；C 方向验证深色夜间工作台。<br />
+      4. 主列表保持克制；连接级细节只在 Progress 窗。<br />
+      5. 选定方向后，再落回 Swift AppKit（本页是设计源，不是生产代码）。
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-dir="a">A · Quiet Finder</button>
+      <button class="tab" data-dir="b">B · Editorial Utility</button>
+      <button class="tab" data-dir="c">C · Night Workshop</button>
+    </div>
+
+    <!-- A -->
+    <section class="panel active a" id="panel-a">
+      <div class="dir-meta">
+        <div class="dir-copy">
+          <h2>A · Quiet Finder</h2>
+          <p class="why">
+            <strong>哲学锚点：Dieter Rams × Apple HIG 工具窗口</strong>——少装饰、高可读、像系统自带的下载管理。
+            适合「每天都开着」的工具：不抢戏，选中态清晰，进度是信息不是表演。
+          </p>
+          <div class="chips">
+            <span class="chip">气质：克制 · 可信 · 系统</span>
+            <span class="chip">Accent：系统蓝 #2F6FED</span>
+            <span class="chip">字体：SF / IBM Plex</span>
+          </div>
+          <ul class="traits">
+            <li>侧栏 source list + 统一工具栏</li>
+            <li>列表行：文件名 / 状态·主机 / 细进度条</li>
+            <li>右侧 inspector 只留摘要动作</li>
+            <li>进度窗：大号百分比 + 绿色分段条</li>
+          </ul>
+        </div>
+        <div>
+          <p class="why" style="margin:0">推荐作为<strong>默认落地方向</strong>：和现有 Swift 结构最接近，改造成本最低，体感最「正统 Mac」。</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="mac" id="main-a"></div>
+        <div class="caption">主窗口 · 点击列表行可切换选中</div>
+        <div class="mac progress-wrap" id="prog-a"></div>
+        <div class="caption">进度窗口 · Segments 单色绿</div>
+      </div>
+    </section>
+
+    <!-- B -->
+    <section class="panel b" id="panel-b">
+      <div class="dir-meta">
+        <div class="dir-copy">
+          <h2>B · Editorial Utility</h2>
+          <p class="why">
+            <strong>哲学锚点：Information Architects（iA）× Newsreader 排版</strong>——把下载列表当成「正在阅读的任务」。
+            文件名用衬线建立层级，墨绿强调「完成/生长」，比仪表盘更安静、更有产品感。
+          </p>
+          <div class="chips">
+            <span class="chip">气质：沉静 · 精致 · 人文</span>
+            <span class="chip">Accent：墨绿 #1F3D2A / 进度绿 #2F9E6B</span>
+            <span class="chip">字体：Newsreader + Plex</span>
+          </div>
+          <ul class="traits">
+            <li>选中用左侧竖线，而不是大色块</li>
+            <li>卡片感更弱，靠分隔线与字号</li>
+            <li>适合在意「品牌气质」的开源产品页截图</li>
+          </ul>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="mac" id="main-b"></div>
+        <div class="caption">主窗口 · 衬线文件名</div>
+        <div class="mac progress-wrap" id="prog-b"></div>
+        <div class="caption">进度窗口 · 编辑感信息卡</div>
+      </div>
+    </section>
+
+    <!-- C -->
+    <section class="panel c" id="panel-c">
+      <div class="dir-meta">
+        <div class="dir-copy">
+          <h2>C · Night Workshop</h2>
+          <p class="why">
+            <strong>哲学锚点：Build Studio × 夜间工坊</strong>——深炭底 + 单一琥珀强调，服务「挂机下载 / 深夜赶工」。
+            避免赛博霓虹；暖色只出现在主按钮与活跃态，分段条仍保持功能绿。
+          </p>
+          <div class="chips">
+            <span class="chip">气质：专注 · 成熟 · 夜间</span>
+            <span class="chip">Accent：琥珀 #D4A35C</span>
+            <span class="chip">底：Charcoal #1C1E22</span>
+          </div>
+          <ul class="traits">
+            <li>默认深色，适合菜单栏常驻工具</li>
+            <li>信息密度略高但不堆卡片</li>
+            <li>实现成本：需完整 Dark 令牌</li>
+          </ul>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="mac" id="main-c"></div>
+        <div class="caption">主窗口 · 深色工作台</div>
+        <div class="mac progress-wrap" id="prog-c"></div>
+        <div class="caption">进度窗口 · 琥珀动作 / 绿色分段</div>
+      </div>
+    </section>
+
+    <div class="questions">
+      <h3>已选定</h3>
+      <ol>
+        <li><strong>A · Quiet Finder</strong></li>
+        <li>跟随系统（Settings 可覆盖 Light / Dark）</li>
+        <li>词标暂用 NDM，后续改名</li>
+      </ol>
+      <p style="margin:14px 0 0;font-size:13px;color:var(--muted)">深化原型 → <code>design/NDM-Quiet-Finder.html</code> · 规范 → <code>design/brand-spec.md</code></p>
+    </div>
+  </div>
+
+<script>
+const tasks = [
+  { name: "fdm.dmg", sub: "Downloading · files2.freedownloadmanager.org", pct: "37%", w: 37, active: true },
+  { name: "archive-2026.zip", sub: "Queued · cdn.example.com", pct: "—", w: 0, active: false },
+  { name: "lecture-03.mp4", sub: "Completed · university.edu", pct: "100%", w: 100, active: false },
+];
+
+function traffic(title) {
+  return `<div class="titlebar">
+    <div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+    <div class="tb-title">${title}</div>
+  </div>`;
+}
+
+function mainWindow(idPrefix) {
+  const rows = tasks.map((t, i) => `
+    <div class="row${t.active ? " active" : ""}" data-i="${i}">
+      <div class="name">${t.name}</div>
+      <div class="pct">${t.pct}</div>
+      <div class="sub">${t.sub}</div>
+      <div class="bar"><i style="width:${t.w}%"></i></div>
+    </div>`).join("");
+  return `
+    ${traffic("NDM")}
+    <div class="toolbar">
+      <button class="tool primary">New</button>
+      <button class="tool">Start</button>
+      <button class="tool">Pause</button>
+      <div class="search">Search downloads</div>
+    </div>
+    <div class="body">
+      <aside class="side">
+        <h4>Status</h4>
+        <div class="nav active"><span>All</span><span class="n">12</span></div>
+        <div class="nav"><span>Active</span><span class="n">1</span></div>
+        <div class="nav"><span>Completed</span><span class="n">8</span></div>
+        <div class="nav"><span>Failed</span><span class="n">0</span></div>
+        <h4>Type</h4>
+        <div class="nav"><span>Video</span><span class="n">3</span></div>
+        <div class="nav"><span>Document</span><span class="n">2</span></div>
+      </aside>
+      <section class="list">${rows}</section>
+      <aside class="insp">
+        <div class="label">Details</div>
+        <h3>fdm.dmg</h3>
+        <p>Downloading · files2.freedownloadmanager.org</p>
+        <div class="stat">37% · 20.4 MB / 55.3 MB · 548 KB/s · 1m 33s</div>
+        <div class="btns">
+          <button class="btn main">Pause</button>
+          <button class="btn ghost">Details…</button>
+          <button class="btn ghost">Copy URL</button>
+        </div>
+      </aside>
+    </div>`;
+}
+
+function progressWindow() {
+  return `
+    ${traffic("37% fdm.dmg")}
+    <div class="prog-body">
+      <div class="big">37%</div>
+      <div class="fname">fdm.dmg</div>
+      <div class="pill">Downloading</div>
+      <div class="card">
+        <div class="kv"><span>URL</span><div>https://files2.freedownloadmanager.org/…/fdm.dmg</div></div>
+        <div class="kv"><span>Size</span><div>55.3 MB</div></div>
+        <div class="kv"><span>Downloaded</span><div>20.4 MB (37%)</div></div>
+        <div class="kv"><span>Speed</span><div>548 KB/s</div></div>
+        <div class="kv"><span>Time left</span><div>1 min 33 sec</div></div>
+      </div>
+      <div class="overall"><i></i></div>
+      <div class="seg-cap">Segments · 16</div>
+      <div class="seg">
+        <div class="fill"></div>
+        <div class="tick" style="left:12%"></div>
+        <div class="tick" style="left:25%"></div>
+        <div class="tick" style="left:40%"></div>
+        <div class="tick" style="left:55%"></div>
+        <div class="tick" style="left:70%"></div>
+        <div class="tick" style="left:85%"></div>
+      </div>
+      <div class="actions">
+        <button class="btn main">Pause</button>
+        <button class="btn ghost">Close</button>
+      </div>
+    </div>`;
+}
+
+["a","b","c"].forEach((d) => {
+  document.getElementById("main-" + d).innerHTML = mainWindow(d);
+  document.getElementById("prog-" + d).innerHTML = progressWindow();
+});
+
+document.getElementById("tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".tab");
+  if (!btn) return;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("panel-" + btn.dataset.dir).classList.add("active");
+});
+
+document.querySelectorAll(".list").forEach((list) => {
+  list.addEventListener("click", (e) => {
+    const row = e.target.closest(".row");
+    if (!row) return;
+    list.querySelectorAll(".row").forEach((r) => r.classList.remove("active"));
+    row.classList.add("active");
+  });
+});
+</script>
+</body>
+</html>

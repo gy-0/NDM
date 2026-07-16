@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NDM · Inspector 三变体</title>
+<style>
+  :root {
+    --accent: #2f6fed;
+    --ink: #14161a;
+    --muted: #5c6370;
+    --faint: #8b919c;
+    --surface: #f6f7f9;
+    --sidebar: #eceef2;
+    --panel: #f4f5f7;
+    --hair: rgba(0, 0, 0, 0.08);
+    --track: rgba(0, 0, 0, 0.06);
+    --row: rgba(47, 111, 237, 0.10);
+    --page: #e6e8ec;
+    --card: #fafbfc;
+    --shadow: 0 28px 70px rgba(20, 22, 26, 0.18);
+  }
+  html.dark {
+    --accent: #5b9aff;
+    --ink: #e8eaed;
+    --muted: #8b919c;
+    --faint: #6d737e;
+    --surface: #1c1e22;
+    --sidebar: #16181c;
+    --panel: #181a1e;
+    --hair: rgba(255, 255, 255, 0.10);
+    --track: rgba(255, 255, 255, 0.08);
+    --row: rgba(91, 154, 255, 0.16);
+    --page: #0f1114;
+    --card: rgba(255, 255, 255, 0.04);
+    --shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background: var(--page);
+    min-height: 100vh;
+  }
+  .page { max-width: 1280px; margin: 0 auto; padding: 32px 24px 64px; }
+  .top {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .eyebrow {
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; font-weight: 650; }
+  .lede { margin: 8px 0 0; max-width: 640px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--hair); border-radius: 10px;
+    overflow: hidden; background: var(--surface);
+  }
+  .seg button {
+    border: 0; background: transparent; color: var(--muted);
+    padding: 8px 12px; font-size: 12px; cursor: pointer;
+  }
+  .seg button.on { background: var(--ink); color: var(--page); }
+  .assumptions {
+    margin-bottom: 28px; padding: 14px 16px; border-radius: 12px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    border: 1px solid var(--hair); font-size: 13px; line-height: 1.55; color: var(--muted);
+  }
+  .assumptions strong { color: var(--ink); }
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(280px, 1fr));
+    gap: 22px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .gallery { grid-template-columns: 1fr; }
+  }
+  .card {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .card-head { display: flex; flex-direction: column; gap: 4px; min-height: 72px; }
+  .card-head .tag {
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .card-head h2 {
+    margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  .card-head p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .pick {
+    align-self: flex-start; border: 1px solid var(--hair); background: var(--surface);
+    color: var(--ink); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer;
+  }
+  .pick:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--hair)); }
+  .pick.chosen { background: var(--accent); color: #fff; border-color: transparent; }
+
+  /* Mini mac shell — list ghost + inspector focus */
+  .shell {
+    border-radius: 12px; overflow: hidden; background: var(--surface);
+    box-shadow: var(--shadow), 0 0 0 1px var(--hair);
+  }
+  .tb {
+    height: 38px; display: flex; align-items: center; padding: 0 12px;
+    background: linear-gradient(#f0f1f3, #e6e7ea); position: relative;
+    border-bottom: 1px solid var(--hair);
+  }
+  html.dark .tb { background: linear-gradient(#2a2d33, #22252a); }
+  .lights { display: flex; gap: 7px; z-index: 2; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .tb-title {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 12px; font-weight: 500; pointer-events: none;
+  }
+  .body {
+    display: grid; grid-template-columns: 1fr 268px; min-height: 420px;
+  }
+  .list-ghost {
+    padding: 10px; background: var(--surface); border-right: 1px solid var(--hair);
+  }
+  .ghost-row {
+    padding: 10px 12px; border-radius: 10px; margin-bottom: 4px; opacity: 0.45;
+  }
+  .ghost-row.on { background: var(--row); opacity: 1; }
+  .ghost-row .n { font-size: 12px; font-weight: 600; }
+  .ghost-row .s { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  .insp {
+    background: var(--panel);
+    display: flex; flex-direction: column;
+    min-height: 420px;
+  }
+
+  /* —— Shared bits —— */
+  .file-ico {
+    width: 40px; height: 40px; border-radius: 9px;
+    background: linear-gradient(180deg, #6aa8ff, #2f6fed);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+    display: grid; place-items: center; color: #fff;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    flex: 0 0 auto;
+  }
+  .file-ico.app {
+    background: linear-gradient(180deg, #c5c9d1, #8b919c);
+  }
+  .bar {
+    height: 4px; border-radius: 99px; background: var(--track); overflow: hidden;
+  }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .btn {
+    border: 0; border-radius: 8px; padding: 9px 12px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  .btn.main { background: var(--accent); color: #fff; font-weight: 560; }
+  .btn.ghost {
+    background: var(--track); color: var(--ink);
+  }
+  .btn.link {
+    background: transparent; color: var(--muted); padding: 6px 0; font-size: 12px;
+    text-align: left;
+  }
+  .btn.link:hover { color: var(--ink); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+  /* A · Get Info */
+  .a { padding: 16px 16px 14px; gap: 14px; }
+  .a .label {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .a .head { display: flex; gap: 12px; align-items: center; }
+  .a .name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.25; }
+  .a .status { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .a .kv {
+    display: grid; grid-template-columns: 72px 1fr; gap: 8px 10px;
+    font-size: 12px; padding: 12px 0; border-top: 1px solid var(--hair);
+    border-bottom: 1px solid var(--hair);
+  }
+  .a .kv span { color: var(--muted); }
+  .a .kv div { word-break: break-all; }
+  .a .actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+  .a .more { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+
+  /* B · Glance */
+  .b { padding: 18px 16px 14px; gap: 12px; }
+  .b .big {
+    font-size: 34px; font-weight: 650; letter-spacing: -0.03em; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .b .big-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .b .name { font-size: 14px; font-weight: 600; margin-top: 10px; }
+  .b .host { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .b .stats {
+    margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+  }
+  .b .stat-k { font-size: 10px; color: var(--faint); letter-spacing: 0.06em; text-transform: uppercase; }
+  .b .stat-v { font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .b .actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding-top: 8px; }
+  .b .links { display: flex; gap: 14px; flex-wrap: wrap; }
+
+  /* C · Docked */
+  .c { padding: 0; }
+  .c .scroll { padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .c .label {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .c .preview {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  }
+  .c .file-ico { width: 52px; height: 52px; border-radius: 12px; font-size: 11px; }
+  .c .name { font-size: 15px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.3; }
+  .c .meta { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .c .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .c .chip {
+    font-size: 11px; color: var(--muted); background: var(--track);
+    padding: 3px 8px; border-radius: 6px; font-variant-numeric: tabular-nums;
+  }
+  .c .dock {
+    margin-top: auto; padding: 12px 14px 14px;
+    border-top: 1px solid var(--hair);
+    background: color-mix(in srgb, var(--panel) 70%, var(--surface));
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .c .dock .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .c .dock .links {
+    display: flex; justify-content: space-between; gap: 8px; padding: 0 2px;
+  }
+  .c .dock .links button { padding: 4px 0; }
+
+  .note {
+    margin-top: 28px; font-size: 13px; color: var(--muted); line-height: 1.55;
+  }
+  .note strong { color: var(--ink); }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <div>
+        <div class="eyebrow">Huashu-Design · Quiet Finder</div>
+        <h1>Inspector 三变体</h1>
+        <p class="lede">主窗右侧详情。同一文件、同一色板；只变布局与操作节奏。选你最喜欢的，再落到 AppKit。</p>
+      </div>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="任务状态">
+          <button type="button" data-state="done" class="on">已完成</button>
+          <button type="button" data-state="active">下载中</button>
+        </div>
+        <div class="seg" role="group" aria-label="外观">
+          <button type="button" data-theme="light" class="on">浅色</button>
+          <button type="button" data-theme="dark">深色</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="assumptions">
+      <strong>Assumptions</strong> · 用户最常看的是「已完成」详情：下一动作是打开或访达，不是再读一堆状态色。<br />
+      <strong>差异维度</strong> · A 信息架构（Finder 简介）· B 视觉锚点（大数字 glance）· C 操作节奏（底部固定主操作）。<br />
+      <strong>推荐（可推翻）</strong> · 日常下载器场景优先 <strong>C · Docked</strong>——拇指区/视线末端永远是主按钮；A 更系统感；B 适合「正在下」时扫一眼进度。
+    </div>
+
+    <div class="gallery" id="gallery"></div>
+
+    <p class="note">
+      <strong>怎么选</strong>：点卡片上的「选这个」。也可以口头说「A+C 的按钮栏」之类混搭。<br />
+      Placeholder：文件图标用类型色块代替真实 UTType（AppKit 会换系统图标）。连接级细节仍只在进度窗。
+    </p>
+  </div>
+
+<script>
+const FILE = {
+  done: {
+    name: "WWDC25-103-zh_cn.mp4",
+    ext: "MP4",
+    kind: "video",
+    status: "已完成",
+    host: "devstreaming-cdn.apple.com",
+    size: "20.1 MB",
+    big: "20.1",
+    bigUnit: "MB",
+    bar: 100,
+    stats: [
+      ["大小", "20.1 MB"],
+      ["来源", "devstreaming-cdn.apple.com"],
+      ["类型", "MPEG-4 影片"],
+      ["位置", "Downloads"],
+    ],
+    chips: ["20.1 MB", "MP4", "Downloads"],
+    primary: "打开",
+    secondary: "在访达中显示",
+  },
+  active: {
+    name: "fdm.dmg",
+    ext: "DMG",
+    kind: "app",
+    status: "下载中",
+    host: "files2.freedownloadmanager.org",
+    size: "20.4 MB / 55.3 MB",
+    big: "37%",
+    bigUnit: "",
+    bar: 37,
+    stats: [
+      ["进度", "37%"],
+      ["速度", "548 KB/s"],
+      ["剩余", "1 分 33 秒"],
+      ["大小", "20.4 / 55.3 MB"],
+    ],
+    chips: ["37%", "548 KB/s", "1m 33s"],
+    primary: "暂停",
+    secondary: "进度详情…",
+  },
+};
+
+let state = "done";
+let chosen = null;
+
+function ico(d) {
+  return `<div class="file-ico ${d.kind === "app" ? "app" : ""}">${d.ext}</div>`;
+}
+
+function listGhost(d) {
+  return `
+    <div class="list-ghost">
+      <div class="ghost-row on">
+        <div class="n">${d.name}</div>
+        <div class="s">${d.status} · ${d.host}</div>
+      </div>
+      <div class="ghost-row"><div class="n">archive.zip</div><div class="s">已完成 · cdn.example.com</div></div>
+      <div class="ghost-row"><div class="n">notes.pdf</div><div class="s">已完成 · docs.local</div></div>
+    </div>`;
+}
+
+function shell(title, inspectorHTML, d) {
+  return `
+    <div class="shell">
+      <div class="tb">
+        <div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+        <div class="tb-title">${title}</div>
+      </div>
+      <div class="body">
+        ${listGhost(d)}
+        ${inspectorHTML}
+      </div>
+    </div>`;
+}
+
+function variantA(d) {
+  const kv = d.stats.map(([k, v]) => `<span>${k}</span><div class="mono">${v}</div>`).join("");
+  const insp = `
+    <aside class="insp a">
+      <div class="label">简介</div>
+      <div class="head">
+        ${ico(d)}
+        <div>
+          <div class="name">${d.name}</div>
+          <div class="status">${d.status}</div>
+        </div>
+      </div>
+      ${state === "active" ? `<div class="bar"><i style="width:${d.bar}%"></i></div>` : ""}
+      <div class="kv">${kv}</div>
+      <div class="actions">
+        <button class="btn main">${d.primary}</button>
+        <button class="btn ghost">${d.secondary}</button>
+      </div>
+      <div class="more">
+        <button class="btn link">属性…</button>
+        <button class="btn link">复制链接</button>
+        <button class="btn link">移除…</button>
+      </div>
+    </aside>`;
+  return shell("A · Get Info", insp, d);
+}
+
+function variantB(d) {
+  const stats = d.stats.slice(0, 4).map(([k, v]) => `
+    <div>
+      <div class="stat-k">${k}</div>
+      <div class="stat-v mono">${v}</div>
+    </div>`).join("");
+  const insp = `
+    <aside class="insp b">
+      <div>
+        <div class="big mono">${d.big}<span style="font-size:16px;font-weight:560;margin-left:2px">${d.bigUnit}</span></div>
+        <div class="big-sub">${d.status}</div>
+        <div class="name">${d.name}</div>
+        <div class="host">${d.host}</div>
+      </div>
+      ${state === "active" ? `<div class="bar"><i style="width:${d.bar}%"></i></div>` : ""}
+      <div class="stats">${stats}</div>
+      <div class="actions">
+        <button class="btn main">${d.primary}</button>
+        <button class="btn ghost">${d.secondary}</button>
+        <div class="links">
+          <button class="btn link">属性…</button>
+          <button class="btn link">复制链接</button>
+          <button class="btn link">移除…</button>
+        </div>
+      </div>
+    </aside>`;
+  return shell("B · Glance", insp, d);
+}
+
+function variantC(d) {
+  const chips = d.chips.map(c => `<span class="chip mono">${c}</span>`).join("");
+  const insp = `
+    <aside class="insp c">
+      <div class="scroll">
+        <div class="label">详情</div>
+        <div class="preview">
+          ${ico(d)}
+          <div class="name">${d.name}</div>
+          <div class="meta">${d.status} · ${d.host}</div>
+          ${state === "active" ? `<div class="bar" style="width:100%"><i style="width:${d.bar}%"></i></div>` : ""}
+          <div class="chip-row">${chips}</div>
+        </div>
+      </div>
+      <div class="dock">
+        <div class="pair">
+          <button class="btn main">${d.primary}</button>
+          <button class="btn ghost">${d.secondary}</button>
+        </div>
+        <div class="links">
+          <button class="btn link">属性…</button>
+          <button class="btn link">复制链接</button>
+          <button class="btn link">移除…</button>
+        </div>
+      </div>
+    </aside>`;
+  return shell("C · Docked", insp, d);
+}
+
+const variants = [
+  {
+    id: "A",
+    tag: "保守 · 系统感",
+    title: "A · Get Info",
+    blurb: "Finder「简介」节奏：图标+文件名，键值表说话，主操作沉底。信任感最强。",
+    render: variantA,
+  },
+  {
+    id: "B",
+    tag: "扫描 · 进度感",
+    title: "B · Glance",
+    blurb: "大号数字当锚点（完成看体积，下载看百分比）。适合扫一眼就懂。",
+    render: variantB,
+  },
+  {
+    id: "C",
+    tag: "推荐 · 行动感",
+    title: "C · Docked",
+    blurb: "内容区安静，主按钮钉在底部——完成态几乎不费脑：打开 / 访达。",
+    render: variantC,
+  },
+];
+
+function render() {
+  const d = FILE[state];
+  const root = document.getElementById("gallery");
+  root.innerHTML = variants.map(v => `
+    <article class="card" data-id="${v.id}">
+      <div class="card-head">
+        <div class="tag">${v.tag}</div>
+        <h2>${v.title}</h2>
+        <p>${v.blurb}</p>
+      </div>
+      ${v.render(d)}
+      <button type="button" class="pick ${chosen === v.id ? "chosen" : ""}" data-pick="${v.id}">
+        ${chosen === v.id ? "已选 · " + v.id : "选这个"}
+      </button>
+    </article>
+  `).join("");
+}
+
+document.querySelectorAll("[data-state]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("[data-state]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    state = btn.dataset.state;
+    render();
+  });
+});
+
+document.querySelectorAll("[data-theme]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("[data-theme]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    document.documentElement.classList.toggle("dark", btn.dataset.theme === "dark");
+  });
+});
+
+document.getElementById("gallery").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-pick]");
+  if (!t) return;
+  chosen = t.dataset.pick;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
