@@ -1,4 +1,4 @@
-# 功能对等清单（NDM 复刻）
+# 功能清单（NDM 宿主）
 
 状态：`[ ]` 未做 · `[~]` 进行中 · `[x]` 完成 · `[-]` 明确不做/延后
 
@@ -8,7 +8,7 @@
 |----|------|------|------|
 | A01 | HTTP / HTTPS 下载 | [x] | `DownloadEngine` 主路径 |
 | A02 | FTP 下载 | [x] | PASV+RETR+REST；支持 FTP HTTP CONNECT 代理 |
-| A03 | 动态分段（Range） | [x] | 已对齐：先单连接引导；第二连接按“已完成前缀 + 剩余区间中点”偷尾，4125 的 983,040B 前缀精确得到 9,595,188 起点；其余连接递归切最大未完成区间；重规划保留 `seg.xN` ID。仍差：原版首请求是开放 `0-` 且按实时握手/吞吐触发，本实现为确定性测试使用有界 bootstrap；精确时序与 merge/rollback 启发式仍未逐事件相同。 |
+| A03 | 动态分段（Range） | [x] | 多连接 Range；运行中可重规划未完成区间 |
 | A04 | 暂停 / 继续 | [x] | Pause 保留 `seg.xN`；Start 续传 |
 | A05 | 崩溃后续传 | [x] | 加载 `segments.bin` + 部分段 |
 | A06 | 运行中改连接数 | [x] | Apply 会取消当前 Range 轮次、等待 FileHandle 收口、按真实落盘进度重切未完成区间并以新并发数发起请求；`testApplyConnectionsReplansActiveRangeTransfers` 验证真实 Range 数增加、最终字节一致与 DB 保留新连接数。 |
@@ -53,7 +53,7 @@
 | D05 | 删除任务（可选删文件） | [x] 确认框：Remove Task / Remove & Trash File |
 | D06 | 任务属性面板 | [x] |
 | D07 | 默认下载目录 | [x] |
-| D08 | 导入/兼容原版 DB（可选） | [x] `LegacyDBImporter` + 设置入口 |
+| D08 | 导入/兼容既有实现 DB（可选） | [x] `LegacyDBImporter` + 设置入口 |
 
 ## E. UI / UX（Mac）
 
@@ -62,7 +62,7 @@
 | E01 | 主窗口任务表 | [x] 现代主窗：`NSToolbar` + 侧栏 + 任务列表 + 可折叠 inspector；行内真实总进度/速度/ETA/状态；双击与右键语义；可测试 `TaskPresentation` |
 | E02 | 新建 URL 窗口 | [x] Toolbar New / Alert |
 | E03 | 下载进度窗口（总进度+逐连接进度） | [x] 每条 Range 连接独立显示真实 `completed / length`、百分比、字节区间与状态；连接列表可滚动；支持运行中改连接数 / Renew；inspector 摘要复用同一 `SegmentState` |
-| E04 | 设置窗口 | [x] General / Browser / Network / Advanced 分页；代理与导入原版 DB |
+| E04 | 设置窗口 | [x] General / Browser / Network / Advanced 分页；代理与导入既有实现 DB |
 | E05 | 菜单栏常驻（Agent） | [x] |
 | E06 | 完成对话框 | [x] `Open` 为默认主操作；另有 `Show in Finder` 与 `Close`，文件缺失时禁用无效操作 |
 | E07 | 错误对话框 | [x] 失败任务支持 Retry / Renew URL；列表与 inspector 展示错误文案 |
@@ -87,8 +87,8 @@
 | G01 | 可编译 macOS App | [x] |
 | G02 | 单元测试（分段/URL/DB） | [x] 4125 精确边界、动态扩展、稳定 ID 重规划与连续覆盖 |
 | G03 | 集成测试（本地 HTTP 服务器） | [x] 多连接+运行中 2→4 热重规划+续传+HLS+FTP+NTLM+Bridge |
-| G04 | 与原版行为对照文档 | [x] `reverse/specs/` |
-| G05 | 独立 Bundle ID（不覆盖原版） | [x] `dev.ndm.open` |
+| G04 | 行为与协议说明 | [x] 见 `BridgeProtocol.swift` / 本表；研究档案不在本干净树 |
+| G05 | 独立 Bundle ID（不覆盖既有实现） | [x] `dev.ndm.open` |
 
 ## 里程碑
 
@@ -100,18 +100,18 @@
 6. **M5** HLS + 媒体合并 — ✅ C01–C03（C04 由 BetterNDM 面板负责）
 7. **M6** 打磨 UX、对等验收、打包 — 🟡 菜单快捷键、菜单栏状态、删除进废纸篓、Wait/Properties 文案已补；BetterNDM 实机与长期稳定性仍需继续
 
-## 本会话 P0 证据（2026-07-16）
+## 实现备注
 
-- `SegmentFileFormat.planDynamicInitial` 用原版 4125 完整日志反推公式：`prefix + (total-prefix)/2`；测试与 fixture 边界逐字节一致。
-- `DownloadEngine` 新下载执行单连接 bootstrap，再动态扩展；运行中 Apply 使用独立轮次取消 token，旧请求真正停止后才重规划与重发 Range。
-- 重规划不再重编号既有 `segmentId`，因此不会出现“`segments.bin` 指向新 ID、磁盘仍是旧 `seg.xN`”的错位。
-- 合并改为 1 MiB 流式复制，避免 `Data(contentsOf:)` 一次载入大段；URLSession 取消可主动打断停滞请求，进度回调降频且单调。
-- 两份历史 NDM `.ips` 均为主线程 `MenuBarClientCore → Swift MainExecutor` 的 `EXC_BAD_ACCESS(0x7c8)`；已显式延长 `AppDelegate` 生命周期、设置状态栏菜单 target、移除主线程 semaphore 等待、保证 Wait continuation 只恢复一次，并串行化桥连接表。
-- 主窗产品重构：`TaskPresentation`（NDMCore）承载侧栏过滤、状态文案、速度/ETA、按钮 enablement；`MainWindowController` 换成原生 Toolbar + `NSSplitViewController`（侧栏 / 列表 / inspector），主列表显示真实进度而不再是 `…`。
+- `DownloadEngine`：单连接引导后扩展多 Range；运行中改连接数会取消旧轮次再重规划。
+- 分段 ID 在重规划时保持稳定，避免 `segments.bin` 与磁盘 `seg.xN` 错位。
+- 合并使用流式复制；进度回调降频且单调。
+- 主窗：`TaskPresentation` + Toolbar + 三栏 `NSSplitViewController`。
 
-## 已知非阻塞缺口（规格 G01/G07/G11）
+## 已知缺口
 
-- 动态切分的**网络时序**仍非逐事件复刻：原版 socket 1 使用开放 `Range: 0-` 并在 socket 2 TLS 握手期间继续前进；本实现用确定性 bootstrap 后扩展。4125 边界公式已闭合，但不同 RTT/吞吐下的触发时刻及 merge/rollback 策略仍有差异。
-- MKV 内建 muxer 未手写 EBML：优先 `ffmpeg -c copy`；无 ffmpeg 时视频主文件 + `.audio.*` 旁路
-- BetterNDM 实机 Chrome 尚未由本会话自动操作；按 `docs/BETTERNDM_SMOKE.md` 手工 smoke。
-- exit 139 的历史栈已定位并加防护，但 macOS 27 beta 私有 `MenuBarClientCore` 本身不可控；仍建议在真实菜单栏交互与长时下载下继续观察 DiagnosticReports。
+- 无 ffmpeg 时音轨旁路为 `.audio.*` 文件（HLS/双轨均已在有 ffmpeg 时默认 MP4）。
+- BetterNDM 实机 Chrome 联调按 `docs/BETTERNDM_SMOKE.md` 手工走。
+- 菜单栏长时稳定性需在真实交互下继续观察。
+- 升级页购买链接为占位（`UpgradeWindowController.purchaseURL`）。
+- Onboarding 第 2 步测试文件指向 thinkbroadband 公共文件，正式版应换自有 CDN。
+- 新 UI（诊断卡 / smartline / 清晰度 Sheet / 完成卡 / 菜单栏面板 / Onboarding / Pro 页）已过编译与逻辑测试，视觉走查需真机人工过一遍。

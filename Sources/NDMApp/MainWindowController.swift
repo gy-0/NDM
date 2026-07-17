@@ -43,7 +43,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.center()
         super.init(window: window)
         window.contentViewController = splitController
-        NDMChrome.applyLayerFill(splitController.view, NDMChrome.windowFill)
         configureSplit()
         configureToolbar()
         wireCallbacks()
@@ -161,6 +160,57 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         inspectorController.onAction = { [weak self] action in
             guard let self, let id = self.selectedTaskID else { return }
             self.handleContextAction(action, taskID: id)
+        }
+        listController.onClipboardDownload = { [weak self] url in
+            self?.startURL(url)
+        }
+        listController.onEmptyNewDownload = { [weak self] in
+            self?.promptNewURL()
+        }
+        listController.onEmptySpeedRace = {
+            SpeedRaceWindowController.present()
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkClipboardForDownloadableLink()
+            }
+        }
+    }
+
+    // MARK: - Clipboard awareness
+
+    private var lastPasteboardCount = -1
+
+    /// Copy a link anywhere → switch to the app → a quiet pill offers to
+    /// download it. Never steals focus, never auto-downloads.
+    private func checkClipboardForDownloadableLink() {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount != lastPasteboardCount else { return }
+        lastPasteboardCount = pasteboard.changeCount
+
+        guard let raw = pasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              raw.count < 2048,
+              !raw.contains("\n"),
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https", "ftp"].contains(scheme),
+              let host = url.host, !host.isEmpty else {
+            return
+        }
+        // Already in the list → nothing to offer.
+        guard !allTasks.contains(where: { $0.url == raw }) else { return }
+        Task {
+            let settings = await manager.currentSettings()
+            guard settings.clipboardWatchEnabled else { return }
+            let name = url.lastPathComponent.isEmpty || url.lastPathComponent == "/"
+                ? host
+                : url.lastPathComponent
+            listController.showClipboardBanner(urlString: raw, displayName: name)
         }
     }
 
@@ -306,7 +356,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             rows: displayedRows,
             selectedTaskID: selectedTaskID,
             emptyTitle: emptyStateTitle(),
-            emptySubtitle: emptyStateSubtitle()
+            emptySubtitle: emptyStateSubtitle(),
+            // Action buttons only for the true first-run empty state,
+            // not for empty filter/search results.
+            emptyShowsActions: allTasks.isEmpty && searchQuery.isEmpty
         )
         updateInspector()
         updateToolbarEnablement()
@@ -339,6 +392,75 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             partial + (progressByID[task.id]?.bytesPerSecond ?? 0)
         }
         return (active.count, speed)
+    }
+
+    /// Aggregate fraction across active downloads (Dock progress bar).
+    func dockProgressSnapshot() -> Double {
+        let active = allTasks.filter { $0.status == .downloading || $0.status == .waiting }
+        var total: Int64 = 0
+        var done: Int64 = 0
+        for task in active {
+            let progress = progressByID[task.id]
+            let bytes = max(task.fileSize, progress?.totalBytes ?? 0)
+            guard bytes > 0 else { continue }
+            total += bytes
+            done += min(progress?.completedBytes ?? 0, bytes)
+        }
+        guard total > 0 else { return 0 }
+        return Double(done) / Double(total)
+    }
+
+    /// Per-task rows for the menu bar mini panel (active first, capped).
+    struct MenuBarTask {
+        var taskID: Int64
+        var name: String
+        var fraction: Double
+        var detail: String
+    }
+
+    func menuBarTasks(limit: Int = 4) -> [MenuBarTask] {
+        allTasks
+            .filter { $0.status == .downloading || $0.status == .waiting }
+            .sorted { a, b in
+                // Downloading before queued, then most recent first.
+                if (a.status == .downloading) != (b.status == .downloading) {
+                    return a.status == .downloading
+                }
+                return a.id > b.id
+            }
+            .prefix(limit)
+            .map { task in
+                let progress = progressByID[task.id]
+                let fraction = progress?.fractionCompleted ?? 0
+                var parts: [String] = []
+                if task.status == .waiting {
+                    parts.append(L10n.queued)
+                } else {
+                    parts.append(TaskPresentationFormatting.percent(fraction))
+                    let eta = TaskPresentationFormatting.eta(progress?.remainingTime, status: task.status)
+                    if eta != L10n.emDash { parts.append(eta) }
+                }
+                return MenuBarTask(
+                    taskID: task.id,
+                    name: task.filename.isEmpty ? L10n.untitled : task.filename,
+                    fraction: fraction,
+                    detail: parts.joined(separator: " · ")
+                )
+            }
+    }
+
+    /// Pause every downloading/queued task (menu bar "Pause All").
+    func pauseAllActive() {
+        let ids = allTasks
+            .filter { $0.status == .downloading || $0.status == .waiting }
+            .map(\.id)
+        guard !ids.isEmpty else { return }
+        Task {
+            for id in ids {
+                await manager.pause(taskID: id)
+            }
+            await reload()
+        }
     }
 
     @objc func menuStartSelected() { startSelected() }
@@ -480,10 +602,31 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return true
     }
 
+    /// Public entry for onboarding / external callers — same path as ⌘N.
+    func addAndStart(urlString: String) {
+        startURL(urlString)
+    }
+
     private func startURL(_ urlString: String) {
         Task {
+            var urlToAdd = urlString
+            var ltype = "normal"
+            // Manually pasted master playlists get the same quality picker
+            // as browser captures; probe failures fall back to the plain path.
+            if urlString.lowercased().contains(".m3u8"),
+               let probe = await HLSMasterProbe.probe(urlString: urlString) {
+                switch await QualityPickerWindowController.choose(probe: probe, title: "") {
+                case .cancel:
+                    return
+                case .download(let option):
+                    if let resolved = HLSPlaylist.resolveURL(option.variant.uri, against: probe.masterURL) {
+                        urlToAdd = resolved.absoluteString
+                        ltype = "hls"
+                    }
+                }
+            }
             do {
-                let task = try await manager.addURL(urlString)
+                let task = try await manager.addURL(urlToAdd, ltype: ltype)
                 selectedTaskID = task.id
                 selectedFilter = .active
                 // Open progress immediately — don't wait for start()/reload().
@@ -713,11 +856,14 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
 
     override func loadView() {
         rows = SidebarViewController.buildRows()
+        // Fully transparent stack: the split item's built-in sidebar material
+        // (translucent blur, continuous under the traffic lights) shows through.
+        // Painting an opaque fill here is what made the titlebar corner look
+        // stitched-on — and go stale when the appearance flipped.
         view = NSView()
-        NDMChrome.applyLayerFill(view, NDMChrome.sidebarFill)
         tableView.style = .sourceList
         tableView.headerView = nil
-        tableView.rowHeight = 28
+        tableView.rowHeight = 30
         tableView.allowsEmptySelection = false
         tableView.backgroundColor = .clear
         tableView.dataSource = self
@@ -727,8 +873,7 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .noBorder
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = NDMChrome.sidebarFill
+        scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
         NSLayoutConstraint.activate([
@@ -820,6 +965,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     var onActivateTaskID: ((Int64) -> Void)?
     var onContextAction: ((TaskListContextAction, Int64) -> Void)?
     var onDropURL: ((String) -> Void)?
+    var onEmptyNewDownload: (() -> Void)?
+    var onEmptySpeedRace: (() -> Void)?
 
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
@@ -828,6 +975,18 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private let emptyStack = NSStackView()
     private var rows: [TaskRowPresentation] = []
     private var contextMenuDelegate: ContextMenuDelegate?
+    private var emptyActionsRow: NSStackView?
+
+    // Clipboard banner — a quiet floating pill above the list.
+    var onClipboardDownload: ((String) -> Void)?
+    private let clipboardBanner = ChromeBox(
+        fill: NDMChrome.windowFill,
+        borderColor: NDMChrome.hairline,
+        cornerRadius: 10,
+        borderWidth: 1
+    )
+    private let clipboardLabel = NSTextField(labelWithString: "")
+    private var clipboardURLString: String?
 
     override func loadView() {
         let root = URLDropView(frame: .zero)
@@ -837,7 +996,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             self?.scrollView.layer?.borderColor = NSColor.controlAccentColor.cgColor
         }
         view = root
-        NDMChrome.applyLayerFill(root, NDMChrome.contentSurface)
+        root.fill = NDMChrome.contentSurface
 
         tableView.headerView = nil
         tableView.style = .inset
@@ -877,11 +1036,63 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptyStack.spacing = 8
         emptyStack.addArrangedSubview(emptyLabel)
         emptyStack.addArrangedSubview(emptySubtitleLabel)
+
+        // First-run invitations: a real download, or the demo race.
+        let newButton = NSButton(title: L10n.newDownloadEllipsis, target: self, action: #selector(emptyNewClicked))
+        newButton.bezelStyle = .rounded
+        newButton.controlSize = .large
+        if #available(macOS 11.0, *) {
+            newButton.bezelColor = NDMChrome.accent
+        }
+        let raceButton = NSButton(title: L10n.raceMenuTitle, target: self, action: #selector(emptyRaceClicked))
+        raceButton.bezelStyle = .rounded
+        raceButton.controlSize = .large
+        let emptyActions = NSStackView(views: [newButton, raceButton])
+        emptyActions.orientation = .horizontal
+        emptyActions.spacing = 10
+        emptyActionsRow = emptyActions
+        emptyStack.setCustomSpacing(18, after: emptySubtitleLabel)
+        emptyStack.addArrangedSubview(emptyActions)
+
         emptyStack.isHidden = true
         emptyStack.translatesAutoresizingMaskIntoConstraints = false
 
+        // Clipboard pill: icon + link name + Download + dismiss.
+        clipboardBanner.layer?.shadowOpacity = 0.18
+        clipboardBanner.layer?.shadowRadius = 12
+        clipboardBanner.layer?.shadowOffset = CGSize(width: 0, height: -4)
+        clipboardBanner.isHidden = true
+        clipboardBanner.translatesAutoresizingMaskIntoConstraints = false
+
+        let clipIcon = NSImageView()
+        clipIcon.image = NDMChrome.symbol("link", pointSize: 12, weight: .semibold)
+        clipIcon.contentTintColor = NDMChrome.accent
+        clipboardLabel.font = .systemFont(ofSize: 12)
+        clipboardLabel.lineBreakMode = .byTruncatingMiddle
+        clipboardLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let clipDownload = NSButton(title: L10n.download, target: self, action: #selector(clipboardDownloadClicked))
+        clipDownload.bezelStyle = .rounded
+        clipDownload.controlSize = .small
+        clipDownload.font = .systemFont(ofSize: 11, weight: .semibold)
+        if #available(macOS 11.0, *) {
+            clipDownload.bezelColor = NDMChrome.accent
+        }
+        let clipClose = NSButton(title: "", target: self, action: #selector(clipboardDismissClicked))
+        clipClose.bezelStyle = .circular
+        clipClose.isBordered = false
+        clipClose.image = NDMChrome.symbol("xmark.circle.fill", pointSize: 12, weight: .regular)
+        clipClose.contentTintColor = .tertiaryLabelColor
+        let clipStack = NSStackView(views: [clipIcon, clipboardLabel, clipDownload, clipClose])
+        clipStack.orientation = .horizontal
+        clipStack.alignment = .centerY
+        clipStack.spacing = 8
+        clipStack.edgeInsets = NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 8)
+        clipStack.translatesAutoresizingMaskIntoConstraints = false
+        clipboardBanner.addSubview(clipStack)
+
         view.addSubview(scrollView)
         view.addSubview(emptyStack)
+        view.addSubview(clipboardBanner)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -891,7 +1102,43 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             emptyStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             emptyStack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
             emptyStack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
+            clipboardBanner.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            clipboardBanner.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            clipboardBanner.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            clipStack.topAnchor.constraint(equalTo: clipboardBanner.topAnchor),
+            clipStack.leadingAnchor.constraint(equalTo: clipboardBanner.leadingAnchor),
+            clipStack.trailingAnchor.constraint(equalTo: clipboardBanner.trailingAnchor),
+            clipStack.bottomAnchor.constraint(equalTo: clipboardBanner.bottomAnchor),
         ])
+    }
+
+    func showClipboardBanner(urlString: String, displayName: String) {
+        clipboardURLString = urlString
+        clipboardLabel.stringValue = L10n.clipboardBanner(displayName)
+        clipboardBanner.isHidden = false
+    }
+
+    func hideClipboardBanner() {
+        clipboardBanner.isHidden = true
+        clipboardURLString = nil
+    }
+
+    @objc private func clipboardDownloadClicked() {
+        guard let url = clipboardURLString else { return }
+        hideClipboardBanner()
+        onClipboardDownload?(url)
+    }
+
+    @objc private func clipboardDismissClicked() {
+        hideClipboardBanner()
+    }
+
+    @objc private func emptyNewClicked() {
+        onEmptyNewDownload?()
+    }
+
+    @objc private func emptyRaceClicked() {
+        onEmptySpeedRace?()
     }
 
     func relocalizeChrome() {
@@ -902,11 +1149,13 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         rows: [TaskRowPresentation],
         selectedTaskID: Int64?,
         emptyTitle: String,
-        emptySubtitle: String
+        emptySubtitle: String,
+        emptyShowsActions: Bool = false
     ) {
         self.rows = rows
         emptyLabel.stringValue = emptyTitle
         emptySubtitleLabel.stringValue = emptySubtitle
+        emptyActionsRow?.isHidden = !emptyShowsActions
         emptyStack.isHidden = !rows.isEmpty
         tableView.isHidden = rows.isEmpty
         tableView.reloadData()
@@ -1082,13 +1331,13 @@ private final class TaskRowCellView: NSTableCellView {
         progressTop = barTop
         progressHeight = barHeight
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 36),
-            iconView.heightAnchor.constraint(equalToConstant: 36),
+            iconView.widthAnchor.constraint(equalToConstant: 38),
+            iconView.heightAnchor.constraint(equalToConstant: 38),
 
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 11),
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 12),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -12),
 
             trailingLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
@@ -1115,11 +1364,11 @@ private final class TaskRowCellView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     func apply(_ row: TaskRowPresentation) {
-        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 36)
+        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 38)
         titleLabel.stringValue = row.filename
         if let error = row.errorText, !error.isEmpty {
-            subtitleLabel.stringValue = "\(row.statusTitle) · \(error)"
-            subtitleLabel.textColor = .secondaryLabelColor
+            // Human diagnostic: red headline, quiet hint ("链接已过期 · 回到页面…").
+            subtitleLabel.attributedStringValue = Self.errorSubtitle(error)
         } else if row.host.isEmpty {
             subtitleLabel.stringValue = row.statusTitle
             subtitleLabel.textColor = .secondaryLabelColor
@@ -1149,6 +1398,29 @@ private final class TaskRowCellView: NSTableCellView {
             metaLabel.stringValue = row.sizeText
         }
     }
+
+    private static func errorSubtitle(_ summary: String) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 11)
+        let result = NSMutableAttributedString()
+        if let sep = summary.range(of: " · ") {
+            let head = String(summary[..<sep.lowerBound])
+            let rest = String(summary[sep.lowerBound...])
+            result.append(NSAttributedString(string: head, attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.systemRed,
+            ]))
+            result.append(NSAttributedString(string: rest, attributes: [
+                .font: font,
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+        } else {
+            result.append(NSAttributedString(string: summary, attributes: [
+                .font: font,
+                .foregroundColor: NSColor.systemRed,
+            ]))
+        }
+        return result
+    }
 }
 
 // MARK: - Inspector
@@ -1175,13 +1447,29 @@ private final class InspectorViewController: NSViewController {
     private let placeholderLabel = NSTextField(wrappingLabelWithString: L10n.selectDownloadHint)
     private let contentStack = NSStackView()
     private let glanceRow = NSStackView()
-    private let actionDock = NSView()
+    private let actionsStack = NSStackView()
+    private let diagBox = ChromeBox(
+        fill: NSColor.systemRed.withAlphaComponent(0.09),
+        borderColor: NSColor.systemRed.withAlphaComponent(0.22),
+        cornerRadius: 9,
+        borderWidth: 1
+    )
+    private let diagTitleLabel = NSTextField(wrappingLabelWithString: "")
+    private let diagMessageLabel = NSTextField(wrappingLabelWithString: "")
+    private let diagRawLabel = NSTextField(labelWithString: "")
+    private let tuneBox = ChromeBox(
+        fill: NSColor.systemGreen.withAlphaComponent(0.09),
+        borderColor: NSColor.systemGreen.withAlphaComponent(0.22),
+        cornerRadius: 9,
+        borderWidth: 1
+    )
+    private let tuneLabel = NSTextField(wrappingLabelWithString: "")
     private var progressButtonShowsConnectionDetails = false
+    private var primaryFiresRenew = false
     private var currentRow: TaskRowPresentation?
 
     override func loadView() {
-        view = NSView()
-        NDMChrome.applyLayerFill(view, NDMChrome.contentSurface)
+        view = ChromeBox(fill: NDMChrome.contentSurface)
 
         titleLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         titleLabel.textColor = .tertiaryLabelColor
@@ -1238,7 +1526,7 @@ private final class InspectorViewController: NSViewController {
         styleSecondary(secondaryButton)
         styleSoft(tertiaryButton)
         styleSoft(copyURLButton)
-        styleSoft(deleteButton)
+        styleDelete(deleteButton)
 
         primaryButton.action = #selector(tapPrimary)
         secondaryButton.action = #selector(tapSecondary)
@@ -1263,71 +1551,110 @@ private final class InspectorViewController: NSViewController {
         glanceBlock.alignment = .leading
         glanceBlock.spacing = 4
 
-        // Main pair side-by-side; soft trio in one row — less mechanical than a ladder.
-        let primaryRow = NSStackView(views: [primaryButton, secondaryButton])
-        primaryRow.orientation = .horizontal
-        primaryRow.alignment = .centerY
-        primaryRow.spacing = 8
-        primaryRow.distribution = .fillEqually
+        // Actions live at the bottom of the panel — one confident primary,
+        // a clear secondary, then quiet utilities. No cramped icon tiles.
+        let pairRow = NSStackView(views: [tertiaryButton, copyURLButton])
+        pairRow.orientation = .horizontal
+        pairRow.alignment = .centerY
+        pairRow.spacing = 8
+        pairRow.distribution = .fillEqually
 
-        let softRow = NSStackView(views: [tertiaryButton, copyURLButton, deleteButton])
-        softRow.orientation = .horizontal
-        softRow.alignment = .centerY
-        softRow.spacing = 6
-        softRow.distribution = .fillEqually
+        actionsStack.orientation = .vertical
+        actionsStack.alignment = .leading
+        actionsStack.spacing = 8
+        actionsStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 16, right: 16)
+        actionsStack.translatesAutoresizingMaskIntoConstraints = false
+        actionsStack.addArrangedSubview(primaryButton)
+        actionsStack.addArrangedSubview(secondaryButton)
+        actionsStack.addArrangedSubview(pairRow)
+        actionsStack.setCustomSpacing(12, after: pairRow)
+        actionsStack.addArrangedSubview(deleteButton)
 
-        let dockStack = NSStackView(views: [primaryRow, softRow])
-        dockStack.orientation = .vertical
-        dockStack.alignment = .leading
-        dockStack.spacing = 8
-        dockStack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        dockStack.translatesAutoresizingMaskIntoConstraints = false
+        // Diagnostic note — headline + plain-language explanation + raw code.
+        diagTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        diagTitleLabel.textColor = .systemRed
+        diagTitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        diagMessageLabel.font = .systemFont(ofSize: 11)
+        diagMessageLabel.textColor = .labelColor
+        diagMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        diagRawLabel.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
+        diagRawLabel.textColor = .tertiaryLabelColor
+        let diagStack = NSStackView(views: [diagTitleLabel, diagMessageLabel, diagRawLabel])
+        diagStack.orientation = .vertical
+        diagStack.alignment = .leading
+        diagStack.spacing = 5
+        diagStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        diagStack.translatesAutoresizingMaskIntoConstraints = false
+        diagBox.translatesAutoresizingMaskIntoConstraints = false
+        diagBox.addSubview(diagStack)
 
-        actionDock.wantsLayer = true
-        actionDock.layer?.cornerRadius = 10
-        actionDock.layer?.borderWidth = 1
-        actionDock.translatesAutoresizingMaskIntoConstraints = false
-        actionDock.addSubview(dockStack)
-        refreshDockChrome()
+        // "为什么这么快" — smart tuning transparency note (green, quiet).
+        tuneLabel.font = .systemFont(ofSize: 11)
+        tuneLabel.textColor = .labelColor
+        tuneLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let tuneStack = NSStackView(views: [tuneLabel])
+        tuneStack.orientation = .vertical
+        tuneStack.alignment = .leading
+        tuneStack.edgeInsets = NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
+        tuneStack.translatesAutoresizingMaskIntoConstraints = false
+        tuneBox.translatesAutoresizingMaskIntoConstraints = false
+        tuneBox.addSubview(tuneStack)
 
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
         contentStack.spacing = 12
-        contentStack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 14, right: 14)
+        contentStack.edgeInsets = NSEdgeInsets(top: 18, left: 16, bottom: 14, right: 16)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        for sub in [titleLabel, glanceBlock, header, progressBar, kvStack, actionDock] {
+        for sub in [titleLabel, header, glanceBlock, progressBar, diagBox, tuneBox, kvStack] {
             contentStack.addArrangedSubview(sub)
         }
+        contentStack.setCustomSpacing(14, after: titleLabel)
+        contentStack.setCustomSpacing(18, after: header)
+        NSLayoutConstraint.activate([
+            diagBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            diagStack.topAnchor.constraint(equalTo: diagBox.topAnchor),
+            diagStack.leadingAnchor.constraint(equalTo: diagBox.leadingAnchor),
+            diagStack.trailingAnchor.constraint(equalTo: diagBox.trailingAnchor),
+            diagStack.bottomAnchor.constraint(equalTo: diagBox.bottomAnchor),
+            diagTitleLabel.widthAnchor.constraint(equalTo: diagStack.widthAnchor, constant: -24),
+            diagMessageLabel.widthAnchor.constraint(equalTo: diagStack.widthAnchor, constant: -24),
+            tuneBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            tuneStack.topAnchor.constraint(equalTo: tuneBox.topAnchor),
+            tuneStack.leadingAnchor.constraint(equalTo: tuneBox.leadingAnchor),
+            tuneStack.trailingAnchor.constraint(equalTo: tuneBox.trailingAnchor),
+            tuneStack.bottomAnchor.constraint(equalTo: tuneBox.bottomAnchor),
+            tuneLabel.widthAnchor.constraint(equalTo: tuneStack.widthAnchor, constant: -24),
+        ])
         contentStack.setCustomSpacing(14, after: glanceBlock)
-        contentStack.setCustomSpacing(16, after: kvStack)
 
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(contentStack)
+        view.addSubview(actionsStack)
         view.addSubview(placeholderLabel)
         NSLayoutConstraint.activate([
             contentStack.topAnchor.constraint(equalTo: view.topAnchor),
             contentStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 36),
-            iconView.heightAnchor.constraint(equalToConstant: 36),
-            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            nameBlock.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -46),
-            progressBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            progressBar.heightAnchor.constraint(equalToConstant: 4),
-            kvStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            actionDock.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            dockStack.topAnchor.constraint(equalTo: actionDock.topAnchor),
-            dockStack.leadingAnchor.constraint(equalTo: actionDock.leadingAnchor),
-            dockStack.trailingAnchor.constraint(equalTo: actionDock.trailingAnchor),
-            dockStack.bottomAnchor.constraint(equalTo: actionDock.bottomAnchor),
-            primaryRow.widthAnchor.constraint(equalTo: dockStack.widthAnchor, constant: -24),
-            softRow.widthAnchor.constraint(equalTo: dockStack.widthAnchor, constant: -24),
-            primaryButton.heightAnchor.constraint(equalToConstant: 32),
+            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: actionsStack.topAnchor, constant: -12),
+            actionsStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            actionsStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            actionsStack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 44),
+            iconView.heightAnchor.constraint(equalToConstant: 44),
+            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
+            nameBlock.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -54),
+            progressBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
+            progressBar.heightAnchor.constraint(equalToConstant: 5),
+            kvStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
+            primaryButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
+            secondaryButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
+            pairRow.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
+            deleteButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
+            primaryButton.heightAnchor.constraint(equalToConstant: 38),
             secondaryButton.heightAnchor.constraint(equalToConstant: 32),
-            tertiaryButton.heightAnchor.constraint(equalToConstant: 44),
-            copyURLButton.heightAnchor.constraint(equalToConstant: 44),
-            deleteButton.heightAnchor.constraint(equalToConstant: 44),
+            tertiaryButton.heightAnchor.constraint(equalToConstant: 28),
+            copyURLButton.heightAnchor.constraint(equalToConstant: 28),
+            deleteButton.heightAnchor.constraint(equalToConstant: 24),
             placeholderLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             placeholderLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             placeholderLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
@@ -1336,21 +1663,15 @@ private final class InspectorViewController: NSViewController {
         update(row: nil)
     }
 
-    private func refreshDockChrome() {
-        actionDock.wantsLayer = true
-        actionDock.layer?.backgroundColor = NDMChrome.dockFill.cgColor
-        actionDock.layer?.borderColor = NDMChrome.hairline.cgColor
-    }
-
     private func stylePrimary(_ button: NSButton) {
         button.bezelStyle = .rounded
         button.setButtonType(.momentaryPushIn)
-        button.controlSize = .regular
+        button.controlSize = .large
         button.imagePosition = .imageLeading
         button.isBordered = true
         button.target = self
         button.keyEquivalent = "\r"
-        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.font = .systemFont(ofSize: 13, weight: .semibold)
         (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
         if #available(macOS 11.0, *) {
             button.bezelColor = NDMChrome.accent
@@ -1363,7 +1684,7 @@ private final class InspectorViewController: NSViewController {
         button.imagePosition = .imageLeading
         button.isBordered = true
         button.target = self
-        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.font = .systemFont(ofSize: 12.5, weight: .medium)
         (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
     }
 
@@ -1371,10 +1692,20 @@ private final class InspectorViewController: NSViewController {
         button.bezelStyle = .rounded
         button.setButtonType(.momentaryPushIn)
         button.controlSize = .small
-        button.imagePosition = .imageAbove
+        button.imagePosition = .imageLeading
         button.isBordered = true
         button.target = self
-        button.font = .systemFont(ofSize: 10, weight: .medium)
+        button.font = .systemFont(ofSize: 11.5, weight: .medium)
+        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
+    }
+
+    private func styleDelete(_ button: NSButton) {
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.target = self
+        button.font = .systemFont(ofSize: 11.5, weight: .medium)
+        button.contentTintColor = .systemRed
+        button.alignment = .center
         (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
     }
 
@@ -1395,8 +1726,8 @@ private final class InspectorViewController: NSViewController {
             button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .medium)
             button.imagePosition = .imageLeading
         case .soft(let symbol):
-            button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .medium)
-            button.imagePosition = .imageAbove
+            button.image = NDMChrome.symbol(symbol, pointSize: 10, weight: .medium)
+            button.imagePosition = .imageLeading
         }
     }
 
@@ -1408,7 +1739,7 @@ private final class InspectorViewController: NSViewController {
         keyLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         let valueLabel = NSTextField(labelWithString: value)
-        valueLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         valueLabel.textColor = .labelColor
         valueLabel.lineBreakMode = .byTruncatingMiddle
         valueLabel.maximumNumberOfLines = 1
@@ -1420,10 +1751,10 @@ private final class InspectorViewController: NSViewController {
         let row = NSStackView(views: [keyLabel, valueLabel])
         row.orientation = .horizontal
         row.alignment = .firstBaseline
-        row.spacing = 8
+        row.spacing = 10
         row.distribution = .fill
         NSLayoutConstraint.activate([
-            keyLabel.widthAnchor.constraint(equalToConstant: 48),
+            keyLabel.widthAnchor.constraint(equalToConstant: 64),
         ])
         return row
     }
@@ -1467,14 +1798,36 @@ private final class InspectorViewController: NSViewController {
         let hasSelection = row != nil
         placeholderLabel.isHidden = hasSelection
         contentStack.isHidden = !hasSelection
+        actionsStack.isHidden = !hasSelection
         titleLabel.stringValue = L10n.details.uppercased()
-        refreshDockChrome()
         guard let row else { return }
 
-        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 36)
+        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 44)
         filenameLabel.stringValue = row.filename
         filenameLabel.toolTip = row.filename
         statusLabel.stringValue = row.statusTitle
+
+        if let diag = row.diagnostic {
+            diagTitleLabel.stringValue = diag.title
+            diagMessageLabel.stringValue = diag.message
+            diagRawLabel.stringValue = diag.rawLabel
+            diagBox.isHidden = false
+        } else if let error = row.errorText, !error.isEmpty {
+            // Legacy plain-text error — still surface it, without structured copy.
+            diagTitleLabel.stringValue = L10n.downloadFailed
+            diagMessageLabel.stringValue = error
+            diagRawLabel.stringValue = ""
+            diagBox.isHidden = false
+        } else {
+            diagBox.isHidden = true
+        }
+
+        if let note = row.tuningNote {
+            tuneLabel.stringValue = note
+            tuneBox.isHidden = false
+        } else {
+            tuneBox.isHidden = true
+        }
 
         if row.isComplete {
             let split = Self.splitMagnitude(row.sizeText)
@@ -1512,10 +1865,19 @@ private final class InspectorViewController: NSViewController {
             tertiaryButton.isEnabled = true
             progressButtonShowsConnectionDetails = false
         } else if row.canRetry {
-            decorate(primaryButton, title: L10n.retry, chrome: .primary(symbol: "arrow.clockwise"))
-            primaryButton.isEnabled = true
-            decorate(secondaryButton, title: L10n.renew, chrome: .secondary(symbol: "link"))
-            secondaryButton.isEnabled = row.canRenew
+            // Follow the diagnostic's recommendation: expired links lead with Renew.
+            primaryFiresRenew = row.diagnostic?.primaryAction == .renew && row.canRenew
+            if primaryFiresRenew {
+                decorate(primaryButton, title: L10n.renew, chrome: .primary(symbol: "link"))
+                primaryButton.isEnabled = true
+                decorate(secondaryButton, title: L10n.retry, chrome: .secondary(symbol: "arrow.clockwise"))
+                secondaryButton.isEnabled = true
+            } else {
+                decorate(primaryButton, title: L10n.retry, chrome: .primary(symbol: "arrow.clockwise"))
+                primaryButton.isEnabled = true
+                decorate(secondaryButton, title: L10n.renew, chrome: .secondary(symbol: "link"))
+                secondaryButton.isEnabled = row.canRenew
+            }
             secondaryButton.isHidden = false
             decorate(tertiaryButton, title: L10n.details, chrome: .soft(symbol: "chart.bar"))
             tertiaryButton.isEnabled = row.canShowProgress
@@ -1556,7 +1918,7 @@ private final class InspectorViewController: NSViewController {
         if row.canOpen {
             onAction?(.open)
         } else if row.canRetry {
-            onAction?(.retry)
+            onAction?(primaryFiresRenew ? .renew : .retry)
         } else if row.canPause {
             onAction?(.pause)
         } else {
@@ -1568,6 +1930,8 @@ private final class InspectorViewController: NSViewController {
         guard let row = currentRow else { return }
         if row.isComplete {
             onAction?(.reveal)
+        } else if row.canRetry && primaryFiresRenew {
+            onAction?(.retry)
         } else if row.canRenew && (row.canRetry || !row.canPause) {
             onAction?(.renew)
         } else if row.canShowProgress {
@@ -1595,10 +1959,21 @@ private final class InspectorViewController: NSViewController {
 private final class URLDropView: NSView {
     var onDropURL: ((String) -> Void)?
     var onHoverChange: ((Bool) -> Void)?
+    /// Appearance-correct background (resolved in updateLayer, never snapshotted).
+    var fill: NSColor? {
+        didSet { needsDisplay = true }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
         registerForDraggedTypes([.URL, .string])
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = fill?.cgColor
     }
 
     @available(*, unavailable)

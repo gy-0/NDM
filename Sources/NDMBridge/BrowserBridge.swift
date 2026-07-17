@@ -3,7 +3,7 @@ import Network
 import CryptoKit
 import NDMCore
 
-/// Local `NeatWebSocketServer` equivalent: `ws://127.0.0.1:10007/download` + `neatextension.v1`.
+/// Local browser bridge: `ws://127.0.0.1:10007/download` + `neatextension.v1`.
 public final class BrowserBridge: @unchecked Sendable {
     public var onDownloadMessage: (@Sendable (ParsedBridgeMessage) -> Void)?
     public var onClientCountChanged: (@Sendable (Int) -> Void)?

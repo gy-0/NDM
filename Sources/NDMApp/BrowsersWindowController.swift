@@ -71,11 +71,11 @@ final class BrowsersWindowController: NSWindowController {
     @objc private func reveal() {
         let candidates = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("reverse/extension/BetterNDM"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM/reverse/extension/BetterNDM"),
+                .appendingPathComponent("extension/BetterNDM"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM-clean/extension/BetterNDM"),
             Bundle.main.bundleURL
                 .deletingLastPathComponent()
-                .appendingPathComponent("reverse/extension/BetterNDM"),
+                .appendingPathComponent("extension/BetterNDM"),
         ]
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {
             NSWorkspace.shared.activateFileViewerSelecting([url])

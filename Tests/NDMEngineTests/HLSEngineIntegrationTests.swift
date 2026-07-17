@@ -113,6 +113,69 @@ final class HLSEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent(done.filename)), plain)
     }
 
+    func testRealTSStreamRemuxesToMP4() async throws {
+        guard let ffmpeg = FFmpegTool.find() else {
+            throw XCTSkip("ffmpeg not installed; MP4 remux path not exercisable")
+        }
+        // Generate a genuine 1-second H.264+AAC MPEG-TS segment.
+        let tsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-real-\(UUID().uuidString).ts")
+        defer { try? FileManager.default.removeItem(at: tsURL) }
+        let gen = Process()
+        gen.executableURL = URL(fileURLWithPath: ffmpeg)
+        gen.arguments = [
+            "-y",
+            "-f", "lavfi", "-i", "testsrc=duration=1:size=128x72:rate=10",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "aac",
+            "-f", "mpegts", tsURL.path,
+        ]
+        gen.standardError = Pipe()
+        gen.standardOutput = Pipe()
+        try gen.run()
+        gen.waitUntilExit()
+        guard gen.terminationStatus == 0,
+              let tsData = try? Data(contentsOf: tsURL), !tsData.isEmpty else {
+            throw XCTSkip("local ffmpeg can't encode the test stream (missing libx264/aac)")
+        }
+
+        let playlist = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:2
+        #EXTINF:1.0,
+        movie.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(files: [
+            "lecture.m3u8": Data(playlist.utf8),
+            "movie.ts": tsData,
+        ])
+        try server.start()
+        defer { server.stop() }
+
+        let (manager, dest) = try makeManager()
+        let task = try await manager.addURL(server.url(path: "lecture.m3u8").absoluteString, ltype: "hls")
+        try await manager.startAndWait(taskID: task.id)
+
+        let tasks = try await manager.listTasks()
+        let done = try XCTUnwrap(tasks.first(where: { $0.id == task.id }))
+        XCTAssertEqual(done.status, .complete)
+        // "下完就是能播的 MP4": real streams come out as MP4, not TS.
+        XCTAssertTrue(done.filename.hasSuffix(".mp4"), "expected MP4, got \(done.filename)")
+        let fileURL = dest.appendingPathComponent(done.filename)
+        let size = (try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        XCTAssertGreaterThan(size, 0)
+        // The moov atom is up front (faststart) — 'ftyp' marks a valid MP4.
+        let head = try XCTUnwrap(FileHandle(forReadingFrom: fileURL).readData(ofLength: 12))
+        XCTAssertTrue(String(data: head.subdata(in: 4..<8), encoding: .ascii) == "ftyp")
+        // No stray .ts sibling in the destination.
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dest.path)
+            .filter { $0.hasSuffix(".ts") }
+        XCTAssertTrue(leftovers.isEmpty, "unexpected TS leftovers: \(leftovers)")
+    }
+
     // MARK: - Helpers
 
     private func makeManager() throws -> (DownloadManager, URL) {

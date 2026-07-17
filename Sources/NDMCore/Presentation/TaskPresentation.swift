@@ -111,6 +111,11 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var connectionsText: String
     public var urlText: String
     public var errorText: String?
+    /// Parsed human diagnostic when the stored error is structured (`#diag:`);
+    /// nil for legacy plain-text errors and non-error states.
+    public var diagnostic: DownloadDiagnostic?
+    /// "Why is it this fast" — smart connection tuning note while downloading.
+    public var tuningNote: String?
     public var canStart: Bool
     public var canPause: Bool
     public var canRetry: Bool
@@ -139,6 +144,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         connectionsText: String,
         urlText: String,
         errorText: String?,
+        diagnostic: DownloadDiagnostic? = nil,
+        tuningNote: String? = nil,
         canStart: Bool,
         canPause: Bool,
         canRetry: Bool,
@@ -163,6 +170,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.connectionsText = connectionsText
         self.urlText = urlText
         self.errorText = errorText
+        self.diagnostic = diagnostic
+        self.tuningNote = tuningNote
         self.canStart = canStart
         self.canPause = canPause
         self.canRetry = canRetry
@@ -207,10 +216,15 @@ public struct TaskRowPresentation: Equatable, Sendable {
         }
 
         let errorText: String?
+        let diagnostic: DownloadDiagnostic?
         if task.status == .error {
-            errorText = progress?.errorDescription ?? task.errorText
+            let stored = progress?.errorDescription ?? task.errorText
+            diagnostic = DownloadDiagnostic.fromStoredErrorText(stored)
+            // Rows show the human summary; legacy plain-text errors pass through.
+            errorText = diagnostic?.rowSummary ?? stored
         } else {
             errorText = nil
+            diagnostic = nil
         }
 
         let canStart = task.status == .paused
@@ -264,6 +278,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
             connectionsText: "\(task.connections)",
             urlText: task.url,
             errorText: errorText,
+            diagnostic: diagnostic,
+            tuningNote: task.status == .downloading ? progress?.tuning?.inspectorNote : nil,
             canStart: canStart,
             canPause: canPause,
             canRetry: canRetry,

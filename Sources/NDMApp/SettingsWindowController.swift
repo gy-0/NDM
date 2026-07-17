@@ -12,6 +12,8 @@ final class SettingsWindowController: NSWindowController {
     private let dirField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
+    private let smartConnCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let clipboardCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let categoryCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let allAtOnceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let completeCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -167,12 +169,15 @@ final class SettingsWindowController: NSWindowController {
             dirRow,
             caption(L10n.maxConnectionsCaption),
             connField,
+            smartConnCheck,
+            footnote(L10n.smartConnectionsFootnote),
             caption(L10n.globalSpeedCaption),
             bwField,
             sectionLabel(L10n.behavior),
             categoryCheck,
             allAtOnceCheck,
             completeCheck,
+            clipboardCheck,
         ])
     }
 
@@ -279,10 +284,14 @@ final class SettingsWindowController: NSWindowController {
     private func loadFields() {
         dirField.stringValue = settings.downloadDirectory.path
         connField.stringValue = "\(settings.maxConnections)"
+        smartConnCheck.title = L10n.smartConnectionsTitle
+        smartConnCheck.state = settings.smartConnectionsEnabled ? .on : .off
         bwField.stringValue = "\(settings.bandwidthLimitBytesPerSecond)"
         categoryCheck.state = settings.useCategoryFolders ? .on : .off
         allAtOnceCheck.state = settings.downloadAllAtOnce ? .on : .off
         completeCheck.state = settings.showCompletionDialog ? .on : .off
+        clipboardCheck.title = L10n.clipboardWatchTitle
+        clipboardCheck.state = settings.clipboardWatchEnabled ? .on : .off
         if let index = AppearanceMode.allCases.firstIndex(of: settings.appearanceMode) {
             appearancePopup.selectItem(at: index)
         }
@@ -349,11 +358,19 @@ final class SettingsWindowController: NSWindowController {
     @objc private func saveClicked() {
         var next = settings
         next.downloadDirectory = URL(fileURLWithPath: dirField.stringValue)
-        next.maxConnections = min(32, max(1, Int(connField.stringValue) ?? 8))
+        let requestedConnections = min(32, max(1, Int(connField.stringValue) ?? 8))
+        let connectionsCap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
+        if requestedConnections > connectionsCap {
+            connField.stringValue = "\(connectionsCap)"
+            UpgradeWindowController.present()
+        }
+        next.maxConnections = min(requestedConnections, connectionsCap)
+        next.smartConnections = smartConnCheck.state == .on
         next.bandwidthLimitBytesPerSecond = Int64(bwField.stringValue) ?? 0
         next.useCategoryFolders = categoryCheck.state == .on
         next.downloadAllAtOnce = allAtOnceCheck.state == .on
         next.showCompletionDialog = completeCheck.state == .on
+        next.clipboardWatch = clipboardCheck.state == .on
         let appearanceIndex = appearancePopup.indexOfSelectedItem
         if AppearanceMode.allCases.indices.contains(appearanceIndex) {
             next.appearanceMode = AppearanceMode.allCases[appearanceIndex]

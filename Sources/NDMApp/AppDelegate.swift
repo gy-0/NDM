@@ -4,10 +4,13 @@ import NDMEngine
 import NDMBridge
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var mainWindow: MainWindowController?
     private var statusItem: NSStatusItem?
     private var statusSummaryItem: NSMenuItem?
+    private var statusTasksSeparator: NSMenuItem?
+    private var statusTaskItems: [NSMenuItem] = []
+    private var statusPauseAllItem: NSMenuItem?
     private var manager: DownloadManager?
     private var bridge: BrowserBridge?
     private var settings = SettingsStore.load()
@@ -15,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var browsersWindow: BrowsersWindowController?
     private var settingsWindow: SettingsWindowController?
     private var completionWindow: CompletionWindowController?
+    private var onboardingWindow: OnboardingWindowController?
     private var terminationCheckInFlight = false
     private var statusPollTask: Task<Void, Never>?
 
@@ -113,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startStatusPolling()
             NSApp.activate(ignoringOtherApps: true)
 
+            if settings.needsOnboarding {
+                presentOnboarding()
+            }
+
             Task { [weak self, manager] in
                 await manager.setCompletionHandler { [weak self] task in
                     Task { @MainActor in
@@ -196,6 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(fileMenu, L10n.propertiesEllipsis, #selector(menuProperties), "i", [.command, .option], symbol: "info.circle")
         add(fileMenu, L10n.copyURL, #selector(menuCopyURL), "c", [.command, .shift], symbol: "doc.on.doc")
         fileMenu.addItem(.separator())
+        add(fileMenu, L10n.raceMenuTitle, #selector(showSpeedRace), "", symbol: "flag.checkered")
+        fileMenu.addItem(.separator())
         add(fileMenu, L10n.removeEllipsis, #selector(menuDelete), String(UnicodeScalar(8)!), symbol: "trash")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -261,28 +271,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = L10n.appName
         statusItem = item
+        // Drag a link onto the menu bar icon → download starts. The overlay
+        // forwards clicks by not claiming hit-testing outside of drags.
+        if let button = item.button {
+            let drop = StatusItemDropView(frame: button.bounds)
+            drop.autoresizingMask = [.width, .height]
+            drop.onDropURL = { [weak self] url in
+                self?.mainWindow?.addAndStart(urlString: url)
+                self?.mainWindow?.showWindow(nil)
+            }
+            button.addSubview(drop)
+        }
         rebuildStatusItemMenu()
+    }
+
+    /// Transparent drop layer over the status item button.
+    private final class StatusItemDropView: NSView {
+        var onDropURL: ((String) -> Void)?
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            registerForDraggedTypes([.URL, .string])
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        // Clicks pass through to the status button (menu opens as usual);
+        // only drags are consumed here.
+        override func mouseDown(with event: NSEvent) {
+            (superview as? NSButton)?.performClick(nil)
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            (superview as? NSButton)?.performClick(nil)
+        }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            let pasteboard = sender.draggingPasteboard
+            if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+               let first = urls.first, first.scheme?.hasPrefix("http") == true || first.scheme == "ftp" {
+                onDropURL?(first.absoluteString)
+                return true
+            }
+            if let text = pasteboard.string(forType: .string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               text.contains("://"),
+               let first = text.components(separatedBy: .whitespacesAndNewlines).first {
+                onDropURL?(first)
+                return true
+            }
+            return false
+        }
     }
 
     private func rebuildStatusItemMenu() {
         guard let item = statusItem else { return }
         let menu = NSMenu()
+        menu.delegate = self
         let summary = NSMenuItem(title: L10n.idle, action: nil, keyEquivalent: "")
         summary.isEnabled = false
         menu.addItem(summary)
         statusSummaryItem = summary
-        menu.addItem(.separator())
-        func addItem(_ title: String, action: Selector, symbol: String) {
+        // Live task rows are inserted here (menuWillOpen / refresh).
+        let tasksSeparator = NSMenuItem.separator()
+        menu.addItem(tasksSeparator)
+        statusTasksSeparator = tasksSeparator
+        func addItem(_ title: String, action: Selector, symbol: String) -> NSMenuItem {
             let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: "")
             menuItem.target = self
             menuItem.ndmSymbol(symbol)
             menu.addItem(menuItem)
+            return menuItem
         }
-        addItem(L10n.showMainWindow, action: #selector(showMain), symbol: "macwindow")
-        addItem(L10n.newDownloadEllipsis, action: #selector(newDownload), symbol: "plus.circle")
-        addItem(L10n.browserExtensionEllipsis, action: #selector(showBrowsers), symbol: "globe")
-        addItem(L10n.settingsEllipsis, action: #selector(openSettings), symbol: "gearshape")
-        addItem(L10n.aboutNDM, action: #selector(showAbout), symbol: "info.circle")
+        let pauseAll = addItem(L10n.pauseAll, action: #selector(pauseAllDownloads), symbol: "pause.circle")
+        pauseAll.keyEquivalent = "p"
+        pauseAll.keyEquivalentModifierMask = [.command, .shift]
+        statusPauseAllItem = pauseAll
+        _ = addItem(L10n.showMainWindow, action: #selector(showMain), symbol: "macwindow")
+        _ = addItem(L10n.newDownloadEllipsis, action: #selector(newDownload), symbol: "plus.circle")
+        _ = addItem(L10n.browserExtensionEllipsis, action: #selector(showBrowsers), symbol: "globe")
+        _ = addItem(L10n.settingsEllipsis, action: #selector(openSettings), symbol: "gearshape")
+        _ = addItem(L10n.aboutNDM, action: #selector(showAbout), symbol: "info.circle")
+        if !LicenseStore.isPro {
+            _ = addItem(L10n.proMenuTitle, action: #selector(showUpgrade), symbol: "sparkles")
+        }
         menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.quit, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApp
@@ -290,6 +366,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quit)
         item.menu = menu
         refreshStatusItem()
+    }
+
+    /// Insert/update the mini-panel task rows above the actions section.
+    private func refreshStatusTaskRows() {
+        guard let menu = statusItem?.menu, let separator = statusTasksSeparator else { return }
+        let tasks = mainWindow?.menuBarTasks() ?? []
+
+        for item in statusTaskItems {
+            menu.removeItem(item)
+        }
+        statusTaskItems.removeAll()
+
+        guard !tasks.isEmpty else {
+            statusPauseAllItem?.isHidden = true
+            return
+        }
+        statusPauseAllItem?.isHidden = false
+
+        var insertAt = menu.index(of: separator) + 1
+        for task in tasks {
+            let item = NSMenuItem(title: "", action: #selector(statusTaskClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = task.taskID
+            let row = MenuBarTaskRowView(name: task.name, detail: task.detail, fraction: task.fraction)
+            item.view = row
+            menu.insertItem(item, at: insertAt)
+            statusTaskItems.append(item)
+            insertAt += 1
+        }
+        let trailingSeparator = NSMenuItem.separator()
+        menu.insertItem(trailingSeparator, at: insertAt)
+        statusTaskItems.append(trailingSeparator)
+    }
+
+    @objc private func statusTaskClicked(_ sender: NSMenuItem) {
+        guard let taskID = sender.representedObject as? Int64 else { return }
+        mainWindow?.showProgress(for: taskID)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func pauseAllDownloads() {
+        mainWindow?.pauseAllActive()
+    }
+
+    @objc private func showSpeedRace() {
+        SpeedRaceWindowController.present()
+    }
+
+    @objc private func showUpgrade() {
+        UpgradeWindowController.present { [weak self] in
+            self?.rebuildStatusItemMenu()
+        }
+    }
+
+    nonisolated func menuWillOpen(_ menu: NSMenu) {
+        Task { @MainActor in
+            self.refreshStatusItem()
+        }
     }
 
     private func startStatusPolling() {
@@ -306,9 +440,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let snapshot = mainWindow?.statusBarSnapshot() ?? (activeCount: 0, bytesPerSecond: 0)
         let activeCount = snapshot.activeCount
         let bytesPerSecond = snapshot.bytesPerSecond
+        guard let button = statusItem?.button else { return }
+        button.image = NDMChrome.symbol("arrow.down.circle", pointSize: 13, weight: .medium)
+        button.imagePosition = activeCount == 0 ? .imageOnly : .imageLeading
+        button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         if activeCount == 0 {
-            statusItem?.button?.title = L10n.appName
+            // Quiet when idle — just the outline, no text shouting.
+            button.title = ""
             statusSummaryItem?.title = bridge == nil ? L10n.idleBridgeOff : L10n.idle
+            refreshStatusTaskRows()
+            refreshDockTile(activeCount: 0, fraction: 0)
             return
         }
         let speedText: String
@@ -317,13 +458,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             speedText = "…"
         }
-        statusItem?.button?.title = "\(L10n.appName) \(activeCount)"
+        button.title = " \(speedText)"
         statusSummaryItem?.title = L10n.activeSummary(activeCount, speedText)
+        refreshStatusTaskRows()
+        refreshDockTile(
+            activeCount: activeCount,
+            fraction: mainWindow?.dockProgressSnapshot() ?? 0
+        )
+    }
+
+    // MARK: - Dock progress
+
+    private var dockProgressView: DockProgressView?
+
+    /// Aggregate progress bar over the Dock icon while downloading;
+    /// removed (back to the plain icon) the moment everything is done.
+    private func refreshDockTile(activeCount: Int, fraction: Double) {
+        let tile = NSApp.dockTile
+        if activeCount == 0 {
+            if dockProgressView != nil {
+                tile.contentView = nil
+                dockProgressView = nil
+                tile.badgeLabel = nil
+                tile.display()
+            }
+            return
+        }
+        let view: DockProgressView
+        if let existing = dockProgressView {
+            view = existing
+        } else {
+            view = DockProgressView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
+            tile.contentView = view
+            dockProgressView = view
+        }
+        view.fraction = fraction
+        tile.badgeLabel = "\(activeCount)"
+        tile.display()
+    }
+
+    private final class DockProgressView: NSView {
+        var fraction: Double = 0 {
+            didSet { needsDisplay = true }
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            NSApp.applicationIconImage.draw(in: bounds)
+            let barRect = NSRect(
+                x: bounds.width * 0.16,
+                y: bounds.height * 0.10,
+                width: bounds.width * 0.68,
+                height: bounds.height * 0.09
+            )
+            let track = NSBezierPath(roundedRect: barRect, xRadius: barRect.height / 2, yRadius: barRect.height / 2)
+            NSColor.white.withAlphaComponent(0.9).setFill()
+            track.fill()
+            NSColor.black.withAlphaComponent(0.15).setStroke()
+            track.stroke()
+            var fillRect = barRect.insetBy(dx: 1.5, dy: 1.5)
+            fillRect.size.width = max(fillRect.height, fillRect.width * CGFloat(min(1, max(0, fraction))))
+            let fill = NSBezierPath(roundedRect: fillRect, xRadius: fillRect.height / 2, yRadius: fillRect.height / 2)
+            NSColor.controlAccentColor.setFill()
+            fill.fill()
+        }
     }
 
     @objc private func showMain() {
         mainWindow?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func presentOnboarding() {
+        let wc = OnboardingWindowController()
+        wc.onInstallExtension = { [weak self] in
+            self?.showBrowsers()
+        }
+        wc.onStartTestDownload = { [weak self] url in
+            self?.mainWindow?.addAndStart(urlString: url)
+        }
+        wc.onFinished = { [weak self] in
+            guard let self else { return }
+            self.settings.onboardingCompleted = true
+            SettingsStore.save(self.settings)
+            Task { await self.manager?.updateSettings(self.settings) }
+            self.onboardingWindow = nil
+        }
+        onboardingWindow = wc
+        wc.showWindow(nil)
+        wc.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func newDownload() {
@@ -390,6 +612,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// "SwiftUI Masterclass · Week 3" + "1080p" → a safe media filename.
+    static func mediaFilename(pageTitle: String, qualityLabel: String) -> String {
+        let unsafe = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        let cleaned = pageTitle
+            .components(separatedBy: unsafe)
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = cleaned.isEmpty ? "video" : String(cleaned.prefix(120))
+        return "\(base) (\(qualityLabel)).mp4"
+    }
+
+    /// One task row in the menu bar mini panel: name · percent/ETA · thin bar.
+    @MainActor
+    private final class MenuBarTaskRowView: NSView {
+        init(name: String, detail: String, fraction: Double) {
+            super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 44))
+            let nameLabel = NSTextField(labelWithString: name)
+            nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+            nameLabel.lineBreakMode = .byTruncatingMiddle
+            nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let detailLabel = NSTextField(labelWithString: detail)
+            detailLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            detailLabel.textColor = .secondaryLabelColor
+            detailLabel.alignment = .right
+            detailLabel.setContentHuggingPriority(.required, for: .horizontal)
+            let bar = NSProgressIndicator()
+            bar.isIndeterminate = false
+            bar.minValue = 0
+            bar.maxValue = 1
+            bar.doubleValue = fraction
+            bar.controlSize = .small
+            bar.style = .bar
+            for view in [nameLabel, detailLabel, bar] {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(view)
+            }
+            NSLayoutConstraint.activate([
+                widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+                heightAnchor.constraint(equalToConstant: 44),
+                nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+                nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+                detailLabel.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+                detailLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 10),
+                detailLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+                bar.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
+                bar.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+                bar.trailingAnchor.constraint(equalTo: detailLabel.trailingAnchor),
+                bar.heightAnchor.constraint(equalToConstant: 4),
+            ])
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func mouseUp(with event: NSEvent) {
+            if let item = enclosingMenuItem, let menu = item.menu {
+                menu.cancelTracking()
+                _ = item.target?.perform(item.action, with: item)
+            }
+        }
+    }
+
     private func handleBrowserDownloadRequest(_ msg: ParsedBridgeMessage) async {
         guard let manager else { return }
         bridge?.sendToAllClients(BridgeConstants.waiting)
@@ -414,6 +698,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // HLS master with several renditions → the quality picker decides,
+        // not "highest bandwidth silently wins". Any probe failure falls through.
+        if accepted.ltype.lowercased() == "hls" || accepted.url.lowercased().contains(".m3u8") {
+            var probeHeaders: [String: String] = [:]
+            if !accepted.referer.isEmpty { probeHeaders["Referer"] = accepted.referer }
+            if !accepted.origin.isEmpty { probeHeaders["Origin"] = accepted.origin }
+            if !accepted.cookies.isEmpty { probeHeaders["Cookie"] = accepted.cookies }
+            if let probe = await HLSMasterProbe.probe(
+                urlString: accepted.url,
+                headers: probeHeaders,
+                userAgent: accepted.userAgent.isEmpty ? nil : accepted.userAgent
+            ) {
+                let title = accepted.pageTitle.isEmpty ? accepted.filename : accepted.pageTitle
+                switch await QualityPickerWindowController.choose(probe: probe, title: title) {
+                case .cancel:
+                    return
+                case .download(let option):
+                    if let resolved = HLSPlaylist.resolveURL(option.variant.uri, against: probe.masterURL) {
+                        accepted.url = resolved.absoluteString
+                        accepted.ltype = "hls"
+                        if accepted.filename.isEmpty, !accepted.pageTitle.isEmpty {
+                            accepted.filename = Self.mediaFilename(
+                                pageTitle: accepted.pageTitle,
+                                qualityLabel: option.label
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         do {
             let task = try await manager.addFromBridge(accepted)
             // Show progress first so capture → window is immediate.
@@ -422,9 +737,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await mainWindow?.reload()
         } catch {
             NSLog("handleBrowserDownloadRequest failed: \(error.localizedDescription)")
+            let diag = DownloadDiagnostic.classify(error)
             let alert = NSAlert()
-            alert.messageText = L10n.downloadFailed
-            alert.informativeText = error.localizedDescription
+            alert.messageText = diag.title
+            alert.informativeText = "\(diag.message)\n(\(diag.rawLabel))"
             alert.runModal()
         }
     }

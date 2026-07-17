@@ -8,6 +8,8 @@ public struct DownloadProgress: Sendable, Equatable {
     public var segmentStates: [SegmentState]
     public var status: DownloadStatus
     public var errorDescription: String?
+    /// Smart connection tuning trace (multi-connection HTTP tasks only).
+    public var tuning: ConnectionTuning?
 
     public init(
         taskID: Int64,
@@ -16,7 +18,8 @@ public struct DownloadProgress: Sendable, Equatable {
         bytesPerSecond: Double = 0,
         segmentStates: [SegmentState] = [],
         status: DownloadStatus = .waiting,
-        errorDescription: String? = nil
+        errorDescription: String? = nil,
+        tuning: ConnectionTuning? = nil
     ) {
         self.taskID = taskID
         self.totalBytes = totalBytes
@@ -25,6 +28,7 @@ public struct DownloadProgress: Sendable, Equatable {
         self.segmentStates = segmentStates
         self.status = status
         self.errorDescription = errorDescription
+        self.tuning = tuning
     }
 
     public var fractionCompleted: Double {

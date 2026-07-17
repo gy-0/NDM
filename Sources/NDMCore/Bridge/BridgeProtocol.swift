@@ -1,6 +1,6 @@
 import Foundation
 
-/// Host WebSocket constants — match BetterNDM / original NDM binary strings.
+/// Host WebSocket constants for the local browser-extension bridge.
 public enum BridgeConstants {
     public static let host = "127.0.0.1"
     public static let port: UInt16 = 10_007
@@ -26,7 +26,7 @@ public enum BridgeConstants {
     }
 }
 
-/// Extension → host text protocol (CRLF lines). See reverse/specs/07_BROWSER_PROTOCOL.md
+/// Extension → host text protocol (CRLF key:value lines).
 public enum BridgeMessageParser {
     public static func parse(_ raw: String) throws -> ParsedBridgeMessage {
         if raw.utf8.count > BridgeConstants.maxMessageBytes {

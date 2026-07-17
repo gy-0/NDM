@@ -1,11 +1,10 @@
 import Foundation
 import NDMCore
 
-/// Multi-connection HTTP(S) engine aligned with NDM behaviour recovered from
-/// LogFile + Ghidra (`BuildDownloadEngine`, Range builders, Merging stage).
+/// Multi-connection HTTP(S) download engine.
 ///
-/// State path (log): Unknown → Starting... → Downloading... → Merging... → Completed
-/// Resume: reload `segments.bin` + partial `seg.xN` (log: "Segments were loaded from segments.bin file.").
+/// State path: Unknown → Starting → Downloading → Merging → Completed.
+/// Resume: reload `segments.bin` + partial `seg.xN` files.
 public actor DownloadEngine {
     public private(set) var progress: DownloadProgress
     public private(set) var engineState: EngineState = .unknown
@@ -32,6 +31,13 @@ public actor DownloadEngine {
     private var activePlanToken: CancelToken?
     private var planGeneration: UInt64 = 0
     private var isBootstrappingDynamicPlan = false
+    /// Smart connection tuning: probe upward from a low count, stop honestly.
+    private let autoTune: Bool
+    private let tuneConfig: AutoTuneConfig
+    /// The user's configured max — tuning never exceeds it.
+    private let connectionCap: Int
+    private var tuneTask: Task<Void, Never>?
+    private var tuneAborted = false
 
     private enum ReplanSignal: Error {
         case requested
@@ -53,12 +59,17 @@ public actor DownloadEngine {
         workDirectory: URL,
         httpProxy: ProxySettings? = nil,
         socksProxy: SocksProxySettings? = nil,
-        globalBandwidthLimit: Int64 = 0
+        globalBandwidthLimit: Int64 = 0,
+        autoTuneConnections: Bool = false,
+        tuneConfig: AutoTuneConfig = .default
     ) {
         self.taskID = taskID
         self.request = request
         self.workDirectory = workDirectory
         self.httpProxyCredentials = httpProxy
+        self.autoTune = autoTuneConnections
+        self.tuneConfig = tuneConfig
+        self.connectionCap = max(1, min(request.connections, 32))
         self.currentConnections = max(1, min(request.connections, 32))
         self.progress = DownloadProgress(taskID: taskID, status: .waiting)
         let perTask = request.bandwidthLimitBytesPerSecond
@@ -117,12 +128,14 @@ public actor DownloadEngine {
         token.pause()
         engineState = .paused
         progress.status = .paused
+        tuneTask?.cancel()
         log("DownloadEngine State Changed : Downloading... -> Paused")
     }
 
     public func cancel() {
         token.cancel()
         progress.status = .incomplete
+        tuneTask?.cancel()
         log("Download Canceled By User.")
     }
 
@@ -154,6 +167,19 @@ public actor DownloadEngine {
         )
 
         setState(.downloading)
+
+        // Smart tuning: big resumable files start low and double while it pays off.
+        let tuningActive = autoTune && acceptRanges && total >= tuneConfig.minTotalBytes
+        if tuningActive {
+            currentConnections = max(1, min(tuneConfig.startConnections, connectionCap))
+            log("SmartTune enabled: starting at \(currentConnections), cap \(connectionCap)")
+        } else if autoTune && !acceptRanges {
+            progress.tuning = ConnectionTuning(
+                steps: [],
+                currentConnections: 1,
+                outcome: .rangeUnsupported
+            )
+        }
 
         if acceptRanges {
             var segments: [SegmentRecord]
@@ -200,6 +226,13 @@ public actor DownloadEngine {
                 try writeSegmentsBin(segments)
             }
 
+            if tuningActive {
+                tuneTask = Task { await self.runAutoTune() }
+            }
+            defer {
+                tuneTask?.cancel()
+                tuneTask = nil
+            }
             let finalSegments = try await downloadSegmentsWithReplanning(segments, total: total)
             try throwIfStopped()
 
@@ -260,8 +293,23 @@ public actor DownloadEngine {
         return nil
     }
 
-    /// Runtime `applyConnectionsCount:` — replan unfinished ranges (pause soft-stop not required).
+    /// Runtime `applyConnectionsCount:` — user-driven; smart tuning steps aside.
     public func applyConnectionsCount(_ count: Int) throws {
+        if autoTune {
+            tuneAborted = true
+            tuneTask?.cancel()
+            tuneTask = nil
+            progress.tuning = ConnectionTuning(
+                steps: progress.tuning?.steps ?? [],
+                currentConnections: max(1, min(count, 32)),
+                outcome: .userOverride
+            )
+        }
+        try replanConnections(count)
+    }
+
+    /// Replan unfinished ranges to a new concurrency (pause soft-stop not required).
+    private func replanConnections(_ count: Int) throws {
         let n = max(1, min(count, 32))
         currentConnections = n
         planGeneration &+= 1
@@ -404,6 +452,73 @@ public actor DownloadEngine {
         }
 
         throw EngineError.authRequired(status: status, challenge: header)
+    }
+
+    // MARK: - Smart connection tuning
+
+    /// Probe loop: sample throughput, double connections while it pays off,
+    /// revert the last step when it didn't, and record an honest conclusion.
+    /// Runs concurrently with the transfer; every reconfiguration goes through
+    /// the same live-replan path as a manual connection change.
+    private func runAutoTune() async {
+        var steps: [ConnectionTuning.Step] = []
+        log("SmartTune: probe loop starting")
+        try? await Task.sleep(nanoseconds: tuneConfig.settleNanos)
+        while !Task.isCancelled, !tuneAborted, engineState == .downloading {
+            guard let speed = await sampleThroughput() else {
+                log("SmartTune: sample unavailable (cancelled=\(Task.isCancelled) state=\(engineState.rawValue))")
+                break
+            }
+            steps.append(ConnectionTuning.Step(connections: currentConnections, bytesPerSecond: speed))
+            publishTuning(steps: steps, outcome: .tuning)
+            log("SmartTune: \(currentConnections) connections ≈ \(Int(speed / 1024)) KB/s")
+
+            // Close to done? Finishing beats experimenting.
+            let remaining = progress.totalBytes - progress.completedBytes
+            if remaining < tuneConfig.minRemainingBytes || remaining < Int64(speed * 4) {
+                publishTuning(steps: steps, outcome: SmartConnectionTuner.outcome(cap: connectionCap, steps: steps))
+                return
+            }
+
+            if let next = SmartConnectionTuner.nextConnections(cap: connectionCap, steps: steps) {
+                log("SmartTune: raising connections \(currentConnections) → \(next)")
+                try? replanConnections(next)
+                try? await Task.sleep(nanoseconds: tuneConfig.settleNanos)
+            } else {
+                if let back = SmartConnectionTuner.revertTarget(steps: steps) {
+                    log("SmartTune: no gain at \(currentConnections); reverting to \(back)")
+                    try? replanConnections(back)
+                }
+                publishTuning(steps: steps, outcome: SmartConnectionTuner.outcome(cap: connectionCap, steps: steps))
+                return
+            }
+        }
+    }
+
+    private func sampleThroughput() async -> Double? {
+        // A window can land inside a transient stall (throttle refill,
+        // connection ramp-up) — retry a couple of times before giving up.
+        for _ in 0..<3 {
+            let startBytes = progress.completedBytes
+            let started = Date()
+            try? await Task.sleep(nanoseconds: tuneConfig.windowNanos)
+            guard !Task.isCancelled, !tuneAborted, engineState == .downloading else { return nil }
+            let dt = Date().timeIntervalSince(started)
+            let delta = progress.completedBytes - startBytes
+            if dt > 0, delta > 0 {
+                return Double(delta) / dt
+            }
+        }
+        return nil
+    }
+
+    private func publishTuning(steps: [ConnectionTuning.Step], outcome: ConnectionTuning.Outcome) {
+        guard !tuneAborted else { return }
+        progress.tuning = ConnectionTuning(
+            steps: steps,
+            currentConnections: currentConnections,
+            outcome: outcome
+        )
     }
 
     // MARK: - Download

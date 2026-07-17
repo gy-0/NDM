@@ -39,6 +39,18 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var appearanceMode: AppearanceMode
     /// UI language: System (default) / English / 简体中文.
     public var languageMode: AppLanguageMode
+    /// Smart connection tuning: start low, double while it pays off, explain why.
+    /// Optional for backward-compatible decoding of older settings files —
+    /// read through `smartConnectionsEnabled` (default on).
+    public var smartConnections: Bool?
+    /// First-run onboarding shown? Optional for backward-compatible decoding.
+    public var onboardingCompleted: Bool?
+    /// Offer to download links found on the clipboard when the app activates.
+    public var clipboardWatch: Bool?
+
+    public var smartConnectionsEnabled: Bool { smartConnections ?? true }
+    public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
+    public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
 
     public init(
         downloadDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0],
@@ -58,7 +70,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         showBrowserMediaPanel: Bool = true,
         confirmBrowserDownloads: Bool = false,
         appearanceMode: AppearanceMode = .system,
-        languageMode: AppLanguageMode = .system
+        languageMode: AppLanguageMode = .system,
+        smartConnections: Bool? = true
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -78,6 +91,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.confirmBrowserDownloads = confirmBrowserDownloads
         self.appearanceMode = appearanceMode
         self.languageMode = languageMode
+        self.smartConnections = smartConnections
     }
 }
 

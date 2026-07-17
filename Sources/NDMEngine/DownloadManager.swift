@@ -272,7 +272,8 @@ public actor DownloadManager {
                 workDirectory: workDir,
                 httpProxy: settings.httpProxy,
                 socksProxy: settings.socksProxy,
-                globalBandwidthLimit: settings.bandwidthLimitBytesPerSecond
+                globalBandwidthLimit: settings.bandwidthLimitBytesPerSecond,
+                autoTuneConnections: settings.smartConnectionsEnabled
             )
             engines[taskID] = engine
             runningTasks[taskID] = Task { [store] in
@@ -320,7 +321,13 @@ public actor DownloadManager {
             } else {
                 failed.status = .error
             }
-            failed.errorText = error.localizedDescription
+            if failed.status == .error {
+                // Persist the structured diagnostic key; presentation re-localizes
+                // it at render time (see DownloadDiagnostic.fromStoredErrorText).
+                failed.errorText = DownloadDiagnostic.classify(error).storageString
+            } else {
+                failed.errorText = error.localizedDescription
+            }
             try? store.update(failed)
         }
         clearRunning(taskID)
@@ -346,7 +353,10 @@ public actor DownloadManager {
         let tasks = try store.allDownloads()
         guard let task = tasks.first(where: { $0.id == taskID }) else { return }
         if task.status == .error {
-            throw ManagerError.downloadFailed(task.errorText ?? "error")
+            let stored = task.errorText
+            let readable = DownloadDiagnostic.fromStoredErrorText(stored)
+                .map { "\($0.title) [\($0.rawLabel)]" }
+            throw ManagerError.downloadFailed(readable ?? stored ?? "error")
         }
         if task.status == .paused {
             throw EngineError.paused

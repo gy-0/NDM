@@ -1,12 +1,11 @@
 import Foundation
 import CommonCrypto
 
-/// Faithful reimplementation of `+[NeatNsUtils encryptString:]` /
-/// `-[NSData(AES256) AES256EncryptWithKey:]` recovered via radare2/Ghidra.
+/// AES-256 helper for bridge credential framing.
 ///
 /// CCCrypt(AES, PKCS7, key="SG2921" zero-padded to 32, IV=NULL→zeros, Base64).
 public enum NeatCrypto {
-    /// Hardcoded key string at `str.cstr.SG2921` (0x1000ca1b0).
+    /// Shared passphrase used by the browser-bridge crypto framing.
     public static let passwordKey = "SG2921"
 
     private static var aesKey: Data {

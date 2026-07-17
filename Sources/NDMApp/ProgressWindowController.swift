@@ -43,6 +43,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let applyConnButton = NSButton(title: L10n.apply, target: nil, action: nil)
     private let renewButton = NSButton(title: L10n.renewURLEllipsis, target: nil, action: nil)
     private let optionsNote = NSTextField(wrappingLabelWithString: L10n.optionsNote)
+    private let smartlineBox = ChromeBox(
+        fill: NDMChrome.accent.withAlphaComponent(0.07),
+        borderColor: NDMChrome.accent.withAlphaComponent(0.20),
+        cornerRadius: 8,
+        borderWidth: 1
+    )
+    private let smartlineLabel = NSTextField(wrappingLabelWithString: "")
 
     // Connections tab
     private let connectionScrollView = NSScrollView()
@@ -200,11 +207,25 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         stripBlock.alignment = .leading
         stripBlock.spacing = 6
 
+        // Smartline — the tuner narrating "why this connection count".
+        smartlineLabel.font = .systemFont(ofSize: 11)
+        smartlineLabel.textColor = .labelColor
+        smartlineLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let smartStack = NSStackView(views: [smartlineLabel])
+        smartStack.orientation = .vertical
+        smartStack.alignment = .leading
+        smartStack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        smartStack.translatesAutoresizingMaskIntoConstraints = false
+        smartlineBox.translatesAutoresizingMaskIntoConstraints = false
+        smartlineBox.addSubview(smartStack)
+        smartlineBox.isHidden = true
+
         let stack = NSStackView(views: [
             header,
             card,
             overallProgress,
             stripBlock,
+            smartlineBox,
             actions,
         ])
         stack.orientation = .vertical
@@ -219,6 +240,12 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: pane.bottomAnchor),
+            smartlineBox.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            smartStack.topAnchor.constraint(equalTo: smartlineBox.topAnchor),
+            smartStack.leadingAnchor.constraint(equalTo: smartlineBox.leadingAnchor),
+            smartStack.trailingAnchor.constraint(equalTo: smartlineBox.trailingAnchor),
+            smartStack.bottomAnchor.constraint(equalTo: smartlineBox.bottomAnchor),
+            smartlineLabel.widthAnchor.constraint(equalTo: smartStack.widthAnchor, constant: -20),
             card.widthAnchor.constraint(equalTo: stack.widthAnchor),
             overallProgress.widthAnchor.constraint(equalTo: stack.widthAnchor),
             overallProgress.heightAnchor.constraint(equalToConstant: 12),
@@ -261,57 +288,97 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Design-suite statgrid: four glanceable cells up top, then the quiet
+    /// URL / size details. One sweep of the eyes answers "how is it going".
     private func makeStatsCard() -> NSView {
-        let rows: [(String, NSView)] = [
-            (L10n.url, urlValue),
-            (L10n.size, sizeValue),
-            (L10n.downloaded, downloadedValue),
-            (L10n.speed, speedValue),
-            (L10n.timeLeft, etaValue),
-            (L10n.resumable, resumeValue),
-        ]
-
-        let grid = NSStackView()
-        grid.orientation = .vertical
-        grid.spacing = 8
-        grid.alignment = .leading
-
-        for (title, value) in rows {
-            let key = NSTextField(labelWithString: title)
-            key.font = .systemFont(ofSize: 12)
-            key.textColor = .secondaryLabelColor
-            key.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-            key.widthAnchor.constraint(equalToConstant: 88).isActive = true
-
-            if value is LinkLabel {
-                // keep
-            } else if let field = value as? NSTextField {
-                field.lineBreakMode = .byTruncatingMiddle
+        func statCell(_ caption: String, _ value: NSView) -> NSView {
+            let cap = NSTextField(labelWithString: caption.uppercased())
+            cap.font = .systemFont(ofSize: 9.5, weight: .semibold)
+            cap.textColor = .tertiaryLabelColor
+            if let field = value as? NSTextField {
+                field.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
+                field.textColor = .labelColor
+                field.lineBreakMode = .byTruncatingTail
             }
-
-            let row = NSStackView(views: [key, value])
-            row.orientation = .horizontal
-            row.alignment = .firstBaseline
-            row.spacing = 10
-            row.distribution = .fill
+            let cell = NSStackView(views: [cap, value])
+            cell.orientation = .vertical
+            cell.alignment = .leading
+            cell.spacing = 3
             value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            grid.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
+            return cell
         }
 
-        // Status row with pill + reveal
-        let statusKey = NSTextField(labelWithString: L10n.status)
-        statusKey.font = .systemFont(ofSize: 12)
-        statusKey.textColor = .secondaryLabelColor
-        statusKey.widthAnchor.constraint(equalToConstant: 88).isActive = true
-        let statusRow = NSStackView(views: [statusKey, statusPill, NSView(), revealButton])
-        statusRow.orientation = .horizontal
-        statusRow.alignment = .centerY
-        statusRow.spacing = 10
-        grid.insertArrangedSubview(statusRow, at: 1)
-        statusRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
-        revealButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        revealButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        func vSeparator() -> NSView {
+            let line = ChromeBox(fill: NDMChrome.hairline)
+            line.translatesAutoresizingMaskIntoConstraints = false
+            line.widthAnchor.constraint(equalToConstant: 1).isActive = true
+            line.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            return line
+        }
+
+        let statusCell: NSView = {
+            let cap = NSTextField(labelWithString: L10n.status.uppercased())
+            cap.font = .systemFont(ofSize: 9.5, weight: .semibold)
+            cap.textColor = .tertiaryLabelColor
+            let cell = NSStackView(views: [cap, statusPill])
+            cell.orientation = .vertical
+            cell.alignment = .leading
+            cell.spacing = 4
+            return cell
+        }()
+
+        let gridRow = NSStackView(views: [
+            statCell(L10n.speed, speedValue),
+            vSeparator(),
+            statCell(L10n.downloaded, downloadedValue),
+            vSeparator(),
+            statCell(L10n.timeLeft, etaValue),
+            vSeparator(),
+            statusCell,
+        ])
+        gridRow.orientation = .horizontal
+        gridRow.alignment = .centerY
+        gridRow.spacing = 12
+        gridRow.distribution = .fill
+
+        let divider = ChromeBox(fill: NDMChrome.hairline)
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
+
+        // Quiet detail rows: clickable URL + size / resumable, reveal at right.
+        urlValue.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let urlRow = NSStackView(views: [urlValue, revealButton])
+        urlRow.orientation = .horizontal
+        urlRow.alignment = .centerY
+        urlRow.spacing = 8
+        revealButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        revealButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+
+        for field in [sizeValue, resumeValue] {
+            field.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            field.textColor = .secondaryLabelColor
+        }
+        let sizeCaption = NSTextField(labelWithString: L10n.size)
+        sizeCaption.font = .systemFont(ofSize: 11)
+        sizeCaption.textColor = .tertiaryLabelColor
+        let resumeCaption = NSTextField(labelWithString: L10n.resumable)
+        resumeCaption.font = .systemFont(ofSize: 11)
+        resumeCaption.textColor = .tertiaryLabelColor
+        let metaRow = NSStackView(views: [sizeCaption, sizeValue, resumeCaption, resumeValue, NSView()])
+        metaRow.orientation = .horizontal
+        metaRow.alignment = .firstBaseline
+        metaRow.spacing = 6
+        metaRow.setCustomSpacing(16, after: sizeValue)
+
+        let grid = NSStackView(views: [gridRow, divider, urlRow, metaRow])
+        grid.orientation = .vertical
+        grid.spacing = 10
+        grid.alignment = .leading
+        grid.setCustomSpacing(12, after: gridRow)
+        gridRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
+        divider.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
+        urlRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
+        metaRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
 
         let card = AppearanceAwareCardView()
         card.wantsLayer = true
@@ -322,10 +389,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         grid.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(grid)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+            grid.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
             grid.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             grid.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            grid.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+            grid.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
         ])
 
         return card
@@ -519,6 +586,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         configureActionButtons(for: progress.status, task: task)
         renderConnections(segments, downloadStatus: progress.status)
+
+        if let tuning = progress.tuning, progress.status != .complete {
+            smartlineLabel.stringValue = tuning.summaryLine
+            smartlineBox.isHidden = false
+        } else {
+            smartlineBox.isHidden = true
+        }
     }
 
     private func configureActionButtons(for status: DownloadStatus, task: DownloadTask?) {
@@ -633,6 +707,19 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func applyConnections() {
         let n = connectionsPopup.indexOfSelectedItem + 1
+        let cap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
+        if n > cap {
+            connectionsPopup.selectItem(at: cap - 1)
+            let alert = NSAlert()
+            alert.messageText = L10n.proGateConnectionsTitle
+            alert.informativeText = L10n.proGateConnectionsBody
+            alert.addButton(withTitle: L10n.proCTA)
+            alert.addButton(withTitle: L10n.cancel)
+            if alert.runModal() == .alertFirstButtonReturn {
+                UpgradeWindowController.present()
+            }
+            return
+        }
         Task {
             do {
                 try await manager.applyConnections(taskID: taskID, count: n)

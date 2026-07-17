@@ -50,14 +50,6 @@ enum NDMChrome {
     static func applyWindowChrome(_ window: NSWindow) {
         window.backgroundColor = windowFill
         window.isOpaque = true
-        if #available(macOS 11.0, *) {
-            window.titlebarSeparatorStyle = .line
-        }
-    }
-
-    static func applyLayerFill(_ view: NSView, _ color: NSColor) {
-        view.wantsLayer = true
-        view.layer?.backgroundColor = color.cgColor
     }
 
     static func symbol(
@@ -113,5 +105,73 @@ extension NSMenuItem {
     @MainActor
     func ndmSymbol(_ name: String) {
         image = NDMChrome.symbol(name, pointSize: 13, weight: .regular)
+    }
+}
+
+/// Appearance-correct rounded surface. Colors are resolved in `updateLayer()`,
+/// which AppKit re-runs whenever the effective appearance flips — this is the
+/// fix for "switched to Light but the panel stayed dark": never snapshot a
+/// dynamic NSColor into `layer?.backgroundColor` at setup time.
+class ChromeBox: NSView {
+    var fill: NSColor? {
+        didSet { needsDisplay = true }
+    }
+    var borderColor: NSColor? {
+        didSet { needsDisplay = true }
+    }
+    var cornerRadius: CGFloat = 0 {
+        didSet { needsDisplay = true }
+    }
+    var borderWidth: CGFloat = 0 {
+        didSet { needsDisplay = true }
+    }
+
+    init(fill: NSColor? = nil, borderColor: NSColor? = nil, cornerRadius: CGFloat = 0, borderWidth: CGFloat = 0) {
+        self.fill = fill
+        self.borderColor = borderColor
+        self.cornerRadius = cornerRadius
+        self.borderWidth = borderWidth
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = fill?.cgColor
+        layer?.borderColor = borderColor?.cgColor
+        layer?.cornerRadius = cornerRadius
+        layer?.borderWidth = borderWidth
+    }
+}
+
+/// Stack view drawing an appearance-correct card behind its content.
+final class CardStackView: NSStackView {
+    var fill: NSColor? = NDMChrome.dockFill {
+        didSet { needsDisplay = true }
+    }
+    var cardBorderColor: NSColor? = NDMChrome.hairline {
+        didSet { needsDisplay = true }
+    }
+    var cornerRadius: CGFloat = 10 {
+        didSet { needsDisplay = true }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        wantsLayer = true
+        layer?.backgroundColor = fill?.cgColor
+        layer?.borderColor = cardBorderColor?.cgColor
+        layer?.borderWidth = cardBorderColor == nil ? 0 : 1
+        layer?.cornerRadius = cornerRadius
     }
 }

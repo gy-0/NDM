@@ -135,12 +135,37 @@ public actor HLSEngine {
 
         log("DownloadEngine State Changed : Downloading... -> Merging...")
         let filename = outputFilename()
-        let finalURL = request.destinationDirectory.appendingPathComponent(filename)
         try FileManager.default.createDirectory(
             at: request.destinationDirectory,
             withIntermediateDirectories: true
         )
-        try mergeTS(count: media.segments.count, from: tsDir, to: finalURL)
+
+        // Merge in the work directory first, then finalize into the destination.
+        let mergedURL = workDirectory.appendingPathComponent("merged.ts")
+        try mergeTS(count: media.segments.count, from: tsDir, to: mergedURL)
+
+        // "下完就是能播的 MP4": lossless remux by default when ffmpeg is present.
+        // Fake/broken streams (or exotic codecs) fail fast → keep the TS as-is.
+        var finalURL = request.destinationDirectory.appendingPathComponent(filename)
+        if let ffmpeg = FFmpegTool.find() {
+            let mp4URL = request.destinationDirectory
+                .appendingPathComponent((filename as NSString).deletingPathExtension)
+                .appendingPathExtension("mp4")
+            do {
+                try FFmpegTool.remuxToMP4(ffmpeg: ffmpeg, input: mergedURL, output: mp4URL)
+                finalURL = mp4URL
+                try? FileManager.default.removeItem(at: mergedURL)
+                log("Remuxed TS -> MP4 (stream copy, faststart)")
+            } catch {
+                log("MP4 remux unavailable for this stream; keeping TS. \(error.localizedDescription)")
+                finalURL = Self.tsFallbackURL(for: finalURL)
+                try Self.replaceItem(at: finalURL, with: mergedURL)
+            }
+        } else {
+            log("ffmpeg not found; keeping TS output")
+            finalURL = Self.tsFallbackURL(for: finalURL)
+            try Self.replaceItem(at: finalURL, with: mergedURL)
+        }
 
         progress.status = .complete
         progress.completedBytes = progress.totalBytes
@@ -238,6 +263,26 @@ public actor HLSEngine {
             let part = dir.appendingPathComponent(String(format: "seg_%05d.ts", i))
             let data = try Data(contentsOf: part)
             try out.write(contentsOf: data)
+        }
+    }
+
+    /// A requested `.mp4` name must not end up holding raw TS bytes when the
+    /// remux couldn't run — relabel the fallback file honestly.
+    private static func tsFallbackURL(for url: URL) -> URL {
+        guard url.pathExtension.lowercased() == "mp4" else { return url }
+        return url.deletingPathExtension().appendingPathExtension("ts")
+    }
+
+    /// Move (or copy across volumes) the merged file into its destination.
+    private static func replaceItem(at destination: URL, with source: URL) throws {
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        do {
+            try FileManager.default.moveItem(at: source, to: destination)
+        } catch {
+            try FileManager.default.copyItem(at: source, to: destination)
+            try? FileManager.default.removeItem(at: source)
         }
     }
 

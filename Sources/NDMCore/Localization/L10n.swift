@@ -223,10 +223,200 @@ public enum L10n: Sendable {
         t("Connection \(n)", "连接 \(n)")
     }
 
+    // MARK: - Clipboard awareness
+
+    public static func clipboardBanner(_ name: String) -> String {
+        t("Link on your clipboard: \(name)", "剪贴板有下载链接：\(name)")
+    }
+    public static var clipboardWatchTitle: String {
+        t("Offer to download links from the clipboard", "自动发现剪贴板中的下载链接")
+    }
+
+    // MARK: - Speed race
+
+    public static var raceWindowTitle: String { t("Speed Race", "速度对决") }
+    public static var raceHeadline: String { t("Same file. Same network.", "同一个文件，同一条网络。") }
+    public static var raceSubline: String {
+        t(
+            "Left lane downloads like a browser — one connection. Right lane is us.",
+            "左边按浏览器的方式下载——单连接。右边是我们。"
+        )
+    }
+    public static var raceLaneBrowser: String { t("Browser (1 connection)", "浏览器方式 · 单连接") }
+    public static var raceLaneOurs: String { t("This app (smart multi-connection)", "本应用 · 多连接加速") }
+    public static var raceStart: String { t("Start the race", "开始对决") }
+    public static var raceAgain: String { t("Race again", "再来一局") }
+    public static var raceRunning: String { t("Racing…", "对决中…") }
+    public static var raceWaiting: String { t("Ready", "就绪") }
+    public static var raceFinished: String { t("Finished", "已完成") }
+    public static func raceStillAt(_ percent: String) -> String {
+        t("still at \(percent)", "还在 \(percent)")
+    }
+    public static func raceVerdictFaster(_ ratio: String, seconds: String) -> String {
+        t(
+            "Done in \(seconds) — ×\(ratio) faster than the browser lane. That's your daily downloads from now on.",
+            "用时 \(seconds)，比浏览器方式快 ×\(ratio)。以后你的每一次下载都是这个速度。"
+        )
+    }
+    public static var raceVerdictHonest: String {
+        t(
+            "This server already saturates a single connection — so we stay at one and don't pretend. On throttled servers (most big-file hosts), the right lane wins big.",
+            "这台服务器单连接已经跑满——我们不装快，自动停在最合适的连接数。遇到限速服务器（大文件站点的常态）时，右边会赢得很夸张。"
+        )
+    }
+    public static var raceFailed: String {
+        t("Network hiccup — try again in a moment.", "网络不给力——稍后再试一次。")
+    }
+    public static var raceMenuTitle: String { t("Speed Race (Demo)…", "速度对决（演示）…") }
+    public static var onboardingRaceButton: String { t("Watch the race", "看一场对决") }
+
+    // MARK: - Pro / License
+
+    public static var proWindowTitle: String { t("Upgrade", "升级") }
+    public static var proHeadline: String { t("Unlock Pro", "解锁 Pro") }
+    public static var proSubline: String {
+        t(
+            "One-time purchase · up to 3 Macs in your household · one year of updates",
+            "一次买断 · 家庭内最多三台 Mac · 含一年功能更新"
+        )
+    }
+    public static var proFreeName: String { t("Free", "免费版") }
+    public static var proFreePrice: String { t("¥0", "¥0") }
+    public static var proFreeTagline: String { t("Free forever · genuinely usable", "永久免费 · 真正可用") }
+    public static var proFreeFeatures: String {
+        t(
+            "Multi-connection downloads (up to 4)\nResume · crash recovery\nBrowser takeover · queue · speed limit\nVideo sniffing + MP4 output",
+            "多连接下载（最高 4 连接）\n断点续传 · 崩溃恢复\n浏览器接管 · 队列 · 限速\n视频嗅探 + MP4 输出"
+        )
+    }
+    public static var proProName: String { "Pro" }
+    public static var proProPrice: String { t("$29.99", "¥98") }
+    public static var proProTagline: String { t("Launch price", "限时首发价 · 原价 ¥128") }
+    public static var proProFeatures: String {
+        t(
+            "Up to 32 connections + smart tuning\nBatch downloads · site rules (coming)\nSmart Finalize: naming / covers / compress\nDownload diagnostics reports\nMenu bar panel · Shortcuts / Raycast\nPriority support",
+            "最高 32 连接 + 智能升降\n批量下载 · 站点规则（陆续上线）\nSmart Finalize：命名 / 封面 / 压缩\n下载诊断报告\n菜单栏面板 · Shortcuts / Raycast\n优先支持"
+        )
+    }
+    public static var proCTA: String { t("Upgrade to Pro", "升级到 Pro") }
+    public static var proEnterLicense: String { t("Enter license key…", "输入许可证…") }
+    public static var proLicensePrompt: String {
+        t("Paste the license key from your purchase email.", "粘贴购买邮件中的许可证密钥。")
+    }
+    public static var proActivate: String { t("Activate", "激活") }
+    public static func proActivated(_ email: String) -> String {
+        t("Pro activated for \(email). Thank you!", "Pro 已激活（\(email)）。感谢支持！")
+    }
+    public static var proInvalidKey: String {
+        t("That key doesn't check out — make sure it's copied whole.", "许可证无效——请确认完整复制。")
+    }
+    public static var proExpiredKey: String {
+        t("This key's update window has ended; it can't activate this version.", "该许可证的更新期已结束，无法激活此版本。")
+    }
+    public static var proFine: String {
+        t("30-day refund, no questions · student discount available", "30 天无理由退款 · 学生半价")
+    }
+    public static var proMenuTitle: String { t("Unlock Pro…", "解锁 Pro…") }
+    public static var proGateConnectionsTitle: String {
+        t("More than 4 connections is a Pro feature", "超过 4 条连接是 Pro 功能")
+    }
+    public static var proGateConnectionsBody: String {
+        t(
+            "Free already runs 4 parallel connections — noticeably faster than a browser. Pro raises the cap to 32 with smart tuning.",
+            "免费版已并行 4 条连接，明显快于浏览器。Pro 可提升到 32 条并配合智能升降。"
+        )
+    }
+
+    // MARK: - Onboarding
+
+    public static var onboardingWindowTitle: String { t("Welcome", "欢迎") }
+    public static var onboardingStep1Title: String {
+        t("Give browser downloads the fast lane", "让浏览器的下载，走快车道")
+    }
+    public static var onboardingStep1Body: String {
+        t(
+            "Install the browser extension and every download link is handled here — multi-connection speed, resume, videos out as MP4.",
+            "安装浏览器扩展后，点击任何下载链接都会交给这里处理——多连接加速、断点续传、视频直出 MP4。"
+        )
+    }
+    public static var onboardingStep2Title: String { t("Try a real download", "试一个真实下载") }
+    public static var onboardingStep2Body: String {
+        t(
+            "Watch the connections fan out on a 100 MB test file. This is the speed your browser leaves on the table.",
+            "用一个 100 MB 测试文件看看多连接如何展开——这就是浏览器白白放掉的速度。"
+        )
+    }
+    public static var onboardingTestButton: String {
+        t("Download 100 MB test file", "下载 100 MB 测试文件")
+    }
+    public static var onboardingStep3Title: String { t("You're set", "一切就绪") }
+    public static var onboardingStep3Body: String {
+        t(
+            "Downloads land in the main window. A few things worth remembering:",
+            "下载任务都会出现在主窗口。几个值得记住的入口："
+        )
+    }
+    public static var onboardingShortcuts: String {
+        t(
+            "⌘N  New download from a link\n⌘⇧P  Pause everything\nDrag any link into the window or the menu bar icon",
+            "⌘N  从链接新建下载\n⌘⇧P  全部暂停\n把链接拖进主窗口即可开始下载"
+        )
+    }
+    public static var onboardingContinue: String { t("Continue", "继续") }
+    public static var onboardingSkip: String { t("Skip for now", "暂时跳过") }
+    public static var onboardingDone: String { t("Start using", "开始使用") }
+    public static var onboardingSafariSoon: String { t("Safari — coming soon", "Safari · 即将支持") }
+
+    // MARK: - Quality picker
+
+    public static var videoFound: String { t("Video found", "发现视频") }
+    public static var chooseQuality: String { t("Choose quality", "选择清晰度") }
+    public static func qualityStreamsSummary(host: String, found: Int, kept: Int) -> String {
+        if host.isEmpty {
+            return t(
+                "Detected \(found) media streams, merged into \(kept) quality levels",
+                "检测到 \(found) 条媒体流，已合并为 \(kept) 档清晰度"
+            )
+        }
+        return t(
+            "From \(host) · detected \(found) media streams, merged into \(kept) quality levels",
+            "来自 \(host) · 检测到 \(found) 条媒体流，已合并为 \(kept) 档清晰度"
+        )
+    }
+    public static var recommended: String { t("Recommended", "推荐") }
+    public static var qualityOutputNote: String {
+        t(
+            "Output: MP4 (lossless remux) · named after the page title",
+            "输出：MP4（无损转封装）· 文件名取自页面标题"
+        )
+    }
+    public static func downloadQuality(_ label: String) -> String {
+        t("Download \(label) MP4", "下载 \(label) MP4")
+    }
+
     // MARK: - Completion / Wait / Browsers / Properties
 
     public static var downloadComplete: String { t("Download Complete", "下载完成") }
     public static var ready: String { t("Ready", "已就绪") }
+    public static var readyToPlay: String { t("Ready to play", "可以直接播放了") }
+    public static var play: String { t("Play", "播放") }
+
+    // Smart Finalize — what happened after the bytes landed.
+    public static var finalizeMergedSegments: String {
+        t("All stream segments merged into one file", "已合并全部流分段")
+    }
+    public static var finalizeMergedTracks: String {
+        t("Video and audio tracks merged", "已合并音视频轨")
+    }
+    public static var finalizeRemuxedMP4: String {
+        t("Repackaged as MP4 — lossless, plays anywhere", "已无损转封装为 MP4，随处可播、可直接分享")
+    }
+    public static var finalizeKeptTS: String {
+        t("Saved as TS — install ffmpeg to get automatic MP4", "已保存为 TS——安装 ffmpeg 后可自动转 MP4")
+    }
+    public static var finalizeAudioSidecar: String {
+        t("Audio saved alongside — install ffmpeg to merge automatically", "音轨已存为同名文件——安装 ffmpeg 后可自动合并")
+    }
     public static var confirmDownload: String { t("Confirm Download", "确认下载") }
     public static var downloadFromBrowser: String { t("Download from browser", "来自浏览器的下载") }
     public static var includesAudioTrack: String { t("Includes audio track", "包含音轨") }
@@ -262,8 +452,8 @@ public enum L10n: Sendable {
     public static var extensionFolderMissing: String { t("Extension folder not found", "找不到扩展文件夹") }
     public static var extensionFolderHint: String {
         t(
-            "Open the NDM project and load reverse/extension/BetterNDM as an unpacked extension.",
-            "打开 NDM 项目，将 reverse/extension/BetterNDM 以未打包扩展方式加载。"
+            "Open this project and load extension/BetterNDM as an unpacked Chrome extension.",
+            "打开本项目，将 extension/BetterNDM 以未打包扩展方式加载到 Chrome。"
         )
     }
 
@@ -300,6 +490,15 @@ public enum L10n: Sendable {
     public static var saveFilesTo: String { t("Save files to", "文件保存到") }
     public static var maxConnectionsCaption: String {
         t("Max connections per download (1–32)", "每个任务最大连接数（1–32）")
+    }
+    public static var smartConnectionsTitle: String {
+        t("Smart connections (start low, raise while it helps)", "智能连接数（从低起步，有收益才增加）")
+    }
+    public static var smartConnectionsFootnote: String {
+        t(
+            "Large downloads probe the server and settle on the fastest honest count — the progress window explains each step. Setting a count manually in the progress window overrides this per task.",
+            "大文件会自动试探服务器并停在真实最快的连接数——进度窗口会解释每一步。在进度窗口手动设置连接数即对该任务停用。"
+        )
     }
     public static var globalSpeedCaption: String {
         t("Global speed limit (bytes/s, 0 = unlimited)", "全局限速（字节/秒，0 = 不限制）")
@@ -352,7 +551,7 @@ public enum L10n: Sendable {
     public static var importLegacyDB: String {
         t("Import Original Neat Database…", "导入原版 Neat 数据库…")
     }
-    public static var selectLegacyDB: String { t("Select original neatdb.sqlite", "选择原版 neatdb.sqlite") }
+    public static var selectLegacyDB: String { t("Select legacy neatdb.sqlite", "选择旧版 neatdb.sqlite") }
     public static func importedCount(_ n: Int) -> String {
         t("Imported \(n) downloads", "已导入 \(n) 个下载")
     }
@@ -370,6 +569,7 @@ public enum L10n: Sendable {
     public static var paste: String { t("Paste", "粘贴") }
     public static var selectAll: String { t("Select All", "全选") }
     public static var showMainWindow: String { t("Show Main Window", "显示主窗口") }
+    public static var pauseAll: String { t("Pause All", "全部暂停") }
     public static var minimize: String { t("Minimize", "最小化") }
     public static var idle: String { t("Idle", "空闲") }
     public static var idleBridgeOff: String { t("Idle · bridge off", "空闲 · 桥接关闭") }

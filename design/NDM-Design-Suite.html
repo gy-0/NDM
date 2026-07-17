@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pelican · Design Suite</title>
+<style>
+  /* ============ Tokens（Quiet Finder · 精装版） ============ */
+  :root {
+    --accent: #2563eb;
+    --accent-ink: #ffffff;
+    --ink: #14161a;
+    --muted: #5c6370;
+    --faint: #8a909b;
+    --surface: #f4f5f8;
+    --sidebar: #eceef3;
+    --titlebar: linear-gradient(#f6f7fa, #eceef3);
+    --panel: #f8f9fc;
+    --row-active: rgba(37, 99, 235, 0.10);
+    --card: #ffffff;
+    --card-border: rgba(20, 28, 45, 0.09);
+    --hairline: rgba(20, 28, 45, 0.07);
+    --track: rgba(20, 28, 45, 0.07);
+    --ok: #2f9e6b;
+    --ok-soft: rgba(47, 158, 107, 0.12);
+    --danger: #cf4242;
+    --danger-soft: rgba(207, 66, 66, 0.10);
+    --warn: #9a6a12;
+    --warn-soft: rgba(178, 128, 32, 0.12);
+    --page-bg: #e5e8ee;
+    --chrome-shadow: 0 30px 70px rgba(20, 28, 45, 0.16), 0 2px 8px rgba(20, 28, 45, 0.08);
+    --sheet-shadow: 0 18px 44px rgba(20, 28, 45, 0.20);
+  }
+  html.dark {
+    --accent: #61a5ff;
+    --accent-ink: #0c1420;
+    --ink: #e8eaed;
+    --muted: #9298a3;
+    --faint: #6d7380;
+    --surface: #1c1e22;
+    --sidebar: #16181c;
+    --titlebar: linear-gradient(#2a2d33, #22252a);
+    --panel: #191b1f;
+    --row-active: rgba(97, 165, 255, 0.15);
+    --card: rgba(255, 255, 255, 0.045);
+    --card-border: rgba(255, 255, 255, 0.10);
+    --hairline: rgba(255, 255, 255, 0.08);
+    --track: rgba(255, 255, 255, 0.09);
+    --ok: #3fae7a;
+    --ok-soft: rgba(63, 174, 122, 0.16);
+    --danger: #ff6b64;
+    --danger-soft: rgba(255, 107, 100, 0.13);
+    --warn: #d9a94a;
+    --warn-soft: rgba(217, 169, 74, 0.14);
+    --page-bg: #0e1013;
+    --chrome-shadow: 0 30px 70px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --sheet-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background: var(--page-bg);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ============ 页面框架 ============ */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 20px;
+    padding: 12px 28px;
+    background: color-mix(in srgb, var(--page-bg) 86%, transparent);
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .wordmark { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .wordmark small { font-weight: 500; color: var(--muted); margin-left: 8px; font-size: 12px; }
+  .secnav { display: flex; gap: 2px; margin-left: 8px; flex-wrap: wrap; }
+  .secnav a {
+    color: var(--muted); text-decoration: none; font-size: 12px;
+    padding: 5px 9px; border-radius: 7px;
+  }
+  .secnav a:hover { background: var(--track); color: var(--ink); }
+  .toggle {
+    margin-left: auto; display: inline-flex; border: 1px solid var(--card-border);
+    border-radius: 9px; overflow: hidden; background: var(--surface);
+  }
+  .toggle button { border: 0; background: transparent; color: var(--muted); padding: 6px 11px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .toggle button.on { background: var(--ink); color: var(--page-bg); }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 48px 28px 96px; }
+  .hero { margin-bottom: 56px; max-width: 720px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; font-weight: 600; }
+  h1 { margin: 0 0 12px; font-size: 34px; letter-spacing: -0.02em; font-weight: 700; line-height: 1.15; }
+  .lede { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  section { margin: 72px 0; scroll-margin-top: 72px; }
+  .sec-head { margin-bottom: 24px; max-width: 720px; }
+  .sec-head h2 { margin: 0 0 8px; font-size: 21px; font-weight: 700; letter-spacing: -0.01em; }
+  .sec-head h2 span.k { color: var(--faint); font-weight: 600; margin-right: 10px; font-variant-numeric: tabular-nums; }
+  .sec-head p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+  .stage { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .stage-row { display: flex; gap: 28px; align-items: flex-start; justify-content: center; flex-wrap: wrap; }
+  .cap { font-size: 12px; color: var(--muted); text-align: center; max-width: 640px; line-height: 1.5; }
+  .cap b { color: var(--ink); font-weight: 600; }
+
+  /* ============ macOS 窗体 ============ */
+  .mac {
+    width: min(980px, 100%);
+    border-radius: 12px; overflow: hidden;
+    background: var(--surface);
+    box-shadow: var(--chrome-shadow), 0 0 0 0.5px var(--card-border);
+    text-align: left;
+  }
+  .titlebar { height: 40px; display: flex; align-items: center; padding: 0 14px; background: var(--titlebar); position: relative; }
+  .lights { display: flex; gap: 8px; z-index: 2; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .tb-title { position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; font-weight: 500; pointer-events: none; color: var(--ink); }
+
+  /* ---- 主窗口 ---- */
+  .toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--hairline); background: var(--surface); }
+  .tool { border: 0; border-radius: 8px; padding: 6px 11px; font-size: 12.5px; cursor: pointer; background: transparent; color: var(--ink); font-family: inherit; }
+  .tool:hover { background: var(--track); }
+  .tool.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .tool[disabled] { color: var(--faint); cursor: default; }
+  .tool[disabled]:hover { background: transparent; }
+  .search { margin-left: auto; width: 190px; border-radius: 8px; border: 1px solid var(--card-border); background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 6px 11px; font-size: 12px; color: var(--faint); }
+  .mwbody { display: grid; grid-template-columns: 176px 1fr 268px; min-height: 470px; }
+  .side { background: var(--sidebar); padding: 14px 10px; border-right: 1px solid var(--hairline); }
+  .side h4 { margin: 16px 8px 6px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .side h4:first-child { margin-top: 0; }
+  .nav { display: flex; justify-content: space-between; align-items: center; padding: 6px 9px; border-radius: 7px; font-size: 13px; color: var(--ink); }
+  .nav .n { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .nav.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .nav.on .n { color: color-mix(in srgb, var(--accent-ink) 78%, transparent); }
+  .tasklist { padding: 8px 10px; background: var(--panel); }
+
+  .row {
+    display: grid; grid-template-columns: 34px 1fr auto; gap: 2px 12px; align-items: center;
+    padding: 10px 12px; border-radius: 10px; margin-bottom: 2px;
+  }
+  .row.on { background: var(--row-active); }
+  .ficon {
+    grid-row: 1 / 3; width: 34px; height: 34px; border-radius: 8px;
+    display: grid; place-items: center; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.02em; color: var(--muted);
+    background: var(--track); border: 1px solid var(--hairline);
+  }
+  .ficon.video { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .row .name { font-size: 13px; font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .right { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .row .right b { color: var(--ink); font-weight: 600; }
+  .row .sub { grid-column: 2 / 4; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sub .okc { color: var(--ok); font-weight: 600; }
+  .row .sub .errc { color: var(--danger); font-weight: 600; }
+  .row .bar { grid-column: 2 / 4; height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; margin-top: 5px; }
+  .row .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 10px; font-weight: 700;
+    vertical-align: 1px; margin-left: 6px; letter-spacing: 0.02em;
+  }
+  .badge.mp4 { color: var(--ok); background: var(--ok-soft); }
+
+  .insp { padding: 16px; border-left: 1px solid var(--hairline); background: var(--surface); font-size: 12px; }
+  .insp .label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; font-weight: 600; }
+  .insp h3 { margin: 0 0 4px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; word-break: break-all; }
+  .insp .host { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: 84px 1fr; gap: 7px; margin-bottom: 7px; font-size: 12px; }
+  .kv span { color: var(--muted); }
+  .kv div { font-variant-numeric: tabular-nums; }
+  .insp .minibar { height: 5px; border-radius: 99px; background: var(--track); overflow: hidden; margin: 12px 0 14px; }
+  .insp .minibar > i { display: block; height: 100%; width: 37%; background: var(--accent); }
+  .note {
+    border-radius: 9px; padding: 10px 12px; font-size: 11.5px; line-height: 1.55;
+    background: var(--ok-soft); color: var(--ink); margin-bottom: 14px;
+    border: 1px solid color-mix(in srgb, var(--ok) 22%, transparent);
+  }
+  .note b { color: var(--ok); }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { border: 0; border-radius: 8px; padding: 7px 13px; font-size: 12.5px; cursor: pointer; font-family: inherit; font-weight: 500; }
+  .btn.main { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .btn.ghost { background: var(--track); color: var(--ink); }
+  .btn.danger { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+
+  /* ---- 进度窗 ---- */
+  .progress-wrap { width: min(520px, 100%); }
+  .prog-body { padding: 20px 20px 20px; background: var(--surface); }
+  .prog-top { display: flex; align-items: baseline; gap: 12px; }
+  .big { font-size: 44px; font-weight: 700; letter-spacing: -0.035em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-flex; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 650; background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); }
+  .fname { font-size: 14px; font-weight: 600; margin: 8px 0 2px; letter-spacing: -0.005em; }
+  .fhost { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .statgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; border-radius: 10px; overflow: hidden; border: 1px solid var(--card-border); margin-bottom: 14px; background: var(--card-border); }
+  .stat { background: var(--card); padding: 9px 12px 10px; }
+  .stat .l { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 3px; }
+  .stat .v { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-weight: 500; color: var(--muted); font-size: 11px; }
+  .overall { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; margin-bottom: 16px; }
+  .overall > i { display: block; height: 100%; width: 37%; background: var(--accent); }
+  .seg-cap { font-size: 11px; color: var(--muted); margin-bottom: 6px; font-weight: 600; display: flex; justify-content: space-between; }
+  .seg { height: 16px; border-radius: 5px; background: var(--track); position: relative; overflow: hidden; margin-bottom: 6px; }
+  .seg i { position: absolute; top: 0; bottom: 0; background: var(--ok); }
+  .seg .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--page-bg) 70%, transparent); }
+  .conns { border: 1px solid var(--card-border); border-radius: 10px; overflow: hidden; margin: 14px 0; }
+  .connrow { display: grid; grid-template-columns: 30px 1fr 76px 64px; gap: 10px; align-items: center; padding: 7px 12px; font-size: 11.5px; background: var(--card); border-bottom: 1px solid var(--hairline); font-variant-numeric: tabular-nums; }
+  .connrow:last-child { border-bottom: 0; }
+  .connrow .cid { color: var(--faint); font-weight: 600; }
+  .connrow .cbar { height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; }
+  .connrow .cbar > i { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
+  .connrow .cspd { text-align: right; color: var(--muted); }
+  .connrow .cpct { text-align: right; font-weight: 600; }
+  .smartline {
+    display: flex; gap: 9px; align-items: flex-start;
+    border-radius: 9px; padding: 10px 12px; margin-bottom: 16px;
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+    font-size: 11.5px; line-height: 1.55;
+  }
+  .smartline .ic { flex: none; width: 16px; height: 16px; border-radius: 5px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-size: 10px; font-weight: 800; margin-top: 1px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .actions .btn { padding: 10px; font-size: 13px; }
+
+  /* ---- Sheet（清晰度选择 / Pro） ---- */
+  .sheet { width: min(500px, 100%); border-radius: 12px; overflow: hidden; background: var(--surface); box-shadow: var(--sheet-shadow), 0 0 0 0.5px var(--card-border); }
+  .sheet-body { padding: 18px 20px 20px; }
+  .sheet h3 { margin: 0 0 4px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  .sheet .sub { margin: 0 0 16px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .qopt { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--card-border); background: var(--card); margin-bottom: 8px; cursor: pointer; }
+  .qopt.rec { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+  .radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--faint); grid-row: 1 / 3; }
+  .qopt.rec .radio { border: 4.5px solid var(--accent); }
+  .qopt .qname { font-size: 13px; font-weight: 650; }
+  .qopt .qname .badge { vertical-align: 0; }
+  .badge.rec { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .qopt .qsize { font-size: 12.5px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .qopt .qsub { grid-column: 2 / 4; font-size: 11.5px; color: var(--muted); }
+  .sheet .fine { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 12px 2px 16px; }
+  .sheet .fine b { color: var(--ink); font-weight: 600; }
+  .sheet .actions { grid-template-columns: 1fr auto; }
+  .sheet .actions .btn.main { padding: 10px 22px; }
+
+  /* ---- 完成卡（Smart Finalize） ---- */
+  .donecard { width: min(440px, 100%); border-radius: 12px; overflow: hidden; background: var(--surface); box-shadow: var(--sheet-shadow), 0 0 0 0.5px var(--card-border); }
+  .done-body { padding: 18px 20px 20px; }
+  .done-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+  .thumb {
+    flex: none; width: 92px; height: 52px; border-radius: 8px;
+    background: linear-gradient(135deg, #37517e, #1e2c47);
+    position: relative; overflow: hidden; border: 1px solid var(--hairline);
+  }
+  .thumb::after { content: "42:07"; position: absolute; right: 5px; bottom: 4px; font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.92); background: rgba(0,0,0,0.45); padding: 1px 5px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+  .thumb .play { position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; border-radius: 50%; background: rgba(255,255,255,0.9); }
+  .thumb .play::after { content: ""; position: absolute; left: 7px; top: 5px; border-left: 7px solid #1e2c47; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+  .done-head .t { min-width: 0; }
+  .done-head h3 { margin: 0 0 3px; font-size: 14px; font-weight: 650; letter-spacing: -0.005em; line-height: 1.35; }
+  .done-head .m { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .steps { border-radius: 10px; border: 1px solid var(--card-border); background: var(--card); padding: 4px 0; margin-bottom: 14px; }
+  .step { display: flex; gap: 10px; align-items: center; padding: 6px 14px; font-size: 12px; }
+  .step .ck { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--ok); position: relative; }
+  .step .ck::after { content: ""; position: absolute; left: 4.5px; top: 2.5px; width: 4px; height: 7px; border: solid #fff; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+  .step span { color: var(--muted); margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .done-body .extra { font-size: 11.5px; color: var(--muted); margin-bottom: 14px; }
+  .done-body .extra a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .done-body .actions { grid-template-columns: 1.4fr 1fr 1fr; }
+
+  /* ---- 诊断卡组 ---- */
+  .diaggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  .diag { border-radius: 12px; border: 1px solid var(--card-border); background: var(--surface); padding: 16px 16px 14px; box-shadow: 0 4px 16px rgba(20,28,45,0.05); }
+  .diag .code { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; margin-bottom: 12px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .diag .code.err { color: var(--danger); background: var(--danger-soft); }
+  .diag .code.warn { color: var(--warn); background: var(--warn-soft); }
+  .diag .code.info { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+  .diag .code.ok { color: var(--ok); background: var(--ok-soft); }
+  .diag h3 { margin: 0 0 6px; font-size: 14px; font-weight: 700; letter-spacing: -0.005em; }
+  .diag p { margin: 0 0 6px; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+  .diag p.zh { color: var(--ink); }
+  .diag .act { margin-top: 12px; display: flex; gap: 8px; }
+  .diag .act .btn { font-size: 12px; padding: 6px 11px; }
+  .raw { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; color: var(--faint); }
+
+  /* ---- 菜单栏 ---- */
+  .menubar-stage { display: flex; flex-direction: column; align-items: flex-end; width: min(560px, 100%); }
+  .menustrip { width: 100%; height: 28px; border-radius: 8px 8px 0 0; background: var(--titlebar); display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 0 14px; font-size: 12px; color: var(--muted); border: 0.5px solid var(--card-border); border-bottom: 0; }
+  .menustrip .mi.on { background: var(--track); border-radius: 5px; padding: 2px 7px; color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .popover { width: 330px; margin-right: 6px; border-radius: 12px; background: var(--surface); box-shadow: var(--sheet-shadow), 0 0 0 0.5px var(--card-border); overflow: hidden; }
+  .pop-head { display: flex; align-items: baseline; justify-content: space-between; padding: 13px 15px 10px; border-bottom: 1px solid var(--hairline); }
+  .pop-head .spd { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .pop-head .spd small { font-size: 11px; font-weight: 500; color: var(--muted); }
+  .pop-head .st { font-size: 11px; color: var(--muted); }
+  .poprow { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; padding: 9px 15px; font-size: 12px; border-bottom: 1px solid var(--hairline); }
+  .poprow .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .poprow .pct { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .poprow .bar { grid-column: 1 / 3; height: 3px; border-radius: 99px; background: var(--track); overflow: hidden; margin-top: 5px; }
+  .poprow .bar > i { display: block; height: 100%; background: var(--accent); }
+  .pop-foot { display: flex; justify-content: space-between; padding: 9px 15px; font-size: 12px; }
+  .pop-foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .pop-foot span { color: var(--muted); }
+
+  /* ---- Onboarding ---- */
+  .ob { width: min(560px, 100%); }
+  .ob-body { padding: 40px 44px 32px; text-align: center; background: var(--surface); }
+  .ob-mark { width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 18px; background: var(--accent); display: grid; place-items: center; box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .ob-mark svg { display: block; }
+  .ob h3 { margin: 0 0 8px; font-size: 21px; font-weight: 700; letter-spacing: -0.015em; }
+  .ob p { margin: 0 auto 24px; font-size: 13.5px; color: var(--muted); max-width: 380px; line-height: 1.6; }
+  .browsers { display: flex; gap: 10px; justify-content: center; margin-bottom: 26px; }
+  .brw { display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 14px 18px 12px; border-radius: 12px; border: 1px solid var(--card-border); background: var(--card); font-size: 12px; font-weight: 600; min-width: 96px; cursor: pointer; }
+  .brw .bi { width: 34px; height: 34px; border-radius: 50%; }
+  .bi.chrome { background: conic-gradient(#ea4335 0 33%, #4285f4 33% 66%, #34a853 66% 100%); position: relative; }
+  .bi.chrome::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: #fbbc05; border: 2.5px solid var(--card); }
+  .bi.safari { background: radial-gradient(circle at 50% 50%, #2f7cf6, #1652b8); position: relative; }
+  .bi.safari::after { content: ""; position: absolute; left: 50%; top: 50%; width: 2.5px; height: 18px; background: linear-gradient(#ff4d4d 50%, #fff 50%); transform: translate(-50%, -50%) rotate(40deg); }
+  .bi.edge { background: conic-gradient(from 200deg, #35d0cb, #2065cf, #35d0cb); }
+  .ob .skip { font-size: 12px; color: var(--muted); }
+  .ob .skip a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .dots { display: flex; gap: 7px; justify-content: center; padding: 0 0 22px; background: var(--surface); }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--track); }
+  .dots i.on { background: var(--accent); }
+
+  /* ---- Pro sheet ---- */
+  .pro { width: min(560px, 100%); }
+  .pro-body { padding: 26px 28px 24px; background: var(--surface); }
+  .pro-head { text-align: center; margin-bottom: 20px; }
+  .pro-head h3 { margin: 0 0 6px; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; }
+  .pro-head p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+  .plan { border-radius: 12px; border: 1px solid var(--card-border); background: var(--card); padding: 18px 18px 16px; }
+  .plan.hot { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 8px 22px color-mix(in srgb, var(--accent) 14%, transparent); position: relative; }
+  .plan .pname { font-size: 13px; font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 8px; }
+  .plan .price { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+  .plan .price small { font-size: 12px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+  .plan .ponce { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+  .plan ul { list-style: none; margin: 0 0 4px; padding: 0; font-size: 12px; line-height: 1.5; }
+  .plan li { padding: 4px 0 4px 20px; position: relative; color: var(--ink); }
+  .plan li::before { content: ""; position: absolute; left: 2px; top: 9px; width: 5px; height: 8px; border: solid var(--ok); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+  .plan li.dim { color: var(--muted); }
+  .plan li.dim::before { border-color: var(--faint); }
+  .pro .cta { width: 100%; padding: 11px; font-size: 14px; border-radius: 10px; margin-bottom: 10px; }
+  .pro .fine { text-align: center; font-size: 11px; color: var(--muted); }
+  .pro .fine a { color: var(--accent); text-decoration: none; }
+
+  /* ---- 落地说明 ---- */
+  .spec { border-radius: 14px; border: 1px solid var(--card-border); background: var(--surface); padding: 22px 24px; font-size: 13px; line-height: 1.65; color: var(--muted); }
+  .spec h3 { margin: 0 0 10px; color: var(--ink); font-size: 14px; font-weight: 700; }
+  .spec table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 8px 0 18px; }
+  .spec th { text-align: left; font-weight: 650; color: var(--ink); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--card-border); }
+  .spec td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  .spec code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; background: var(--track); border-radius: 4px; padding: 1px 5px; }
+  .spec strong { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wordmark">Pelican <small>Design Suite · 工作名，可整体替换</small></div>
+  <nav class="secnav">
+    <a href="#main">主窗</a><a href="#prog">进度</a><a href="#media">媒体闭环</a><a href="#diag">诊断文案</a><a href="#menu">菜单栏</a><a href="#ob">Onboarding</a><a href="#pro">Pro</a><a href="#impl">落地</a>
+  </nav>
+  <div class="toggle" role="group" aria-label="Appearance">
+    <button type="button" data-mode="system" class="on">System</button>
+    <button type="button" data-mode="light">Light</button>
+    <button type="button" data-mode="dark">Dark</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <div class="hero">
+    <div class="eyebrow">Quiet Finder · 精装版 · 2026-07</div>
+    <h1>IDM 级速度，原生 Mac 体验。</h1>
+    <p class="lede">
+      这套设计覆盖<strong>全部付费理由的呈现</strong>：不只是「主窗好看」，而是把
+      <strong>人话诊断、智能连接数、一键 MP4、Smart Finalize、菜单栏、30 秒上手、Free→Pro</strong>
+      每一个卖点都画到像素级。每一屏都可直接映射到现有 AppKit 代码（见文末落地表）。
+      词标 <strong>Pelican</strong> 为工作名——鹈鹕一口兜住大文件，是多连接下载的天然隐喻；定名前全局可替换。
+    </p>
+  </div>
+
+  <!-- ================= 1. 主窗口 ================= -->
+  <section id="main">
+    <div class="sec-head">
+      <h2><span class="k">01</span>主窗口 — 每一行都在回答「现在怎么样了」</h2>
+      <p>与旧稿的区别：加入文件类型图标、速度用<b>粗体主文字</b>直接可读、失败行内联「人话原因 + 一键修复」、媒体任务带 MP4 徽标。
+      Inspector 常驻一条「为什么是这个速度」的透明度说明——这是别家没有的信任感来源。</p>
+    </div>
+    <div class="stage">
+      <div class="mac">
+        <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">Pelican</div></div>
+        <div class="toolbar">
+          <button class="tool primary">＋ New</button>
+          <button class="tool">Pause</button>
+          <button class="tool" disabled>Resume</button>
+          <div class="search">Search downloads</div>
+        </div>
+        <div class="mwbody">
+          <aside class="side">
+            <h4>Status</h4>
+            <div class="nav on"><span>All</span><span class="n">14</span></div>
+            <div class="nav"><span>Active</span><span class="n">2</span></div>
+            <div class="nav"><span>Queued</span><span class="n">1</span></div>
+            <div class="nav"><span>Completed</span><span class="n">9</span></div>
+            <div class="nav"><span>Failed</span><span class="n">1</span></div>
+            <h4>Type</h4>
+            <div class="nav"><span>Video</span><span class="n">4</span></div>
+            <div class="nav"><span>App</span><span class="n">2</span></div>
+            <div class="nav"><span>Compressed</span><span class="n">4</span></div>
+            <div class="nav"><span>Document</span><span class="n">3</span></div>
+          </aside>
+          <section class="tasklist">
+            <div class="row on">
+              <div class="ficon">GGUF</div>
+              <div class="name">Llama-3.3-70B-Instruct-Q4_K_M.gguf</div>
+              <div class="right"><b>28.4 MB/s</b> · 37%</div>
+              <div class="sub">huggingface.co · 15.7 GB / 42.5 GB · 8 connections · ≈ 16 min left</div>
+              <div class="bar"><i style="width:37%"></i></div>
+            </div>
+            <div class="row">
+              <div class="ficon video">MP4</div>
+              <div class="name">SwiftUI Masterclass · Week 3 (1080p).mp4<span class="badge mp4">HLS → MP4</span></div>
+              <div class="right">1.18 GB</div>
+              <div class="sub"><span class="okc">Completed</span> · 已自动合并音视频并转封装，可直接播放与分享</div>
+            </div>
+            <div class="row">
+              <div class="ficon">DMG</div>
+              <div class="name">Blender-4.5.1-macos-arm64.dmg</div>
+              <div class="right">342 MB</div>
+              <div class="sub">Queued · blender.org · 将在当前任务完成后开始</div>
+            </div>
+            <div class="row">
+              <div class="ficon">ZIP</div>
+              <div class="name">imagenet-subset-train.zip</div>
+              <div class="right"><button class="btn main" style="padding:4px 10px; font-size:11.5px;">Renew</button></div>
+              <div class="sub"><span class="errc">链接已过期</span> · 该站点的下载地址只在签发后几分钟内有效 · 回到页面即可续用</div>
+            </div>
+            <div class="row">
+              <div class="ficon">ZIP</div>
+              <div class="name">Design-Assets-2026.zip</div>
+              <div class="right">867 MB</div>
+              <div class="sub"><span class="okc">Completed</span> · 已按规则移入 ~/Downloads/Design</div>
+            </div>
+          </section>
+          <aside class="insp">
+            <div class="label">Inspector</div>
+            <h3>Llama-3.3-70B-Instruct-Q4_K_M.gguf</h3>
+            <p class="host">huggingface.co · Downloading</p>
+            <div class="kv"><span>Size</span><div>15.7 GB / 42.5 GB</div></div>
+            <div class="kv"><span>Speed</span><div>28.4 MB/s</div></div>
+            <div class="kv"><span>Time left</span><div>≈ 16 min</div></div>
+            <div class="kv"><span>Connections</span><div>8 / 8 active</div></div>
+            <div class="minibar"><i></i></div>
+            <div class="note"><b>为什么这么快：</b>该服务器单连接约 4.1 MB/s。Pelican 用 8 条连接并行，实测 ×6.9。继续加连接已无收益，停在 8。</div>
+            <div class="btns">
+              <button class="btn main">Pause</button>
+              <button class="btn ghost">Details…</button>
+              <button class="btn ghost">Copy URL</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="cap"><b>信任感来自透明。</b>速度不是玄学：Inspector 里那条绿色说明（单连接基线 → 多连接实测倍数 → 为什么停在 8）就是「32 连接不是营销话术」的产品证据。失败行不显示 403，显示原因和下一步。</p>
+    </div>
+  </section>
+
+  <!-- ================= 2. 进度窗 ================= -->
+  <section id="prog">
+    <div class="sec-head">
+      <h2><span class="k">02</span>进度窗 — 大号百分比 + 会说话的连接数</h2>
+      <p>保留签名式大号百分比与单色绿 Segments，新增两样：<b>四格统计条</b>（扫一眼全知道）和<b>智能连接数说明行</b>——
+      引擎从 2 → 4 → 8 逐级试探的过程直接讲给用户听，这就是「智能升降连接数」功能的 UI 形态。</p>
+    </div>
+    <div class="stage">
+      <div class="mac progress-wrap">
+        <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">37% · Llama-3.3-70B…gguf</div></div>
+        <div class="prog-body">
+          <div class="prog-top"><div class="big">37%</div><div class="pill">Downloading</div></div>
+          <div class="fname">Llama-3.3-70B-Instruct-Q4_K_M.gguf</div>
+          <div class="fhost">huggingface.co · 42.5 GB</div>
+          <div class="statgrid">
+            <div class="stat"><div class="l">Speed</div><div class="v">28.4 <small>MB/s</small></div></div>
+            <div class="stat"><div class="l">Downloaded</div><div class="v">15.7 <small>GB</small></div></div>
+            <div class="stat"><div class="l">Time left</div><div class="v">≈ 16 <small>min</small></div></div>
+            <div class="stat"><div class="l">Connections</div><div class="v">8 <small>/ 8</small></div></div>
+          </div>
+          <div class="overall"><i></i></div>
+          <div class="seg-cap"><span>Segments</span><span class="num">8 × 5.3 GB</span></div>
+          <div class="seg">
+            <i style="left:0%;    width:8.2%"></i>
+            <i style="left:12.5%; width:6.9%"></i>
+            <i style="left:25%;   width:5.4%"></i>
+            <i style="left:37.5%; width:4.8%"></i>
+            <i style="left:50%;   width:4.1%"></i>
+            <i style="left:62.5%; width:3.6%"></i>
+            <i style="left:75%;   width:2.7%"></i>
+            <i style="left:87.5%; width:1.4%"></i>
+            <div class="tick" style="left:12.5%"></div><div class="tick" style="left:25%"></div>
+            <div class="tick" style="left:37.5%"></div><div class="tick" style="left:50%"></div>
+            <div class="tick" style="left:62.5%"></div><div class="tick" style="left:75%"></div>
+            <div class="tick" style="left:87.5%"></div>
+          </div>
+          <div class="conns">
+            <div class="connrow"><div class="cid">#1</div><div class="cbar"><i style="width:66%"></i></div><div class="cspd">3.9 MB/s</div><div class="cpct">66%</div></div>
+            <div class="connrow"><div class="cid">#2</div><div class="cbar"><i style="width:55%"></i></div><div class="cspd">3.7 MB/s</div><div class="cpct">55%</div></div>
+            <div class="connrow"><div class="cid">#3</div><div class="cbar"><i style="width:43%"></i></div><div class="cspd">3.5 MB/s</div><div class="cpct">43%</div></div>
+            <div class="connrow"><div class="cid">#8</div><div class="cbar"><i style="width:11%"></i></div><div class="cspd">3.4 MB/s</div><div class="cpct">11%</div></div>
+          </div>
+          <div class="smartline"><div class="ic">i</div><div><b>智能连接数：</b>2 → 4 提速 ×1.9，4 → 8 提速 ×1.8，8 → 16 无收益。已停在 8 条连接——这是该服务器的上限，不是你的网络。</div></div>
+          <div class="actions">
+            <button class="btn main">Pause</button>
+            <button class="btn ghost">Close</button>
+          </div>
+        </div>
+      </div>
+      <p class="cap">连接级细节只出现在这里，不进主列表（禁区维持）。Close 始终可点，窗口关了下载继续。</p>
+    </div>
+  </section>
+
+  <!-- ================= 3. 媒体闭环 ================= -->
+  <section id="media">
+    <div class="sec-head">
+      <h2><span class="k">03</span>媒体闭环 — 从「嗅探到一堆流」到「下完就是 MP4」</h2>
+      <p>这是最核心的付费理由，两张图讲完整个承诺：<b>左</b>：浏览器点击后弹出的清晰度选择（14 条原始流去重成 3 档，默认选好推荐档，输出格式已替用户决定）；
+      <b>右</b>：Smart Finalize 完成卡——合并、转封装、命名、封面全部自动做完，用户看到的第一眼就是「能播、能发」。</p>
+    </div>
+    <div class="stage">
+      <div class="stage-row">
+        <div class="sheet">
+          <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">发现视频</div></div>
+          <div class="sheet-body">
+            <h3>SwiftUI Masterclass — Week 3</h3>
+            <p class="sub">来自 learn.designcode.io · 检测到 14 条媒体流，已去除重复与广告流，合并为 3 档清晰度</p>
+            <div class="qopt rec">
+              <div class="radio"></div>
+              <div class="qname">1080p<span class="badge rec">推荐</span></div>
+              <div class="qsize">≈ 1.18 GB</div>
+              <div class="qsub">H.264 · 42 min · 音轨自动合并</div>
+            </div>
+            <div class="qopt">
+              <div class="radio"></div>
+              <div class="qname">720p</div>
+              <div class="qsize">≈ 640 MB</div>
+              <div class="qsub">H.264 · 适合平板与投屏</div>
+            </div>
+            <div class="qopt">
+              <div class="radio"></div>
+              <div class="qname">480p</div>
+              <div class="qsize">≈ 310 MB</div>
+              <div class="qsub">体积最小 · 适合微信直发</div>
+            </div>
+            <div class="fine">输出：<b>MP4（H.264 + AAC）</b>，兼容性最好 · 文件名取自页面标题 · 检测到中文字幕，将随片内嵌</div>
+            <div class="actions">
+              <button class="btn ghost">取消</button>
+              <button class="btn main">下载 1080p MP4</button>
+            </div>
+          </div>
+        </div>
+        <div class="donecard">
+          <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">下载完成</div></div>
+          <div class="done-body">
+            <div class="done-head">
+              <div class="thumb"><div class="play"></div></div>
+              <div class="t">
+                <h3>SwiftUI Masterclass · Week 3 (1080p).mp4</h3>
+                <div class="m">1.18 GB · 42 min · 1920×1080 · 已存入 ~/Downloads/课程</div>
+              </div>
+            </div>
+            <div class="steps">
+              <div class="step"><div class="ck"></div>音视频轨已合并<span>0.8s</span></div>
+              <div class="step"><div class="ck"></div>已转封装为 MP4（无损，未重编码）<span>5.2s</span></div>
+              <div class="step"><div class="ck"></div>已按页面标题命名 · 已生成封面<span>0.3s</span></div>
+            </div>
+            <div class="extra">还可以：<a href="#">压缩到微信可发大小（&lt;200 MB）</a> · <a href="#">导出音频 M4A</a></div>
+            <div class="actions">
+              <button class="btn main">播放</button>
+              <button class="btn ghost">在 Finder 显示</button>
+              <button class="btn ghost">分享</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="cap"><b>用户不需要知道 m3u8、TS、DASH、ffmpeg 是什么。</b>左边替用户做掉「选哪条流」的决定，右边把「下载完 ≠ 能用」的旧世界终结掉——这两张图就是定价页的主截图。</p>
+    </div>
+  </section>
+
+  <!-- ================= 4. 诊断文案 ================= -->
+  <section id="diag">
+    <div class="sec-head">
+      <h2><span class="k">04</span>下载诊断 — 把错误码翻译成人话（文案即产品）</h2>
+      <p>这六张卡是<b>写死进产品的文案资产</b>，中英双语一次定稿。规则：第一句说发生了什么，第二句说为什么，按钮直接给出下一步。
+      永远不让用户面对裸的 403 / 416（原始码保留在角落供高手排查）。</p>
+    </div>
+    <div class="diaggrid">
+      <div class="diag">
+        <div class="code err">链接已过期 <span class="raw">HTTP 403</span></div>
+        <h3>这个下载地址过期了</h3>
+        <p class="zh">很多网站的下载链接只在签发后几分钟内有效。回到原网页，Pelican 会自动换取新地址并从断点继续。</p>
+        <p>This link has expired — sites often sign download URLs for only a few minutes. Reopen the page and we'll grab a fresh one, resuming where you left off.</p>
+        <div class="act"><button class="btn main">回到页面续用</button><button class="btn ghost">稍后重试</button></div>
+      </div>
+      <div class="diag">
+        <div class="code warn">已切换单连接 <span class="raw">HTTP 416 / no Range</span></div>
+        <h3>该服务器不支持分段下载</h3>
+        <p class="zh">它不接受断点续传请求，多连接对它无效。已自动切换为单连接稳定下载——速度就是服务器给多少是多少。</p>
+        <p>This server doesn't support ranged requests, so multi-connection can't help here. Switched to a single steady connection.</p>
+        <div class="act"><button class="btn ghost">知道了</button></div>
+      </div>
+      <div class="diag">
+        <div class="code info">瓶颈在服务器 <span class="raw">throughput probe</span></div>
+        <h3>你的网络没问题</h3>
+        <p class="zh">本机带宽实测 480 Mbps，但该服务器每条连接只给约 2.1 MB/s。8 连接已榨到 ×6.9，这已是对方的上限。</p>
+        <p>Your connection measured 480 Mbps; the server serves ~2.1 MB/s per connection. Eight connections got us ×6.9 — that's the server's ceiling, not your Wi-Fi.</p>
+        <div class="act"><button class="btn ghost">查看诊断详情</button></div>
+      </div>
+      <div class="diag">
+        <div class="code err">登录已失效 <span class="raw">HTTP 401 / cookie</span></div>
+        <h3>网站要求重新登录</h3>
+        <p class="zh">保存的登录状态已过期。在浏览器里重新登录该网站后点「重试」，扩展会自动带上新的登录信息。</p>
+        <p>Your sign-in for this site expired. Log in again in your browser, then hit Retry — the extension passes fresh credentials automatically.</p>
+        <div class="act"><button class="btn main">打开网站</button><button class="btn ghost">重试</button></div>
+      </div>
+      <div class="diag">
+        <div class="code warn">多连接无收益 <span class="raw">auto-tuned to 1</span></div>
+        <h3>已自动降为单连接</h3>
+        <p class="zh">尝试了 8 条连接，总速度没有提升——该服务器对所有连接共享同一限速。已降回单连接，避免被误判为攻击。</p>
+        <p>Tried 8 connections; total speed didn't improve — this server pools all connections into one cap. Dropped back to 1 to stay polite.</p>
+        <div class="act"><button class="btn ghost">知道了</button></div>
+      </div>
+      <div class="diag">
+        <div class="code ok">建议 <span class="raw">proxy heuristic</span></div>
+        <h3>走代理可能更快</h3>
+        <p class="zh">到该服务器的直连延迟 480 ms 且频繁丢包。检测到你配置过代理「HK-01」，用它下载这个站点通常会快很多。</p>
+        <p>Direct route to this host shows 480 ms latency with packet loss. Your saved proxy “HK-01” will likely be much faster for this site.</p>
+        <div class="act"><button class="btn main">用代理重试</button><button class="btn ghost">保持直连</button></div>
+      </div>
+    </div>
+    <p class="cap" style="margin-top:18px;"><b>「同样快，但少十个让人骂的细节」</b>的具体形态。每张卡对应引擎里一个已存在或可检测的事件，落地即 <code>DiagnosticEvent → L10n key</code> 的映射表。</p>
+  </section>
+
+  <!-- ================= 5. 菜单栏 ================= -->
+  <section id="menu">
+    <div class="sec-head">
+      <h2><span class="k">05</span>菜单栏 — 主窗可以常年不开</h2>
+      <p>菜单栏图标常驻显示实时总速度，点开是 330pt 迷你面板：活动任务、一键暂停全部、拖链接进图标即下载。重度用户的日常入口，也是 Pro 卖点之一。</p>
+    </div>
+    <div class="stage">
+      <div class="menubar-stage">
+        <div class="menustrip">
+          <span class="mi">Wi-Fi</span><span class="mi on">⇣ 28.4 MB/s</span><span class="mi num">周三 14:32</span>
+        </div>
+        <div class="popover">
+          <div class="pop-head">
+            <div class="spd">28.4 <small>MB/s · 2 个任务</small></div>
+            <div class="st">今日已下载 61.4 GB</div>
+          </div>
+          <div class="poprow">
+            <div class="name">Llama-3.3-70B-Instruct-Q4_K_M.gguf</div>
+            <div class="pct">37% · 16 min</div>
+            <div class="bar"><i style="width:37%"></i></div>
+          </div>
+          <div class="poprow">
+            <div class="name">Figma-Design-System-Course.mp4</div>
+            <div class="pct">82% · 2 min</div>
+            <div class="bar"><i style="width:82%"></i></div>
+          </div>
+          <div class="pop-foot"><a href="#">打开 Pelican</a><span>⌘⇧P 暂停全部</span></div>
+        </div>
+      </div>
+      <p class="cap">图标状态：空闲＝安静的轮廓；下载中＝显示速度；全部完成＝短暂打勾后归于安静。永不弹横幅打扰。</p>
+    </div>
+  </section>
+
+  <!-- ================= 6. Onboarding ================= -->
+  <section id="ob">
+    <div class="sec-head">
+      <h2><span class="k">06</span>Onboarding — 安装后 30 秒产生第一次「回不去」</h2>
+      <p>只有三步：装扩展 → 试一个真实下载（我们提供一个大文件示例，现场看多连接跑满）→ 完成。第二步就是「aha moment」的现场制造机。</p>
+    </div>
+    <div class="stage">
+      <div class="mac ob">
+        <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">欢迎使用 Pelican</div></div>
+        <div class="ob-body">
+          <div class="ob-mark">
+            <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+              <path d="M17 4v16" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+              <path d="M9 14l8 8 8-8" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M7 28h20" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity="0.55"/>
+            </svg>
+          </div>
+          <h3>让浏览器的下载，走快车道</h3>
+          <p>安装浏览器扩展后，点击任何下载链接都会自动交给 Pelican——多连接加速、断点续传、视频直出 MP4。</p>
+          <div class="browsers">
+            <div class="brw"><div class="bi chrome"></div>Chrome</div>
+            <div class="brw"><div class="bi safari"></div>Safari</div>
+            <div class="brw"><div class="bi edge"></div>Edge</div>
+          </div>
+          <p class="skip">暂时跳过 · 也可以直接把链接拖进窗口 · <a href="#">了解隐私承诺</a></p>
+        </div>
+        <div class="dots"><i class="on"></i><i></i><i></i></div>
+      </div>
+      <p class="cap">第 2 步（未画）：一键下载 500 MB 测试文件，实时看到「浏览器 4.1 MB/s → Pelican 28 MB/s」的对比动画。第 3 步：完成 + 快捷键卡片。</p>
+    </div>
+  </section>
+
+  <!-- ================= 7. Pro ================= -->
+  <section id="pro">
+    <div class="sec-head">
+      <h2><span class="k">07</span>Free → Pro — 免费版真正可用，Pro 卖「少折腾」</h2>
+      <p>免费版不阉割核心速度体验（4 连接已经明显快于浏览器），建立口碑与传播；Pro 打包的全是「重度 + 自动化 + 媒体」需求。
+      国内 ¥98 买断先行，海外 $29.99 买断 + 可选订阅承载持续成本。这张升级页由具体功能触发弹出（如第 5 次用到批量下载时），不做开屏骚扰。</p>
+    </div>
+    <div class="stage">
+      <div class="mac pro">
+        <div class="titlebar"><div class="lights"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div><div class="tb-title">Pelican Pro</div></div>
+        <div class="pro-body">
+          <div class="pro-head">
+            <h3>解锁 Pelican Pro</h3>
+            <p>一次买断 · 一台 Mac 家庭内三台设备 · 含一年功能更新</p>
+          </div>
+          <div class="plans">
+            <div class="plan">
+              <div class="pname">Free</div>
+              <div class="price">¥0</div>
+              <div class="ponce">永久免费 · 真正可用</div>
+              <ul>
+                <li>多连接下载（最高 4 连接）</li>
+                <li>断点续传 · 崩溃恢复</li>
+                <li>浏览器接管 · 队列 · 限速</li>
+                <li>视频嗅探 + 单任务 MP4 输出</li>
+                <li class="dim">批量下载 · 规则自动化</li>
+                <li class="dim">Smart Finalize 全家桶</li>
+              </ul>
+            </div>
+            <div class="plan hot">
+              <div class="pname">Pro</div>
+              <div class="price">¥98 <small>买断 · 海外 $29.99</small></div>
+              <div class="ponce">限时首发价 · 原价 ¥128</div>
+              <ul>
+                <li>最高 32 连接 + 智能升降</li>
+                <li>批量下载 · 站点规则 · 自动分类</li>
+                <li>Smart Finalize：命名/封面/字幕/压缩</li>
+                <li>下载诊断报告 · 代理智能建议</li>
+                <li>菜单栏面板 · Shortcuts / Raycast</li>
+                <li>隐私模式 · 优先支持</li>
+              </ul>
+            </div>
+          </div>
+          <button class="btn main cta">升级到 Pro — ¥98</button>
+          <div class="fine">已购买？<a href="#">恢复许可证</a> · 30 天无理由退款 · 学生半价</div>
+        </div>
+      </div>
+      <p class="cap"><b>定价心理：</b>对比锚点不是竞品，是用户自己的时间——「一节网课手动折腾 M3U8 要 40 分钟」。触发式弹出 + 无理由退款 + 学生价，是 Mac 独立软件被验证过的组合。</p>
+    </div>
+  </section>
+
+  <!-- ================= 8. 落地 ================= -->
+  <section id="impl">
+    <div class="sec-head">
+      <h2><span class="k">08</span>落地映射 — 每一屏对应的代码位置与状态</h2>
+    </div>
+    <div class="spec">
+      <h3>设计 → 工程映射</h3>
+      <table>
+        <tr><th>屏</th><th>对应代码</th><th>现状 → 要做</th></tr>
+        <tr><td><strong>01 主窗</strong></td><td><code>MainWindowController</code> + <code>TaskPresentation</code></td><td>已有三栏结构 → 补类型图标、行内人话状态、Inspector「为什么这个速度」说明</td></tr>
+        <tr><td><strong>02 进度窗</strong></td><td><code>ProgressWindowController</code></td><td>已有大号 % 与逐连接进度 → 补四格统计条、smartline（依赖智能连接数引擎事件）</td></tr>
+        <tr><td><strong>03 清晰度选择</strong></td><td>BetterNDM 面板 + 宿主新 Sheet</td><td>新建；流去重逻辑放扩展侧，宿主收最终选择</td></tr>
+        <tr><td><strong>03 Smart Finalize</strong></td><td><code>MKVMergeEngine</code> → 扩展为 <code>FinalizeEngine</code></td><td>MKV 合并已有 → 默认 MP4 remux（ffmpeg <code>-c copy</code>）、命名、封面（AVFoundation 抽帧）、完成卡 UI</td></tr>
+        <tr><td><strong>04 诊断文案</strong></td><td>新 <code>DiagnosticEvent</code> + <code>L10n</code></td><td>引擎已能区分 403/416/no-Range → 建事件枚举 + 本页文案作为 zh/en 字符串表</td></tr>
+        <tr><td><strong>05 菜单栏</strong></td><td><code>AppDelegate</code>（Agent 已常驻）</td><td>已有状态项 → 换成速度显示 + NSPopover 迷你面板</td></tr>
+        <tr><td><strong>06 Onboarding</strong></td><td>新 <code>OnboardingWindowController</code></td><td>新建；复用 <code>BrowsersWindowController</code> 的扩展引导</td></tr>
+        <tr><td><strong>07 Pro</strong></td><td>新 <code>LicenseStore</code> + 功能开关</td><td>新建；开关点：连接数上限、批量、Finalize、规则</td></tr>
+      </table>
+      <h3>Token 增量（相对 brand-spec）</h3>
+      <p>
+        新增语义色：<code>ok-soft</code> / <code>danger-soft</code> / <code>warn-soft</code>（诊断卡底），其余全部沿用 Quiet Finder 色板。
+        新增组件：statgrid（四格统计）、smartline（说明行）、diag card（诊断卡）、qopt（清晰度选项）、steps（完成清单）。
+        禁区不变：无渐变、无霓虹、连接细节不进主列表、跟随系统外观。
+      </p>
+      <h3>建议实施顺序（体感优先）</h3>
+      <p>
+        ① 诊断文案（纯映射，工作量最小、感知最大）→ ② HLS 默认 MP4 remux + 完成卡 → ③ 智能连接数 + smartline →
+        ④ 清晰度选择 Sheet → ⑤ 菜单栏面板 → ⑥ Onboarding → ⑦ License / Free-Pro 开关。
+      </p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+function applyMode(mode) {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = mode === "dark" || (mode === "system" && prefersDark);
+  document.documentElement.classList.toggle("dark", dark);
+  document.querySelectorAll(".toggle button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  localStorage.setItem("pelican-suite-appearance", mode);
+}
+document.querySelector(".toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (btn) applyMode(btn.dataset.mode);
+});
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if ((localStorage.getItem("pelican-suite-appearance") || "system") === "system") applyMode("system");
+});
+applyMode(localStorage.getItem("pelican-suite-appearance") || "system");
+</script>
+</body>
+</html>

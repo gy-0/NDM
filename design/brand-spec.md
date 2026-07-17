@@ -14,8 +14,14 @@
 - 备注：**后续会改名**——所有用户可见字符串集中在 App 标题 / About / 菜单，避免硬编码散落
 
 ### UI 截图（数字产品）
-- 设计源：`design/NDM-Quiet-Finder.html`
+- **主设计源：`design/NDM-Design-Suite.html`（精装版，覆盖主窗 / 进度 / 媒体闭环 / 诊断文案 / 菜单栏 / Onboarding / Pro，全部屏 + 落地映射表）**
+- 早期基线：`design/NDM-Quiet-Finder.html`
 - 方向对照：`design/NDM-UI-Directions.html`（A 已选）
+- 工作名：**Pelican**（鹈鹕兜住大文件 = 多连接隐喻；定名前全局可替换）
+
+### 新增组件 token（Design Suite 引入）
+- 语义底色：`ok-soft` / `danger-soft` / `warn-soft`（诊断卡、行内状态）
+- 组件：statgrid（进度窗四格统计）、smartline（智能连接数说明行）、diag card（诊断卡）、qopt（清晰度选项）、steps（Finalize 完成清单）、popover（菜单栏迷你面板）
 
 ## 辅助资产
 
@@ -57,6 +63,8 @@
 - 不用 CSS/SVG 手画产品意象代替 UI
 - 不在列表堆装饰 icon / stats 条
 - 连接级细节只在 Progress 窗，不塞进主列表
+- **AppKit 铁律：任何 layer 颜色必须走 `ChromeBox` / `updateLayer()`，严禁 `layer?.backgroundColor = xxx.cgColor` 直接快照**（外观切换会失效发灰）
+- 侧栏必须保持系统毛玻璃材质透出（scrollView/tableView 全透明），不得用不透明色覆盖——否则标题栏红绿灯区出现割裂
 
 ### 气质关键词
 克制 · 可信 · 系统感 · 安静 · 可改名友好

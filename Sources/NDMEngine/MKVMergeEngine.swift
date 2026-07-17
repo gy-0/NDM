@@ -123,10 +123,18 @@ public actor MKVMergeEngine {
             return "media"
         }()
         let outExt = preferredOutputExtension(video: vURL, audio: aURL)
-        let finalURL = videoRequest.destinationDirectory.appendingPathComponent("\(baseName).\(outExt)")
+        var finalURL = videoRequest.destinationDirectory.appendingPathComponent("\(baseName).\(outExt)")
 
         if let ffmpeg = Self.findFFmpeg() {
-            try await Self.runFFmpegMux(ffmpeg: ffmpeg, video: vURL, audio: aURL, output: finalURL)
+            // Prefer MP4 (best compatibility); codecs that don't fit MP4
+            // (VP9/Opus…) fail the stream copy fast and fall back to MKV/WebM.
+            let mp4URL = videoRequest.destinationDirectory.appendingPathComponent("\(baseName).mp4")
+            do {
+                try FFmpegTool.muxAV(ffmpeg: ffmpeg, video: vURL, audio: aURL, output: mp4URL)
+                finalURL = mp4URL
+            } catch {
+                try await Self.runFFmpegMux(ffmpeg: ffmpeg, video: vURL, audio: aURL, output: finalURL)
+            }
         } else {
             // Fallback: keep video as primary, copy audio alongside as `.audio`
             if FileManager.default.fileExists(atPath: finalURL.path) {

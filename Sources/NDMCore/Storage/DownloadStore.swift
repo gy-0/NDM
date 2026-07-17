@@ -22,7 +22,7 @@ public final class DownloadStore: @unchecked Sendable {
 
     public static var defaultSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        // Independent from original com.NeatDownloadManager
+        // App Support container for this host
         return base.appendingPathComponent("dev.ndm.open", isDirectory: true)
     }
 
