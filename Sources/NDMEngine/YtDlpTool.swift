@@ -1,0 +1,1140 @@
+import Foundation
+import NDMCore
+
+/// Optional advanced media resolver. The product never exposes CLI flags —
+/// callers get human labels, approximate size, then a downloadable selector.
+public struct YtDlpFormat: Equatable, Sendable {
+    public var id: String
+    /// Display label like `1080p` / `Best`.
+    public var label: String
+    /// Pixel height tier (0 = unknown / best).
+    public var height: Int
+    /// Rough total bytes (video + audio) when yt-dlp reports sizes.
+    public var approximateBytes: Int64?
+    /// Per-stream estimates in download order. Keeping video/audio separate lets
+    /// the host replace estimates with real totals without a late 100% jump.
+    public var componentBytes: [Int64]
+    /// Short container hint for UI (`MP4`).
+    public var containerHint: String
+    public var isVideo: Bool
+
+    public init(
+        id: String,
+        label: String,
+        height: Int = 0,
+        approximateBytes: Int64? = nil,
+        componentBytes: [Int64] = [],
+        containerHint: String = "MP4",
+        isVideo: Bool = true
+    ) {
+        self.id = id
+        self.label = label
+        self.height = height
+        self.approximateBytes = approximateBytes
+        self.componentBytes = componentBytes
+        self.containerHint = containerHint
+        self.isVideo = isVideo
+    }
+
+    /// Compatibility shim for older call sites.
+    public var note: String { containerHint }
+
+    public var sizeText: String? {
+        guard let approximateBytes, approximateBytes > 0 else { return nil }
+        return "≈ " + TaskPresentationFormatting.byteCount(approximateBytes)
+    }
+
+    public func selector(for preference: YtDlpContainerPreference) -> String {
+        let limit = height > 0 ? "[height<=\(height)]" : ""
+        switch preference {
+        case .compatibleMP4:
+            return "bestvideo\(limit)[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best\(limit)[ext=mp4]/\(id)"
+        case .compactMKV:
+            return "bestvideo\(limit)[vcodec^=av01]+bestaudio/bestvideo\(limit)[vcodec^=vp9]+bestaudio/\(id)"
+        }
+    }
+}
+
+public enum YtDlpContainerPreference: String, Codable, Sendable, Equatable {
+    case compatibleMP4
+    case compactMKV
+
+    public var fileExtension: String { self == .compatibleMP4 ? "mp4" : "mkv" }
+    public var mimeType: String { self == .compatibleMP4 ? "video/mp4" : "video/x-matroska" }
+}
+
+/// User-selected access state for sites that only expose media to a browser
+/// session. This is persisted with the task so Retry behaves like a real retry.
+public enum YtDlpCookieSource: Codable, Sendable, Equatable {
+    case browser(String)
+    case file(String)
+}
+
+public struct YtDlpSubtitleTrack: Codable, Sendable, Equatable {
+    public var code: String
+    public var displayName: String
+    public var isAutomatic: Bool
+
+    public init(code: String, displayName: String, isAutomatic: Bool) {
+        self.code = code
+        self.displayName = displayName
+        self.isAutomatic = isAutomatic
+    }
+}
+
+/// A lightweight entry returned by a playlist/channel probe. Quality is chosen
+/// once later and expressed as a height-bounded selector that remains valid
+/// across entries with slightly different format ladders.
+public struct YtDlpCollectionItem: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var title: String
+    public var url: String
+    public var durationSeconds: Double?
+    public var thumbnailURL: String?
+
+    public init(
+        id: String,
+        title: String,
+        url: String,
+        durationSeconds: Double? = nil,
+        thumbnailURL: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.url = url
+        self.durationSeconds = durationSeconds
+        self.thumbnailURL = thumbnailURL
+    }
+}
+
+public struct YtDlpCollectionProbe: Codable, Sendable, Equatable {
+    public var title: String
+    public var items: [YtDlpCollectionItem]
+    public var totalCount: Int
+    public var isTruncated: Bool
+    public var thumbnailURL: String?
+
+    public init(
+        title: String,
+        items: [YtDlpCollectionItem],
+        totalCount: Int,
+        isTruncated: Bool,
+        thumbnailURL: String? = nil
+    ) {
+        self.title = title
+        self.items = items
+        self.totalCount = totalCount
+        self.isTruncated = isTruncated
+        self.thumbnailURL = thumbnailURL
+    }
+}
+
+public struct YtDlpDownloadOptions: Codable, Sendable, Equatable {
+    public var container: YtDlpContainerPreference
+    public var subtitleLanguage: String?
+    public var cookieSource: YtDlpCookieSource?
+
+    public init(
+        container: YtDlpContainerPreference = .compatibleMP4,
+        subtitleLanguage: String? = nil,
+        cookieSource: YtDlpCookieSource? = nil
+    ) {
+        self.container = container
+        self.subtitleLanguage = subtitleLanguage
+        self.cookieSource = cookieSource
+    }
+}
+
+public struct YtDlpProbe: Equatable, Sendable {
+    public var title: String
+    public var durationSeconds: Double?
+    public var formats: [YtDlpFormat]
+    /// Best available remote cover (YouTube / site thumbnail).
+    public var thumbnailURL: String?
+    public var subtitleTracks: [YtDlpSubtitleTrack]
+
+    public init(
+        title: String,
+        durationSeconds: Double?,
+        formats: [YtDlpFormat],
+        thumbnailURL: String? = nil,
+        subtitleTracks: [YtDlpSubtitleTrack] = []
+    ) {
+        self.title = title
+        self.durationSeconds = durationSeconds
+        self.formats = formats
+        self.thumbnailURL = thumbnailURL
+        self.subtitleTracks = subtitleTracks
+    }
+}
+
+public enum YtDlpTool {
+    public static func find() -> String? {
+        if let bundled = BundledToolLocator.find(
+            ["yt-dlp", "yt-dlp_macos"],
+            developerFallbacks: [
+                "/opt/homebrew/bin/yt-dlp",
+                "/usr/local/bin/yt-dlp",
+                "/opt/homebrew/bin/youtube-dl",
+                "/usr/local/bin/youtube-dl",
+            ]
+        ) { return bundled }
+#if DEBUG
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        proc.arguments = ["yt-dlp"]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        try? proc.run()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let path = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? nil : path
+#else
+        // A release missing its private toolchain is a broken package. Never
+        // let a developer's Homebrew install hide that shipping error.
+        return nil
+#endif
+    }
+
+    public static var isAvailable: Bool { find() != nil }
+
+    private static func javascriptRuntimeArguments() -> [String] {
+        guard let deno = BundledToolLocator.find(
+            ["deno"],
+            developerFallbacks: ["/opt/homebrew/bin/deno", "/usr/local/bin/deno"]
+        ) else { return [] }
+        return ["--js-runtimes", "deno:\(deno)"]
+    }
+
+    private static func bundledMediaArguments() -> [String] {
+        guard let ffmpeg = FFmpegTool.find() else { return [] }
+        return ["--ffmpeg-location", ffmpeg]
+    }
+
+    /// The standalone Python runtime does not automatically inherit macOS
+    /// Keychain trust (for example a user's trusted local HTTPS proxy). Keep
+    /// TLS verification enabled while asking yt-dlp to use our system CA bridge.
+    private static func trustStoreArguments() -> [String] {
+        guard MacOSTrustStore.certificateBundleURL != nil else { return [] }
+        return ["--compat-options", "no-certifi"]
+    }
+
+    static func findAria2c() -> String? {
+        for path in ["/opt/homebrew/bin/aria2c", "/usr/local/bin/aria2c"] {
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return nil
+    }
+
+    /// Probe page metadata + 3–5 quality tiers with size estimates.
+    public static func probe(
+        url: String,
+        cookieSource: YtDlpCookieSource? = nil
+    ) async throws -> YtDlpProbe {
+        guard let bin = find() else {
+            return YtDlpProbe(title: "", durationSeconds: nil, formats: [])
+        }
+        let output = try await run(
+            bin,
+            trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + cookieArguments(cookieSource) + [
+            "-J",
+            "--no-download",
+            "--no-warnings",
+            "--no-playlist",
+            "--socket-timeout", "20",
+            url,
+        ], timeoutSeconds: 90)
+        guard let jsonText = extractJSONObject(from: output),
+              let data = jsonText.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw EngineError.mergeFailed("yt-dlp returned no usable video info")
+        }
+        if let err = json["error"] as? String, !err.isEmpty {
+            throw EngineError.mergeFailed(err)
+        }
+
+        let title = (json["title"] as? String) ?? ""
+        let duration = json["duration"] as? Double
+        let formats = (json["formats"] as? [[String: Any]]) ?? []
+        let tiers = buildTiers(from: formats, duration: duration)
+        return YtDlpProbe(
+            title: title,
+            durationSeconds: duration,
+            formats: tiers,
+            thumbnailURL: pickThumbnailURL(from: json),
+            subtitleTracks: subtitleTracks(from: json)
+        )
+    }
+
+    /// Fetch a lightweight collection index without resolving formats for
+    /// every entry. The first item's normal probe is reused for quality choice.
+    public static func probeCollection(
+        url: String,
+        cookieSource: YtDlpCookieSource? = nil,
+        limit: Int = 100
+    ) async throws -> YtDlpCollectionProbe? {
+        guard let bin = find() else { return nil }
+        let cappedLimit = max(1, min(500, limit))
+        let output = try await run(
+            bin,
+            trustStoreArguments() + javascriptRuntimeArguments() + cookieArguments(cookieSource) + [
+                "-J",
+                "--flat-playlist",
+                "--playlist-end", "\(cappedLimit)",
+                "--no-download",
+                "--no-warnings",
+                "--socket-timeout", "20",
+                url,
+            ],
+            timeoutSeconds: 90
+        )
+        guard let jsonText = extractJSONObject(from: output),
+              let data = jsonText.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw EngineError.mergeFailed("media resolver returned no usable collection info")
+        }
+        return collectionProbe(from: json, sourceURL: url, limit: cappedLimit)
+    }
+
+    static func collectionProbe(
+        from json: [String: Any],
+        sourceURL: String,
+        limit: Int
+    ) -> YtDlpCollectionProbe? {
+        let rawEntries = (json["entries"] as? [[String: Any]]) ?? []
+        let type = (json["_type"] as? String)?.lowercased()
+        guard type == "playlist" || !rawEntries.isEmpty else { return nil }
+
+        let items = rawEntries.prefix(max(1, limit)).compactMap { item -> YtDlpCollectionItem? in
+            guard let resolvedURL = collectionEntryURL(item, sourceURL: sourceURL) else { return nil }
+            let id = (item["id"] as? String) ?? resolvedURL
+            let title = ((item["title"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return YtDlpCollectionItem(
+                id: id,
+                title: title.isEmpty ? id : title,
+                url: resolvedURL,
+                durationSeconds: number(item["duration"]),
+                thumbnailURL: pickThumbnailURL(from: item)
+            )
+        }
+        guard !items.isEmpty else { return nil }
+
+        let declaredCount = integer(json["playlist_count"])
+            ?? integer(json["n_entries"])
+        let reportedCount = declaredCount ?? rawEntries.count
+        let totalCount = max(items.count, reportedCount)
+        let title = ((json["title"] as? String)
+            ?? (json["playlist_title"] as? String)
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return YtDlpCollectionProbe(
+            title: title,
+            items: items,
+            totalCount: totalCount,
+            isTruncated: totalCount > items.count
+                || (declaredCount == nil && rawEntries.count >= limit),
+            thumbnailURL: pickThumbnailURL(from: json)
+        )
+    }
+
+    private static func collectionEntryURL(
+        _ item: [String: Any],
+        sourceURL: String
+    ) -> String? {
+        for key in ["webpage_url", "original_url", "url"] {
+            guard let value = item[key] as? String, !value.isEmpty else { continue }
+            if let url = URL(string: value),
+               let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" {
+                return value
+            }
+        }
+        guard let id = item["id"] as? String, !id.isEmpty,
+              let host = URL(string: sourceURL)?.host?.lowercased() else { return nil }
+        if host.contains("youtube.com") || host == "youtu.be" {
+            return "https://www.youtube.com/watch?v=\(id)"
+        }
+        if host.contains("bilibili.com"), id.uppercased().hasPrefix("BV") {
+            return "https://www.bilibili.com/video/\(id)"
+        }
+        return nil
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        return nil
+    }
+
+    private static func integer(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        return nil
+    }
+
+    static func subtitleTracks(from json: [String: Any]) -> [YtDlpSubtitleTrack] {
+        let manual = (json["subtitles"] as? [String: Any]) ?? [:]
+        let automatic = (json["automatic_captions"] as? [String: Any]) ?? [:]
+        let codes = Set(manual.keys).union(automatic.keys)
+        let locale = Locale.current
+        return codes.map { code in
+            let base = code.split(separator: "-").first.map(String.init) ?? code
+            let localized = locale.localizedString(forLanguageCode: base) ?? code
+            return YtDlpSubtitleTrack(
+                code: code,
+                displayName: localized,
+                isAutomatic: manual[code] == nil
+            )
+        }
+        .sorted { a, b in
+            let preferred = Locale.preferredLanguages.first?.split(separator: "-").first.map(String.init)
+            let aPreferred = preferred.map { a.code.hasPrefix($0) } ?? false
+            let bPreferred = preferred.map { b.code.hasPrefix($0) } ?? false
+            if aPreferred != bPreferred { return aPreferred }
+            if a.isAutomatic != b.isAutomatic { return !a.isAutomatic }
+            return a.displayName.localizedStandardCompare(b.displayName) == .orderedAscending
+        }
+    }
+
+    private static func pickThumbnailURL(from json: [String: Any]) -> String? {
+        if let direct = json["thumbnail"] as? String, !direct.isEmpty {
+            return direct
+        }
+        let thumbs = (json["thumbnails"] as? [[String: Any]]) ?? []
+        // Prefer the largest width when yt-dlp provides a ladder.
+        let ranked = thumbs.compactMap { item -> (Int, String)? in
+            guard let url = item["url"] as? String, !url.isEmpty else { return nil }
+            let w = (item["width"] as? Int) ?? (item["height"] as? Int) ?? 0
+            return (w, url)
+        }
+        .sorted { $0.0 > $1.0 }
+        return ranked.first?.1
+    }
+
+    /// Back-compat wrapper used by tests / simple callers.
+    public static func listFormats(url: String) async throws -> [YtDlpFormat] {
+        try await probe(url: url).formats
+    }
+
+    public static func requiresCookies(error: Error) -> Bool {
+        let text = error.localizedDescription.lowercased()
+        return text.contains("fresh cookies")
+            || text.contains("cookies are needed")
+            || text.contains("cookies-from-browser")
+            || text.contains("sign in to confirm")
+            || text.contains("login required")
+    }
+
+    static func cookieArguments(_ source: YtDlpCookieSource?) -> [String] {
+        switch source {
+        case .browser(let browser):
+            return ["--cookies-from-browser", browser]
+        case .file(let path):
+            return ["--cookies", path]
+        case nil:
+            return []
+        }
+    }
+
+    static func buildTiers(
+        from formats: [[String: Any]],
+        duration: Double?
+    ) -> [YtDlpFormat] {
+        var heights = Set<Int>()
+        for fmt in formats {
+            let vcodec = (fmt["vcodec"] as? String) ?? "none"
+            guard vcodec != "none" else { continue }
+            if let h = fmt["height"] as? Int, h > 0 { heights.insert(h) }
+        }
+
+        let ladder = [2160, 1440, 1080, 720, 480, 360, 240]
+        var picked: [Int] = []
+        for h in ladder where heights.contains(where: { $0 >= h }) {
+            if heights.contains(h) || heights.contains(where: { $0 > h }) {
+                if !picked.contains(h) { picked.append(h) }
+            }
+            if picked.count >= 4 { break }
+        }
+        if picked.isEmpty {
+            picked = Array(heights.sorted(by: >).prefix(4))
+        }
+        if picked.isEmpty {
+            let video = bestVideo(in: formats, maxHeight: nil)
+            let audio = needsSeparateAudio(video) ? bestAudio(in: formats) : nil
+            let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
+            return [
+                YtDlpFormat(
+                    id: "bv*+ba/b",
+                    label: "Best",
+                    height: 0,
+                    approximateBytes: components.isEmpty ? nil : components.reduce(0, +),
+                    componentBytes: components,
+                    containerHint: "MP4",
+                    isVideo: true
+                ),
+            ]
+        }
+
+        return picked.map { h in
+            let video = bestVideo(in: formats, maxHeight: h)
+            let audio = needsSeparateAudio(video) ? bestAudio(in: formats) : nil
+            let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
+            let bytes = components.isEmpty ? nil : components.reduce(0, +)
+            let id = "bestvideo[height<=\(h)]+bestaudio/best[height<=\(h)]/best"
+            return YtDlpFormat(
+                id: id,
+                label: "\(h)p",
+                height: h,
+                approximateBytes: bytes,
+                componentBytes: components,
+                containerHint: "MP4",
+                isVideo: true
+            )
+        }
+    }
+
+    private static func bestVideo(in formats: [[String: Any]], maxHeight: Int?) -> [String: Any]? {
+        let candidates = formats.filter { fmt in
+            let vcodec = (fmt["vcodec"] as? String) ?? "none"
+            guard vcodec != "none" else { return false }
+            guard let h = fmt["height"] as? Int, h > 0 else { return false }
+            if let maxHeight { return h <= maxHeight }
+            return true
+        }
+        // A `bestvideo+bestaudio/best` selector prefers video-only streams.
+        // Estimating from a progressive stream and then adding audio again is
+        // the main source of an inflated total and the late progress jump.
+        let videoOnly = candidates.filter {
+            (($0["acodec"] as? String) ?? "none") == "none"
+        }
+        return (videoOnly.isEmpty ? candidates : videoOnly).max { a, b in
+            let ha = a["height"] as? Int ?? 0
+            let hb = b["height"] as? Int ?? 0
+            if ha != hb { return ha < hb }
+            let ta = a["tbr"] as? Double ?? 0
+            let tb = b["tbr"] as? Double ?? 0
+            return ta < tb
+        }
+    }
+
+    private static func needsSeparateAudio(_ video: [String: Any]?) -> Bool {
+        guard let video else { return false }
+        return ((video["acodec"] as? String) ?? "none") == "none"
+    }
+
+    private static func bestAudio(in formats: [[String: Any]]) -> [String: Any]? {
+        let candidates = formats.filter { fmt in
+            let vcodec = (fmt["vcodec"] as? String) ?? "none"
+            let acodec = (fmt["acodec"] as? String) ?? "none"
+            return vcodec == "none" && acodec != "none"
+        }
+        return candidates.max { a, b in
+            let ta = a["tbr"] as? Double ?? a["abr"] as? Double ?? 0
+            let tb = b["tbr"] as? Double ?? b["abr"] as? Double ?? 0
+            return ta < tb
+        }
+    }
+
+    private static func reportedSize(_ fmt: [String: Any]?) -> Int64? {
+        guard let fmt else { return nil }
+        if let n = fmt["filesize"] as? Int64, n > 0 { return n }
+        if let n = fmt["filesize"] as? Int, n > 0 { return Int64(n) }
+        if let n = fmt["filesize_approx"] as? Int64, n > 0 { return n }
+        if let n = fmt["filesize_approx"] as? Int, n > 0 { return Int64(n) }
+        if let n = fmt["filesize_approx"] as? Double, n > 0 { return Int64(n) }
+        return nil
+    }
+
+    private static func estimateComponentBytes(
+        video: [String: Any]?,
+        audio: [String: Any]?,
+        duration: Double?
+    ) -> [Int64] {
+        func estimate(_ format: [String: Any]?, audio: Bool) -> Int64? {
+            if let size = reportedSize(format), size > 0 { return size }
+            guard let format, let duration, duration > 0 else { return nil }
+            let kbps = audio
+                ? (format["abr"] as? Double ?? format["tbr"] as? Double ?? 0)
+                : (format["tbr"] as? Double ?? 0)
+            guard kbps > 0 else { return nil }
+            return Int64((kbps * 1000 / 8) * duration)
+        }
+
+        return [estimate(video, audio: false), estimate(audio, audio: true)]
+            .compactMap { $0 }
+            .filter { $0 > 0 }
+    }
+
+    /// Live progress parsed from yt-dlp `--newline` / progress-template output.
+    public struct ProgressReport: Sendable, Equatable {
+        public var downloadedBytes: Int64
+        public var totalBytes: Int64
+        public var bytesPerSecond: Double
+        public var etaSeconds: Double?
+        /// yt-dlp format id, or aria2 transfer id. Stable component ids let the
+        /// engine aggregate any site's separate video/audio streams correctly.
+        public var componentID: String?
+        public var status: String?
+        /// Present for true yt-dlp postprocessor events. This lets the product
+        /// distinguish track merging from subtitle preparation without parsing
+        /// human log text.
+        public var phase: DownloadPhase?
+
+        public init(
+            downloadedBytes: Int64 = 0,
+            totalBytes: Int64 = 0,
+            bytesPerSecond: Double = 0,
+            etaSeconds: Double? = nil,
+            componentID: String? = nil,
+            status: String? = nil,
+            phase: DownloadPhase? = nil
+        ) {
+            self.downloadedBytes = downloadedBytes
+            self.totalBytes = totalBytes
+            self.bytesPerSecond = bytesPerSecond
+            self.etaSeconds = etaSeconds
+            self.componentID = componentID
+            self.status = status
+            self.phase = phase
+        }
+    }
+
+    /// Download a chosen format selector into `directory`.
+    /// Streams yt-dlp progress lines into `onProgress` when provided.
+    public static func download(
+        url: String,
+        formatID: String,
+        directory: URL,
+        preferredName: String?,
+        connections: Int = 1,
+        forceOverwrite: Bool = false,
+        options: YtDlpDownloadOptions = .init(),
+        cancelToken: CancelToken? = nil,
+        onProgress: (@Sendable (ProgressReport) -> Void)? = nil
+    ) async throws -> URL {
+        guard let bin = find() else {
+            throw EngineError.mergeFailed("yt-dlp not found")
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let before = Set(
+            ((try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []).map(\.path)
+        )
+        let template: String
+        if let preferredName, !preferredName.isEmpty {
+            let stem = sanitizeFilename(preferredName)
+            template = directory.appendingPathComponent("\(stem).%(ext)s").path
+        } else {
+            template = directory.appendingPathComponent("%(title)s.%(ext)s").path
+        }
+        let args = trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + downloadArguments(
+            url: url,
+            formatID: formatID,
+            outputTemplate: template,
+            connections: connections,
+            forceOverwrite: forceOverwrite,
+            aria2cPath: findAria2c(),
+            options: options
+        )
+        let output = try await runStreaming(
+            bin,
+            args,
+            timeoutSeconds: 60 * 30,
+            cancelToken: cancelToken,
+            onLine: { line in
+                if let report = parseProgressLine(line) {
+                    onProgress?(report)
+                }
+            }
+        )
+        if cancelToken?.isPaused == true { throw EngineError.paused }
+        if cancelToken?.isCancelled == true { throw EngineError.cancelled }
+        if let pathLine = output.split(whereSeparator: \.isNewline)
+            .last(where: { $0.hasPrefix("NDM_DEST|") }) {
+            let path = String(pathLine.dropFirst("NDM_DEST|".count))
+            let exact = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: exact.path) {
+                try normalizeSubtitleSidecarIfNeeded(
+                    for: exact,
+                    options: options,
+                    forceOverwrite: forceOverwrite
+                )
+                return exact
+            }
+        }
+        let after = ((try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? [])
+        let created = after.filter { !before.contains($0.path) }
+        let candidates = created.isEmpty ? after : created
+        guard let newest = candidates.max(by: { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return da < db
+        }) else {
+            throw EngineError.mergeFailed("yt-dlp finished but no file appeared")
+        }
+        try normalizeSubtitleSidecarIfNeeded(
+            for: newest,
+            options: options,
+            forceOverwrite: forceOverwrite
+        )
+        return newest
+    }
+
+    /// yt-dlp normally writes `Movie.zh-Hans.srt`. NDM currently lets the user
+    /// choose one subtitle language, so publish the conventional sidecar name
+    /// `Movie.srt`; players can then discover it without language-specific rules.
+    static func normalizeSubtitleSidecar(
+        for videoURL: URL,
+        forceOverwrite: Bool
+    ) throws -> URL? {
+        let folder = videoURL.deletingLastPathComponent()
+        let videoStem = videoURL.deletingPathExtension().lastPathComponent
+        let target = folder.appendingPathComponent(videoStem).appendingPathExtension("srt")
+        let fileManager = FileManager.default
+
+        let files = try fileManager.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+        let candidates = files.filter { url in
+            guard url.pathExtension.lowercased() == "srt", url != target else { return false }
+            let stem = url.deletingPathExtension().lastPathComponent
+            return stem.hasPrefix(videoStem + ".")
+        }
+        .sorted { lhs, rhs in
+            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            return left > right
+        }
+
+        guard let source = candidates.first else {
+            return fileManager.fileExists(atPath: target.path) ? target : nil
+        }
+        if fileManager.fileExists(atPath: target.path) {
+            guard forceOverwrite else { return target }
+            try fileManager.removeItem(at: target)
+        }
+        try fileManager.moveItem(at: source, to: target)
+        return target
+    }
+
+    private static func normalizeSubtitleSidecarIfNeeded(
+        for videoURL: URL,
+        options: YtDlpDownloadOptions,
+        forceOverwrite: Bool
+    ) throws {
+        guard options.subtitleLanguage?.isEmpty == false else { return }
+        _ = try normalizeSubtitleSidecar(for: videoURL, forceOverwrite: forceOverwrite)
+    }
+
+    static func downloadArguments(
+        url: String,
+        formatID: String,
+        outputTemplate: String,
+        connections: Int,
+        forceOverwrite: Bool,
+        aria2cPath: String?,
+        options: YtDlpDownloadOptions = .init()
+    ) -> [String] {
+        let n = max(1, min(32, connections))
+        let progressTemplate =
+            "NDM|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.format_id)s|%(progress.status)s"
+        let postprocessTemplate =
+            "postprocess:NDM_POST|%(progress.postprocessor)s|%(progress.status)s"
+        var args = [
+            "-f", formatID,
+            "--merge-output-format", options.container.fileExtension,
+            "-o", outputTemplate,
+            "--no-playlist",
+            "--newline",
+            "--progress",
+            "--progress-template", progressTemplate,
+            "--progress-template", postprocessTemplate,
+            "--print", "after_move:NDM_DEST|%(filepath)s",
+            "--no-simulate",
+            "--socket-timeout", "20",
+        ]
+        if forceOverwrite {
+            args.append("--force-overwrites")
+        }
+        if let language = options.subtitleLanguage, !language.isEmpty {
+            args.append(contentsOf: [
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs", language,
+                "--sub-format", "srt/best",
+                "--convert-subs", "srt",
+            ])
+        }
+        args.append(contentsOf: cookieArguments(options.cookieSource))
+        if n > 1 {
+            // Native yt-dlp concurrency for DASH/HLS fragments.
+            args.append(contentsOf: ["--concurrent-fragments", "\(n)"])
+            // For ordinary HTTP media, aria2c supplies real range connections.
+            if let aria2cPath {
+                args.append(contentsOf: [
+                    "--downloader", aria2cPath,
+                    "--downloader-args",
+                    "aria2c:-x\(n) -s\(n) -k1M --file-allocation=none --summary-interval=1 --console-log-level=warn",
+                ])
+            }
+        }
+        args.append(url)
+        return args
+    }
+
+    public static func sanitizeFilename(_ name: String) -> String {
+        let stem = (name as NSString).deletingPathExtension
+        let cleaned = stem
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return "video" }
+        if cleaned.count > 120 { return String(cleaned.prefix(120)) }
+        return cleaned
+    }
+
+    /// Parse yt-dlp progress-template lines or classic `[download] xx% …` output.
+    static func parseProgressLine(_ line: String) -> ProgressReport? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("NDM_POST|") {
+            let parts = trimmed.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { return nil }
+            let postprocessor = parts[1].lowercased()
+            let phase: DownloadPhase
+            if postprocessor.contains("merger") {
+                phase = .merging
+            } else if postprocessor.contains("subtitle") {
+                phase = .subtitles
+            } else {
+                phase = .finalizing
+            }
+            return ProgressReport(
+                componentID: parts[1],
+                status: parts[2],
+                phase: phase
+            )
+        }
+        if trimmed.hasPrefix("NDM|") {
+            let parts = trimmed.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            // NDM|downloaded|total|estimate|speed|eta|format_id|status
+            guard parts.count >= 6 else { return nil }
+            let downloaded = Int64(parts[1]) ?? 0
+            let totalRaw = Int64(parts[2]) ?? 0
+            let estimate = Int64(parts[3]) ?? 0
+            let total = totalRaw > 0 ? totalRaw : estimate
+            let speed = Double(parts[4]) ?? 0
+            let eta: Double?
+            if let e = Double(parts[5]), e >= 0 { eta = e } else { eta = nil }
+            guard downloaded > 0 || total > 0 || speed > 0 else { return nil }
+            return ProgressReport(
+                downloadedBytes: max(0, downloaded),
+                totalBytes: max(0, total),
+                bytesPerSecond: max(0, speed),
+                etaSeconds: eta,
+                componentID: parts.count > 6 ? nonEmpty(parts[6]) : nil,
+                status: parts.count > 7 ? nonEmpty(parts[7]) : nil
+            )
+        }
+        // aria2c external downloader, for example:
+        // [#abc123 5.0MiB/10MiB(50%) CN:8 DL:1.2MiB ETA:4s]
+        if trimmed.hasPrefix("[#"),
+           let idRange = trimmed.range(of: #"\[#([^\s]+)"#, options: .regularExpression),
+           let ratioRange = trimmed.range(
+               of: #"([\d.]+\s*[KMGT]?i?B)/([\d.]+\s*[KMGT]?i?B)"#,
+               options: [.regularExpression, .caseInsensitive]
+           ) {
+            let idToken = String(trimmed[idRange]).dropFirst(2)
+            let ratio = String(trimmed[ratioRange]).split(separator: "/", maxSplits: 1)
+            let downloaded = ratio.first.flatMap { parseByteCount(in: String($0)) } ?? 0
+            let total = ratio.count > 1 ? (parseByteCount(in: String(ratio[1])) ?? 0) : 0
+            let speed: Double
+            if let dlRange = trimmed.range(
+                of: #"DL:([\d.]+\s*[KMGT]?i?B)"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) {
+                speed = Double(parseByteCount(in: String(trimmed[dlRange])) ?? 0)
+            } else {
+                speed = 0
+            }
+            let eta: Double?
+            if let etaRange = trimmed.range(of: #"ETA:([^\]\s]+)"#, options: .regularExpression) {
+                eta = parseCompactDuration(
+                    String(trimmed[etaRange]).replacingOccurrences(of: "ETA:", with: "")
+                )
+            } else {
+                eta = nil
+            }
+            return ProgressReport(
+                downloadedBytes: downloaded,
+                totalBytes: total,
+                bytesPerSecond: speed,
+                etaSeconds: eta,
+                componentID: "aria2:\(idToken)",
+                status: downloaded >= total && total > 0 ? "finished" : "downloading"
+            )
+        }
+        // [download]  12.3% of  50.00MiB at  1.23MiB/s ETA 00:39
+        // [download]  12.3% of ~ 50.00MiB at  1.23MiB/s ETA 00:39
+        guard trimmed.contains("[download]"), trimmed.contains("%") else { return nil }
+        var report = ProgressReport()
+        if let pctRange = trimmed.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression) {
+            let pctText = trimmed[pctRange].dropLast()
+            if let pct = Double(pctText), pct > 0 {
+                // Prefer absolute sizes below; pct alone is a last-resort fraction.
+                report.downloadedBytes = Int64(pct * 1000) // placeholder until size known
+            }
+        }
+        if let ofRange = trimmed.range(of: #"of\s+~?\s*([\d.]+)\s*([KMGT]?i?B)"#, options: [.regularExpression, .caseInsensitive]) {
+            let chunk = String(trimmed[ofRange])
+            if let bytes = parseByteCount(in: chunk) {
+                report.totalBytes = bytes
+                if let pctRange = trimmed.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression),
+                   let pct = Double(trimmed[pctRange].dropLast()) {
+                    report.downloadedBytes = Int64(Double(bytes) * pct / 100.0)
+                }
+            }
+        }
+        if let atRange = trimmed.range(of: #"at\s+([\d.]+)\s*([KMGT]?i?B)/s"#, options: [.regularExpression, .caseInsensitive]) {
+            let chunk = String(trimmed[atRange]).replacingOccurrences(of: "at", with: "")
+            if let speed = parseByteCount(in: chunk) {
+                report.bytesPerSecond = Double(speed)
+            }
+        }
+        if let etaRange = trimmed.range(of: #"ETA\s+(\d+:\d+(?::\d+)?)"#, options: .regularExpression) {
+            let etaText = String(trimmed[etaRange])
+                .replacingOccurrences(of: "ETA", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            report.etaSeconds = parseETA(etaText)
+        }
+        guard report.downloadedBytes > 0 || report.totalBytes > 0 || report.bytesPerSecond > 0 else {
+            return nil
+        }
+        return report
+    }
+
+    private static func parseByteCount(in text: String) -> Int64? {
+        guard let match = text.range(of: #"([\d.]+)\s*([KMGT]?i?B)"#, options: [.regularExpression, .caseInsensitive]) else {
+            return nil
+        }
+        let token = String(text[match]).replacingOccurrences(of: " ", with: "")
+        let number = token.prefix { $0.isNumber || $0 == "." }
+        guard let value = Double(number) else { return nil }
+        let unit = String(token.dropFirst(number.count)).lowercased()
+        let mult: Double
+        switch unit {
+        case "b": mult = 1
+        case "kb", "kib": mult = 1024
+        case "mb", "mib": mult = 1024 * 1024
+        case "gb", "gib": mult = 1024 * 1024 * 1024
+        case "tb", "tib": mult = 1024 * 1024 * 1024 * 1024
+        default: mult = 1
+        }
+        return Int64(value * mult)
+    }
+
+    private static func parseETA(_ text: String) -> Double? {
+        let parts = text.split(separator: ":").compactMap { Double($0) }
+        switch parts.count {
+        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        case 2: return parts[0] * 60 + parts[1]
+        case 1: return parts[0]
+        default: return nil
+        }
+    }
+
+    private static func parseCompactDuration(_ text: String) -> Double? {
+        if text.contains(":") { return parseETA(text) }
+        var total = 0.0
+        for (pattern, multiplier) in [(#"([\d.]+)h"#, 3600.0), (#"([\d.]+)m"#, 60.0), (#"([\d.]+)s"#, 1.0)] {
+            if let range = text.range(of: pattern, options: .regularExpression),
+               let value = Double(text[range].dropLast()) {
+                total += value * multiplier
+            }
+        }
+        return total > 0 ? total : nil
+    }
+
+    private static func nonEmpty(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty || value == "NA" || value == "None" ? nil : value
+    }
+
+    private static func extractJSONObject(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("{") { return trimmed }
+        guard let start = trimmed.lastIndex(of: "{"),
+              let end = trimmed.lastIndex(of: "}"),
+              start < end else {
+            return nil
+        }
+        return String(trimmed[start...end])
+    }
+
+    private static func run(
+        _ bin: String,
+        _ args: [String],
+        timeoutSeconds: TimeInterval = 90
+    ) async throws -> String {
+        try await runStreaming(bin, args, timeoutSeconds: timeoutSeconds, cancelToken: nil, onLine: nil)
+    }
+
+    /// Process runner that can stream stdout/stderr lines (for live download progress).
+    private static func runStreaming(
+        _ bin: String,
+        _ args: [String],
+        timeoutSeconds: TimeInterval,
+        cancelToken: CancelToken?,
+        onLine: (@Sendable (String) -> Void)?
+    ) async throws -> String {
+        try await withCheckedThrowingContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let proc = Process()
+                    proc.executableURL = URL(fileURLWithPath: bin)
+                    proc.arguments = args
+                    if let trustStore = MacOSTrustStore.certificateBundleURL {
+                        var environment = ProcessInfo.processInfo.environment
+                        environment["SSL_CERT_FILE"] = trustStore.path
+                        proc.environment = environment
+                    }
+                    let out = Pipe()
+                    let err = Pipe()
+                    proc.standardOutput = out
+                    proc.standardError = err
+
+                    let lock = NSLock()
+                    var stdoutData = Data()
+                    var stderrData = Data()
+                    var leftoverOut = Data()
+                    var leftoverErr = Data()
+
+                    func consume(_ chunk: Data, leftover: inout Data, into bag: inout Data) {
+                        bag.append(chunk)
+                        leftover.append(chunk)
+                        // yt-dlp uses newlines; aria2c refreshes progress with CR.
+                        // Treat both as line boundaries so external multi-range
+                        // transfers still update the UI live.
+                        while let boundary = leftover.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                            let lineData = leftover.subdata(in: leftover.startIndex..<boundary)
+                            leftover.removeSubrange(leftover.startIndex...boundary)
+                            if !lineData.isEmpty,
+                               let line = String(data: lineData, encoding: .utf8) {
+                                onLine?(line)
+                            }
+                        }
+                    }
+
+                    out.fileHandleForReading.readabilityHandler = { handle in
+                        let chunk = handle.availableData
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                            return
+                        }
+                        lock.lock()
+                        consume(chunk, leftover: &leftoverOut, into: &stdoutData)
+                        lock.unlock()
+                    }
+                    err.fileHandleForReading.readabilityHandler = { handle in
+                        let chunk = handle.availableData
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                            return
+                        }
+                        lock.lock()
+                        consume(chunk, leftover: &leftoverErr, into: &stderrData)
+                        lock.unlock()
+                    }
+
+                    let cancelID = cancelToken?.registerCancellationHandler {
+                        if proc.isRunning { proc.terminate() }
+                    }
+
+                    try proc.run()
+
+                    let deadline = DispatchTime.now() + timeoutSeconds
+                    var timedOut = false
+                    while proc.isRunning {
+                        if cancelToken?.isCancelled == true {
+                            proc.terminate()
+                            break
+                        }
+                        if DispatchTime.now() > deadline {
+                            timedOut = true
+                            proc.terminate()
+                            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                                if proc.isRunning { proc.interrupt() }
+                            }
+                            break
+                        }
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+
+                    out.fileHandleForReading.readabilityHandler = nil
+                    err.fileHandleForReading.readabilityHandler = nil
+                    // Drain remaining bytes so we don't lose the final progress line.
+                    lock.lock()
+                    consume(out.fileHandleForReading.readDataToEndOfFile(), leftover: &leftoverOut, into: &stdoutData)
+                    consume(err.fileHandleForReading.readDataToEndOfFile(), leftover: &leftoverErr, into: &stderrData)
+                    if !leftoverOut.isEmpty, let line = String(data: leftoverOut, encoding: .utf8) {
+                        onLine?(line)
+                    }
+                    if !leftoverErr.isEmpty, let line = String(data: leftoverErr, encoding: .utf8) {
+                        onLine?(line)
+                    }
+                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+                    lock.unlock()
+
+                    if let cancelID {
+                        cancelToken?.removeCancellationHandler(cancelID)
+                    }
+
+                    if cancelToken?.isPaused == true {
+                        cont.resume(throwing: EngineError.paused)
+                        return
+                    }
+                    if cancelToken?.isCancelled == true {
+                        cont.resume(throwing: EngineError.cancelled)
+                        return
+                    }
+                    if timedOut {
+                        cont.resume(throwing: EngineError.mergeFailed(
+                            L10n.t(
+                                "Parsing timed out: the page is unusually large or the network is slow. Try again shortly.",
+                                "解析超时：页面信息过大或网络过慢，请稍后重试"
+                            )
+                        ))
+                        return
+                    }
+                    if proc.terminationStatus != 0 {
+                        let msg = stderr.split(separator: "\n").last.map(String.init)
+                            ?? stdout.split(separator: "\n").last.map(String.init)
+                            ?? "yt-dlp failed"
+                        cont.resume(throwing: EngineError.mergeFailed(msg))
+                    } else {
+                        cont.resume(returning: stdout.isEmpty ? stderr : stdout)
+                    }
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+}

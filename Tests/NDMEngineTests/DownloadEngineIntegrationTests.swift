@@ -3,6 +3,47 @@ import XCTest
 @testable import NDMCore
 
 final class DownloadEngineIntegrationTests: XCTestCase {
+    func testCompletedMediaIsSmartNamedBeforePersistenceAndCallback() async throws {
+        let payload = Data(repeating: 0x5A, count: 96 * 1024)
+        let server = LocalRangeServer(payload: payload)
+        try server.start()
+        defer { server.stop() }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-smart-name-\(UUID().uuidString)", isDirectory: true)
+        let support = tmp.appendingPathComponent("support", isDirectory: true)
+        let dest = tmp.appendingPathComponent("Downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+
+        let store = try DownloadStore(directory: support)
+        let settings = AppSettings(downloadDirectory: dest, maxConnections: 2, useCategoryFolders: false)
+        let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
+        let mediaURL = URL(string: "http://127.0.0.1:\(server.port)/videoplayback-9f31.mp4")!
+        var task = DownloadTask(
+            url: mediaURL.absoluteString,
+            filename: "videoplayback-9f31.mp4",
+            category: .video,
+            status: .incomplete,
+            connections: 2,
+            pageTitle: "A Better Download - YouTube",
+            mimeType: "video/mp4",
+            folderPath: dest.path
+        )
+        task = try store.insert(task)
+
+        try await manager.startAndWait(taskID: task.id)
+
+        let tasks = try await manager.listTasks()
+        let done = try XCTUnwrap(tasks.first { $0.id == task.id })
+        XCTAssertEqual(done.filename, "A Better Download.mp4")
+        XCTAssertTrue(SmartFinalize.filenameReflectsPageTitle(done.filename, pageTitle: done.pageTitle))
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent(done.filename)), payload)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("videoplayback-9f31.mp4").path
+        ))
+    }
+
     func testMultiConnectionDownloadAndMerge() async throws {
         // ~256 KiB patterned payload
         var payload = Data(count: 256 * 1024)
@@ -120,6 +161,48 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         let log = try String(contentsOf: work.appendingPathComponent("LogFile.txt"), encoding: .utf8)
         XCTAssertTrue(log.contains("cancelling active Range round for live replan"))
         XCTAssertTrue(log.contains("Replanned active transfers: MaxAllowedConnection = 4"))
+    }
+
+    func testTailRebalanceSplitsARealStragglerIntoFreshRanges() async throws {
+        var payload = Data(count: 8 * 1024 * 1024)
+        for i in 0..<payload.count { payload[i] = UInt8((i * 17) % 251) }
+
+        // The initial four-way plan puts its last range above 6 MiB. Hold that
+        // response back so the other workers become idle and must steal its tail.
+        let server = LocalRangeServer(
+            payload: payload,
+            rangeResponseDelay: { start in
+                start >= 6 * 1024 * 1024 ? 0.45 : 0.01
+            }
+        )
+        try server.start()
+        defer { server.stop() }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-tail-rebalance-\(UUID().uuidString)", isDirectory: true)
+        let support = tmp.appendingPathComponent("support", isDirectory: true)
+        let dest = tmp.appendingPathComponent("Downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+
+        let store = try DownloadStore(directory: support)
+        let settings = AppSettings(downloadDirectory: dest, maxConnections: 4, useCategoryFolders: false)
+        let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
+        let task = try await manager.addURL(server.baseURL.absoluteString, connections: 4)
+
+        try await manager.startAndWait(taskID: task.id)
+
+        // Bootstrap + the first four ranges would be five requests. Fresh tail
+        // ranges prove that the engine did not merely wait for the slow fourth.
+        XCTAssertGreaterThanOrEqual(server.recordedRanges.count, 8)
+        let work = support.appendingPathComponent("\(task.id)", isDirectory: true)
+        let log = try String(contentsOf: work.appendingPathComponent("LogFile.txt"), encoding: .utf8)
+        XCTAssertTrue(log.contains("TailBalance: 3 active of 4"))
+
+        let tasks = try await manager.listTasks()
+        let done = try XCTUnwrap(tasks.first { $0.id == task.id })
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent(done.filename)), payload)
     }
 
     private func waitUntil(

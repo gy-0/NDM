@@ -6,6 +6,10 @@
 DerivedData/
 .idea/
 *.log
+dist/
+Vendor/Tools/yt-dlp
+Vendor/Tools/ffmpeg
+Vendor/Tools/deno
 
 # Original proprietary app (reference only; not part of the open-source host)
 NeatDownloadManager.app/

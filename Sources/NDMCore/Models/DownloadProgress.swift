@@ -8,6 +8,13 @@ public struct DownloadProgress: Sendable, Equatable {
     public var segmentStates: [SegmentState]
     public var status: DownloadStatus
     public var errorDescription: String?
+    /// User-facing lifecycle for media resolvers whose first byte can take a while.
+    public var phase: DownloadPhase?
+    /// Optional end-to-end progress for work that continues after the last
+    /// transferred byte (for example, merging video/audio or preparing
+    /// subtitles). Byte counters remain truthful while every UI progress strip
+    /// can share this single monotonic journey fraction.
+    public var journeyFraction: Double?
     /// Smart connection tuning trace (multi-connection HTTP tasks only).
     public var tuning: ConnectionTuning?
 
@@ -19,6 +26,8 @@ public struct DownloadProgress: Sendable, Equatable {
         segmentStates: [SegmentState] = [],
         status: DownloadStatus = .waiting,
         errorDescription: String? = nil,
+        phase: DownloadPhase? = nil,
+        journeyFraction: Double? = nil,
         tuning: ConnectionTuning? = nil
     ) {
         self.taskID = taskID
@@ -28,10 +37,15 @@ public struct DownloadProgress: Sendable, Equatable {
         self.segmentStates = segmentStates
         self.status = status
         self.errorDescription = errorDescription
+        self.phase = phase
+        self.journeyFraction = journeyFraction
         self.tuning = tuning
     }
 
     public var fractionCompleted: Double {
+        if let journeyFraction {
+            return min(1, max(0, journeyFraction))
+        }
         guard totalBytes > 0 else { return 0 }
         return min(1, Double(completedBytes) / Double(totalBytes))
     }
@@ -40,6 +54,14 @@ public struct DownloadProgress: Sendable, Equatable {
         guard bytesPerSecond > 0, totalBytes > completedBytes else { return nil }
         return Double(totalBytes - completedBytes) / bytesPerSecond
     }
+}
+
+public enum DownloadPhase: String, Codable, Sendable, Equatable {
+    case preparing
+    case transferring
+    case merging
+    case subtitles
+    case finalizing
 }
 
 public struct SegmentState: Sendable, Equatable, Identifiable {

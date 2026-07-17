@@ -6,20 +6,35 @@ public actor DownloadManager {
     private let store: DownloadStore
     private var settings: AppSettings
     private let supportRoot: URL
+    private let capacityProvider: @Sendable (URL) -> Int64?
+    private let sameVolumeProvider: @Sendable (URL, URL) -> Bool
     private var engines: [Int64: DownloadEngine] = [:]
     private var hlsEngines: [Int64: HLSEngine] = [:]
     private var ftpEngines: [Int64: FTPEngine] = [:]
     private var mkvEngines: [Int64: MKVMergeEngine] = [:]
+    private var ytDlpEngines: [Int64: YtDlpEngine] = [:]
     private var runningTasks: [Int64: Task<Void, Never>] = [:]
     /// Optional UI hook when a download completes successfully.
     public var onTaskCompleted: (@Sendable (DownloadTask) -> Void)?
     /// Optional UI hook when settings change (for ShowPanel push).
     public var onSettingsChanged: (@Sendable (AppSettings) -> Void)?
 
-    public init(store: DownloadStore, settings: AppSettings, supportRoot: URL = DownloadStore.defaultSupportDirectory) {
+    public init(
+        store: DownloadStore,
+        settings: AppSettings,
+        supportRoot: URL = DownloadStore.defaultSupportDirectory,
+        capacityProvider: @escaping @Sendable (URL) -> Int64? = {
+            VolumeCapacity.availableBytes(at: $0)
+        },
+        sameVolumeProvider: @escaping @Sendable (URL, URL) -> Bool = {
+            VolumeCapacity.areOnSameVolume($0, $1)
+        }
+    ) {
         self.store = store
         self.settings = settings
         self.supportRoot = supportRoot
+        self.capacityProvider = capacityProvider
+        self.sameVolumeProvider = sameVolumeProvider
     }
 
     public func updateSettings(_ settings: AppSettings) {
@@ -50,6 +65,9 @@ public actor DownloadManager {
             return await engine.currentProgress()
         }
         if let engine = mkvEngines[taskID] {
+            return await engine.currentProgress()
+        }
+        if let engine = ytDlpEngines[taskID] {
             return await engine.currentProgress()
         }
         return nil
@@ -92,16 +110,254 @@ public actor DownloadManager {
         return task
     }
 
+    /// Persist an already-finished file (e.g. yt-dlp) as a completed task and
+    /// fire the same completion hook as engine-backed downloads.
+    @discardableResult
+    public func recordCompletedFile(
+        url: String,
+        fileURL: URL,
+        pageTitle: String? = nil,
+        linkType: String = "ytdlp"
+    ) async throws -> DownloadTask {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        var task = DownloadTask(
+            url: url,
+            filename: fileURL.lastPathComponent,
+            linkType: linkType,
+            fileSize: size,
+            category: DownloadCategory.infer(filename: fileURL.lastPathComponent, mimeType: nil),
+            status: .complete,
+            connections: 1,
+            lastTry: Date(),
+            firstTry: Date(),
+            resumable: true,
+            pageTitle: pageTitle,
+            mimeType: "video/mp4",
+            folderPath: fileURL.deletingLastPathComponent().path
+        )
+        task = try store.insert(task)
+        onTaskCompleted?(task)
+        return task
+    }
+
+    /// Create a yt-dlp-backed task that lands in the same download directory as
+    /// ordinary downloads, then runs with live progress for the progress window.
+    @discardableResult
+    public func startYtDlp(
+        url: String,
+        formatID: String,
+        options: YtDlpDownloadOptions = .init(),
+        pageTitle: String?,
+        estimatedBytes: Int64?,
+        estimatedComponentBytes: [Int64] = [],
+        preferredFilename: String?
+    ) async throws -> DownloadTask {
+        if !settings.downloadAllAtOnce, !runningTasks.isEmpty {
+            throw ManagerError.queueBusy
+        }
+        try validateStorage(StorageBudget.media(
+            sampleFinalBytes: estimatedBytes,
+            sampleComponentBytes: estimatedComponentBytes,
+            sampleDurationSeconds: nil
+        ))
+        let stem: String
+        if let preferredFilename, !preferredFilename.isEmpty {
+            stem = YtDlpTool.sanitizeFilename(preferredFilename)
+        } else if let pageTitle, !pageTitle.isEmpty {
+            stem = YtDlpTool.sanitizeFilename(pageTitle)
+        } else {
+            stem = "video"
+        }
+        let ext = options.container.fileExtension
+        let filename = stem.lowercased().hasSuffix(".\(ext)") ? stem : "\(stem).\(ext)"
+
+        var dest = settings.downloadDirectory
+        var task = DownloadTask(
+            url: url,
+            filename: filename,
+            linkType: "ytdlp",
+            fileSize: max(0, estimatedBytes ?? 0),
+            category: .video,
+            status: .downloading,
+            connections: max(1, min(32, settings.maxConnections)),
+            lastTry: Date(),
+            firstTry: Date(),
+            resumable: false,
+            pageTitle: pageTitle,
+            hitTitle: formatID,
+            mimeType: options.container.mimeType,
+            postData: try? JSONEncoder().encode(options),
+            folderPath: dest.path
+        )
+        if settings.useCategoryFolders {
+            dest.appendPathComponent(task.category.rawValue.capitalized, isDirectory: true)
+            task.folderPath = dest.path
+        }
+        task = try store.insert(task)
+        let taskID = task.id
+
+        let engine = YtDlpEngine(
+            taskID: taskID,
+            estimatedBytes: estimatedBytes ?? 0,
+            estimatedComponentBytes: estimatedComponentBytes,
+            connections: task.connections
+        )
+        ytDlpEngines[taskID] = engine
+        let onComplete = onTaskCompleted
+        runningTasks[taskID] = Task {
+            await self.runEngine(
+                taskID: taskID,
+                task: task,
+                store: store,
+                onComplete: onComplete
+            ) {
+                try await engine.run(
+                    url: url,
+                    formatID: formatID,
+                    directory: dest,
+                    preferredName: stem,
+                    options: options
+                )
+            }
+            self.ytDlpEngines[taskID] = nil
+        }
+        return task
+    }
+
+    /// Add a collection as independent, recoverable tasks. Only one entry is
+    /// launched automatically at a time so a 32-connection preference cannot
+    /// multiply into hundreds of simultaneous sockets for a large playlist.
+    @discardableResult
+    public func enqueueYtDlpCollection(
+        _ items: [YtDlpCollectionItem],
+        formatID: String,
+        options: YtDlpDownloadOptions = .init(),
+        collectionURL: String,
+        collectionTitle: String?,
+        estimatedSampleBytes: Int64? = nil,
+        estimatedSampleComponentBytes: [Int64] = [],
+        sampleDurationSeconds: Double? = nil
+    ) async throws -> [DownloadTask] {
+        try validateStorage(StorageBudget.media(
+            sampleFinalBytes: estimatedSampleBytes,
+            sampleComponentBytes: estimatedSampleComponentBytes,
+            sampleDurationSeconds: sampleDurationSeconds,
+            collectionDurations: items.map(\.durationSeconds)
+        ))
+        let inserted = try insertYtDlpCollection(
+            items,
+            formatID: formatID,
+            options: options,
+            collectionURL: collectionURL,
+            collectionTitle: collectionTitle
+        )
+        if runningTasks.isEmpty, let first = inserted.first {
+            try await start(taskID: first.id)
+        }
+        return inserted
+    }
+
+    private func validateStorage(_ budget: StorageBudget) throws {
+        guard let available = capacityProvider(settings.downloadDirectory),
+              let required = budget.peakBytes else { return }
+        let confidence = StorageConfidence(
+            budget: budget,
+            availableBytes: available
+        )
+        guard confidence.level != .insufficient else {
+            throw ManagerError.insufficientStorage(
+                requiredBytes: required,
+                availableBytes: available
+            )
+        }
+    }
+
+    /// Injectable persistence boundary used by queue tests without launching
+    /// the external media process.
+    func insertYtDlpCollection(
+        _ items: [YtDlpCollectionItem],
+        formatID: String,
+        options: YtDlpDownloadOptions = .init(),
+        collectionURL: String,
+        collectionTitle: String?
+    ) throws -> [DownloadTask] {
+        guard !items.isEmpty else { return [] }
+        let width = max(2, String(items.count).count)
+        var inserted: [DownloadTask] = []
+        inserted.reserveCapacity(items.count)
+
+        for (offset, item) in items.enumerated() {
+            let number = String(format: "%0*d", width, offset + 1)
+            let cleanTitle = YtDlpTool.sanitizeFilename(item.title)
+            let stem = "\(number) - \(cleanTitle)"
+            let ext = options.container.fileExtension
+            var dest = settings.downloadDirectory
+            var task = DownloadTask(
+                url: item.url,
+                filename: "\(stem).\(ext)",
+                linkType: "ytdlp",
+                fileSize: 0,
+                category: .video,
+                status: .waiting,
+                connections: max(1, min(32, settings.maxConnections)),
+                firstTry: Date(),
+                resumable: false,
+                pageURL: collectionURL,
+                pageTitle: item.title.isEmpty ? collectionTitle : item.title,
+                hitTitle: formatID,
+                mimeType: options.container.mimeType,
+                postData: try? JSONEncoder().encode(options),
+                folderPath: dest.path
+            )
+            if settings.useCategoryFolders {
+                dest.appendPathComponent(task.category.rawValue.capitalized, isDirectory: true)
+                task.folderPath = dest.path
+            }
+            task = try store.insert(task)
+            inserted.append(task)
+        }
+
+        return inserted
+    }
+
     /// Host-side entry for browser extension messages (`handleBrowserDownloadRequest:`).
     public func addFromBridge(_ message: ParsedBridgeMessage) async throws -> DownloadTask {
-        var headers: [String] = []
-        if !message.origin.isEmpty { headers.append("Origin: \(message.origin)") }
-        if !message.referer.isEmpty { headers.append("Referer: \(message.referer)") }
-        if !message.cookies.isEmpty { headers.append("Cookie: \(message.cookies)") }
-        if !message.reqContentType.isEmpty { headers.append("Content-Type: \(message.reqContentType)") }
-        for (k, v) in message.extraHeaders {
-            headers.append("\(k): \(v)")
+        let headers = Self.bridgeHeaders(from: message)
+
+        // Link Rescue: when the browser captures a fresh signed URL from the
+        // same source page, attach it to the failed task instead of creating a
+        // duplicate. The existing task id and partial seg.xN files stay intact,
+        // so AppDelegate's normal start call resumes the original download.
+        if var task = try linkRescueCandidate(for: message) {
+            task.url = message.url
+            task.method = message.method
+            task.headers = headers
+            task.errorText = nil
+            task.status = .incomplete
+            task.lastTry = Date()
+            if !message.pageURL.isEmpty {
+                task.pageURL = message.pageURL
+            } else if !message.referer.isEmpty {
+                task.pageURL = message.referer
+            }
+            if !message.pageTitle.isEmpty { task.pageTitle = message.pageTitle }
+            if !message.userAgent.isEmpty { task.userAgent = message.userAgent }
+            if !message.contentType.isEmpty { task.mimeType = message.contentType }
+            if message.fileSize > 0 { task.fileSize = Int64(message.fileSize) }
+            task.postData = message.postData.map { Data($0.utf8) }
+            task.alternateURL = message.alternateURL.isEmpty ? nil : message.alternateURL
+            if !message.ltype.isEmpty { task.linkType = message.ltype }
+            if Self.looksLikeHLS(url: task.url, filename: task.filename) {
+                task.linkType = "hls"
+            } else if task.alternateURL != nil {
+                task.linkType = "media"
+            }
+            task.category = DownloadCategory.infer(filename: task.filename, mimeType: task.mimeType)
+            try store.update(task)
+            return task
         }
+
         var task = try await addURL(
             message.url,
             pageURL: message.pageURL.isEmpty ? message.referer : message.pageURL,
@@ -139,6 +395,45 @@ public actor DownloadManager {
         return task
     }
 
+    private func linkRescueCandidate(for message: ParsedBridgeMessage) throws -> DownloadTask? {
+        let incomingPage = message.pageURL.isEmpty ? message.referer : message.pageURL
+        guard let incomingKey = DuplicateDownloadMatcher.canonicalKey(for: incomingPage) else {
+            return nil
+        }
+        return try store.allDownloads().first { task in
+            guard task.status == .error,
+                  task.linkType.lowercased() != "ytdlp",
+                  let pageURL = task.pageURL,
+                  DuplicateDownloadMatcher.canonicalKey(for: pageURL) == incomingKey,
+                  let diagnostic = DownloadDiagnostic.fromStoredErrorText(task.errorText) else {
+                return false
+            }
+            switch diagnostic {
+            case .linkExpired, .signInRequired:
+                // A dual-track task needs a fresh pair; mixing a new video URL
+                // with stale audio authorization is worse than adding a new task.
+                if task.alternateURL?.isEmpty == false, message.alternateURL.isEmpty {
+                    return false
+                }
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private static func bridgeHeaders(from message: ParsedBridgeMessage) -> [String] {
+        var headers: [String] = []
+        if !message.origin.isEmpty { headers.append("Origin: \(message.origin)") }
+        if !message.referer.isEmpty { headers.append("Referer: \(message.referer)") }
+        if !message.cookies.isEmpty { headers.append("Cookie: \(message.cookies)") }
+        if !message.reqContentType.isEmpty { headers.append("Content-Type: \(message.reqContentType)") }
+        for (key, value) in message.extraHeaders.sorted(by: { $0.key < $1.key }) {
+            headers.append("\(key): \(value)")
+        }
+        return headers
+    }
+
     /// Fire-and-forget start (UI / bridge). Does not wait for completion.
     public func start(taskID: Int64) async throws {
         if runningTasks[taskID] != nil { return }
@@ -159,6 +454,66 @@ public actor DownloadManager {
 
         // Per-task work dir: Application Support/.../<id>/  (original layout)
         let workDir = supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)
+
+        // Full re-download of a finished task — wipe stale segments so the engine
+        // does not treat the previous merge as already done.
+        let redownloadComplete = task.status == .complete
+        if redownloadComplete {
+            try? FileManager.default.removeItem(at: workDir)
+            task.errorText = nil
+        }
+        try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+
+        // yt-dlp page downloads (retry after complete / error / incomplete).
+        if task.linkType.lowercased() == "ytdlp" {
+            // yt-dlp tasks created by earlier builds were persisted as one
+            // connection. Reapply the current global setting on every start so
+            // an old completed row also gets real concurrency when retried.
+            task.connections = max(1, min(32, settings.maxConnections))
+            let formatID: String
+            if let stored = task.hitTitle, !stored.isEmpty {
+                formatID = stored
+            } else {
+                formatID = "bv*+ba/b"
+            }
+            let preferredStem = (task.filename as NSString).deletingPathExtension
+            let options = task.postData
+                .flatMap { try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: $0) }
+                ?? YtDlpDownloadOptions(
+                    container: task.filename.lowercased().hasSuffix(".mkv") ? .compactMKV : .compatibleMP4
+                )
+            let engine = YtDlpEngine(
+                taskID: taskID,
+                estimatedBytes: task.fileSize,
+                connections: task.connections
+            )
+            ytDlpEngines[taskID] = engine
+            task.status = .downloading
+            task.lastTry = Date()
+            try store.update(task)
+            let onComplete = onTaskCompleted
+            let pageTitle = task.pageTitle
+            let sourceURL = task.url
+            runningTasks[taskID] = Task {
+                await self.runEngine(
+                    taskID: taskID,
+                    task: task,
+                    store: store,
+                    onComplete: onComplete
+                ) {
+                    try await engine.run(
+                        url: sourceURL,
+                        formatID: formatID,
+                        directory: dest,
+                        preferredName: preferredStem.isEmpty ? pageTitle : preferredStem,
+                        forceOverwrite: redownloadComplete,
+                        options: options
+                    )
+                }
+                self.ytDlpEngines[taskID] = nil
+            }
+            return
+        }
 
         var headerMap: [String: String] = [:]
         for line in task.headers {
@@ -273,7 +628,9 @@ public actor DownloadManager {
                 httpProxy: settings.httpProxy,
                 socksProxy: settings.socksProxy,
                 globalBandwidthLimit: settings.bandwidthLimitBytesPerSecond,
-                autoTuneConnections: settings.smartConnectionsEnabled
+                autoTuneConnections: settings.smartConnectionsEnabled,
+                capacityProvider: capacityProvider,
+                sameVolumeProvider: sameVolumeProvider
             )
             engines[taskID] = engine
             runningTasks[taskID] = Task { [store] in
@@ -303,9 +660,23 @@ public actor DownloadManager {
             // stale task snapshot captured at start.
             var done = (try? store.allDownloads().first { $0.id == taskID }) ?? task
             done.status = .complete
-            done.filename = fileURL.lastPathComponent
-            done.folderPath = fileURL.deletingLastPathComponent().path
-            let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let producedCategory = DownloadCategory.infer(
+                filename: fileURL.lastPathComponent,
+                mimeType: done.mimeType
+            )
+            let finalizedURL: URL
+            if producedCategory == .video || producedCategory == .audio,
+               let naming = try? SmartFinalize.applySmartNaming(
+                   primary: fileURL,
+                   pageTitle: done.pageTitle
+               ) {
+                finalizedURL = naming.primaryURL
+            } else {
+                finalizedURL = fileURL
+            }
+            done.filename = finalizedURL.lastPathComponent
+            done.folderPath = finalizedURL.deletingLastPathComponent().path
+            let attrs = try? FileManager.default.attributesOfItem(atPath: finalizedURL.path)
             done.fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? done.fileSize
             done.category = DownloadCategory.infer(filename: done.filename, mimeType: done.mimeType)
             done.resumable = true
@@ -365,6 +736,20 @@ public actor DownloadManager {
 
     private func clearRunning(_ taskID: Int64) {
         runningTasks[taskID] = nil
+        guard runningTasks.isEmpty,
+              let tasks = try? store.allDownloads(),
+              let next = Self.queuedCollectionCandidate(in: tasks) else { return }
+        Task { try? await self.start(taskID: next.id) }
+    }
+
+    static func queuedCollectionCandidate(in tasks: [DownloadTask]) -> DownloadTask? {
+        tasks
+            .filter {
+                $0.status == .waiting
+                    && $0.linkType.lowercased() == "ytdlp"
+                    && ($0.pageURL?.isEmpty == false)
+            }
+            .min { $0.id < $1.id }
     }
 
     public func pause(taskID: Int64) async {
@@ -373,6 +758,7 @@ public actor DownloadManager {
         await hlsEngines[taskID]?.pause()
         await ftpEngines[taskID]?.pause()
         await mkvEngines[taskID]?.pause()
+        await ytDlpEngines[taskID]?.pause()
         // Let the engine task finish with EngineError.paused and update DB.
     }
 
@@ -404,6 +790,15 @@ public actor DownloadManager {
 
     public func hasActiveDownloads() -> Bool {
         !runningTasks.isEmpty
+    }
+
+    /// Resume the head of a persisted collection queue after relaunch. Each
+    /// completion schedules the next entry through clearRunning.
+    public func resumeQueuedCollectionIfIdle() async {
+        guard runningTasks.isEmpty,
+              let tasks = try? store.allDownloads(),
+              let next = Self.queuedCollectionCandidate(in: tasks) else { return }
+        try? await start(taskID: next.id)
     }
 
     public func updateTask(_ task: DownloadTask) throws {
@@ -449,6 +844,7 @@ public enum ManagerError: Error, LocalizedError {
     case taskNotFound
     case downloadFailed(String)
     case queueBusy
+    case insufficientStorage(requiredBytes: Int64, availableBytes: Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -456,6 +852,11 @@ public enum ManagerError: Error, LocalizedError {
         case .taskNotFound: return "Task not found"
         case .downloadFailed(let m): return m
         case .queueBusy: return "Another download is active (one-by-one mode)"
+        case .insufficientStorage(let required, let available):
+            return L10n.storageGuardError(
+                requiredBytes: required,
+                availableBytes: available
+            )
         }
     }
 }

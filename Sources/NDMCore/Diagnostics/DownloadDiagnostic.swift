@@ -105,13 +105,13 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         switch self {
         case .linkExpired:
             return L10n.t(
-                "Sites often sign download URLs for only a few minutes. Reopen the page and renew the link — your downloaded segments are kept, so it resumes where it left off.",
-                "很多网站的下载链接只在签发后几分钟内有效。回到原网页更换链接即可——已下载的分段会保留，从断点继续。"
+                "Open the source page and start the download there once. The fresh browser handoff will attach to this same task; downloaded segments stay in place.",
+                "打开来源页面并在那里再次开始下载。浏览器取得的新授权会自动接回这个任务，已经下载的分段原样保留。"
             )
         case .signInRequired:
             return L10n.t(
-                "Your sign-in for this site has expired. Log in again in your browser, then retry — the extension passes fresh credentials automatically.",
-                "保存的登录状态已过期。在浏览器里重新登录该网站后点「重试」，扩展会自动带上新的登录信息。"
+                "Sign in again in your browser, then start the download there once. The fresh browser session will continue this same task instead of creating a duplicate.",
+                "请在浏览器重新登录，然后在那里再次开始下载。新的浏览器会话会继续这个任务，不会再创建一条重复记录。"
             )
         case .rangeNotSupported:
             return L10n.t(
@@ -176,13 +176,13 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         switch self {
         case .linkExpired:
             return L10n.t(
-                "Link expired · reopen the page to renew, segments are kept",
-                "链接已过期 · 回到页面更换链接即可，分段已保留"
+                "Link expired · continue from the source page, segments are kept",
+                "链接已过期 · 从来源页面继续，已有分段会保留"
             )
         case .signInRequired:
             return L10n.t(
-                "Sign-in expired · log in again in the browser, then retry",
-                "登录已失效 · 在浏览器重新登录后重试"
+                "Sign-in expired · continue once from the browser",
+                "登录已失效 · 在浏览器重新登录并继续一次"
             )
         case .rangeNotSupported:
             return L10n.t(
@@ -322,5 +322,31 @@ public enum DownloadDiagnostic: Equatable, Sendable {
     public static func fromStoredErrorText(_ text: String?) -> DownloadDiagnostic? {
         guard let text else { return nil }
         return DownloadDiagnostic(storageString: text)
+    }
+}
+
+public extension DownloadTask {
+    /// Source page that can mint a fresh browser-authorized media URL for this
+    /// failed direct task. Page-level yt-dlp tasks retry their own stable URL
+    /// and therefore do not use browser handoff here.
+    var browserRescueURL: URL? {
+        guard status == .error,
+              linkType.lowercased() != "ytdlp",
+              let diagnostic = DownloadDiagnostic.fromStoredErrorText(errorText) else {
+            return nil
+        }
+        switch diagnostic {
+        case .linkExpired, .signInRequired:
+            break
+        default:
+            return nil
+        }
+        guard let pageURL,
+              let url = URL(string: pageURL),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return url
     }
 }

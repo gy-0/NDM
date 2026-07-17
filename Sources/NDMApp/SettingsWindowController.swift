@@ -4,7 +4,7 @@ import NDMCore
 import NDMEngine
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let manager: DownloadManager
     private var settings: AppSettings
 
@@ -19,6 +19,7 @@ final class SettingsWindowController: NSWindowController {
     private let completeCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let appearancePopup = NSPopUpButton()
     private let languagePopup = NSPopUpButton()
+    var onWindowClose: (() -> Void)?
 
     // Browser
     private let panelCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -57,6 +58,7 @@ final class SettingsWindowController: NSWindowController {
         window.minSize = NSSize(width: 520, height: 420)
         NDMChrome.applyWindowChrome(window)
         super.init(window: window)
+        window.delegate = self
         applyLocalizedChrome()
         buildUI()
         loadFields()
@@ -361,8 +363,14 @@ final class SettingsWindowController: NSWindowController {
         let requestedConnections = min(32, max(1, Int(connField.stringValue) ?? 8))
         let connectionsCap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
         if requestedConnections > connectionsCap {
-            connField.stringValue = "\(connectionsCap)"
-            UpgradeWindowController.present()
+            UpgradeWindowController.present(
+                features: [.connections(requested: requestedConnections)],
+                parentWindow: window
+            ) { [weak self] in
+                self?.connField.stringValue = "\(requestedConnections)"
+                self?.saveClicked()
+            }
+            return
         }
         next.maxConnections = min(requestedConnections, connectionsCap)
         next.smartConnections = smartConnCheck.state == .on
@@ -419,5 +427,10 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func cancelClicked() {
         window?.close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onWindowClose?()
+        onWindowClose = nil
     }
 }

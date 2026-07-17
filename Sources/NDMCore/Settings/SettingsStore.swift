@@ -24,15 +24,22 @@ public enum SettingsStore {
         var confirmBrowserDownloads: Bool?
         var appearanceMode: String?
         var languageMode: String?
+        var smartConnections: Bool?
+        var onboardingCompleted: Bool?
+        var clipboardWatch: Bool?
     }
 
     public static func load() -> AppSettings {
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        load(defaults: UserDefaults(suiteName: suiteName) ?? .standard)
+    }
+
+    /// Internal injection point keeps tests out of the production preferences domain.
+    static func load(defaults: UserDefaults) -> AppSettings {
         guard let data = defaults.data(forKey: key),
               let disk = try? JSONDecoder().decode(DiskSettings.self, from: data) else {
             return AppSettings()
         }
-        return AppSettings(
+        var settings = AppSettings(
             downloadDirectory: URL(fileURLWithPath: disk.downloadDirectory),
             maxConnections: disk.maxConnections,
             downloadAllAtOnce: disk.downloadAllAtOnce,
@@ -50,11 +57,20 @@ public enum SettingsStore {
             showBrowserMediaPanel: disk.showBrowserMediaPanel ?? true,
             confirmBrowserDownloads: disk.confirmBrowserDownloads ?? false,
             appearanceMode: AppearanceMode(rawValue: disk.appearanceMode ?? "") ?? .system,
-            languageMode: AppLanguageMode(rawValue: disk.languageMode ?? "") ?? .system
+            languageMode: AppLanguageMode(rawValue: disk.languageMode ?? "") ?? .system,
+            smartConnections: disk.smartConnections ?? true
         )
+        settings.onboardingCompleted = disk.onboardingCompleted
+        settings.clipboardWatch = disk.clipboardWatch
+        return settings
     }
 
     public static func save(_ settings: AppSettings) {
+        save(settings, defaults: UserDefaults(suiteName: suiteName) ?? .standard)
+    }
+
+    /// Internal injection point keeps tests out of the production preferences domain.
+    static func save(_ settings: AppSettings, defaults: UserDefaults) {
         let disk = DiskSettings(
             downloadDirectory: settings.downloadDirectory.path,
             maxConnections: settings.maxConnections,
@@ -73,11 +89,21 @@ public enum SettingsStore {
             showBrowserMediaPanel: settings.showBrowserMediaPanel,
             confirmBrowserDownloads: settings.confirmBrowserDownloads,
             appearanceMode: settings.appearanceMode.rawValue,
-            languageMode: settings.languageMode.rawValue
+            languageMode: settings.languageMode.rawValue,
+            smartConnections: settings.smartConnections,
+            onboardingCompleted: settings.onboardingCompleted,
+            clipboardWatch: settings.clipboardWatch
         )
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         if let data = try? JSONEncoder().encode(disk) {
             defaults.set(data, forKey: key)
+            defaults.synchronize()
         }
+    }
+
+    /// Mark first-run complete without rewriting unrelated settings.
+    public static func markOnboardingCompleted() {
+        var settings = load()
+        settings.onboardingCompleted = true
+        save(settings)
     }
 }

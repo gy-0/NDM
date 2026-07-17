@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import NDMCore
 import NDMEngine
 
@@ -17,6 +18,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let sidebarController = SidebarViewController()
     private let listController = TaskListViewController()
     private let inspectorController = InspectorViewController()
+    private let fileSharePresenter = FileSharePresenter()
 
     private var progressWindows: [Int64: ProgressWindowController] = [:]
     private var settingsWindow: SettingsWindowController?
@@ -26,26 +28,38 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     private var startToolbarItem: NSToolbarItem?
     private var pauseToolbarItem: NSToolbarItem?
+    private let chromeRoot = NSViewController()
+    private let contentToolbar = DesignSuiteToolbarView()
+    private var clipboardOffer: SharedLinkResolution?
 
     init(manager: DownloadManager) {
         self.manager = manager
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1512, height: 982)
+        let initialSize = QAPreviewOverrides.windowSize ?? NSSize(
+            width: min(1440, max(1080, visible.width - 32)),
+            height: min(920, max(700, visible.height - 32))
+        )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = L10n.appName
-        window.minSize = NSSize(width: 880, height: 520)
+        window.minSize = NSSize(width: 960, height: 620)
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         NDMChrome.applyWindowChrome(window)
         window.center()
         super.init(window: window)
-        window.contentViewController = splitController
+        // Design Suite: tool chips live in a content toolbar under the titlebar,
+        // not as lonely icon-only NSToolbar items.
+        installChromeRoot()
         configureSplit()
-        configureToolbar()
+        // Design Suite has no icon NSToolbar — only the in-content tool strip.
+        window.toolbar = nil
         wireCallbacks()
+        wireContentToolbar()
         NotificationCenter.default.addObserver(
             forName: L10n.didChangeNotification,
             object: nil,
@@ -55,6 +69,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 self?.relocalizeChrome()
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: InterfaceScale.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyContentScale()
+            }
+        }
+        applyContentScale()
         Task { await reload() }
         startAutoRefresh()
     }
@@ -62,6 +86,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     /// Refresh toolbar / inspector chrome after language switch.
     func relocalizeChrome() {
         window?.title = L10n.appName
+        contentToolbar.relocalize()
+        sidebarController.relocalizeChrome()
         if let toolbar = window?.toolbar {
             for item in toolbar.items {
                 switch item.itemIdentifier {
@@ -99,17 +125,62 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         Task { await reload() }
     }
 
+    private func applyContentScale() {
+        let scale = InterfaceScale.current
+        contentToolbar.setContentScale(scale)
+        sidebarController.setContentScale(scale)
+        listController.setContentScale(scale)
+        inspectorController.setContentScale(scale)
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
     // MARK: - Layout
 
+    private func installChromeRoot() {
+        let root = NSView()
+        chromeRoot.view = root
+        contentToolbar.translatesAutoresizingMaskIntoConstraints = false
+        splitController.view.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(contentToolbar)
+        chromeRoot.addChild(splitController)
+        root.addSubview(splitController.view)
+        // fullSizeContentView: pin tools below the titlebar (Design Suite order),
+        // never under the traffic lights.
+        NSLayoutConstraint.activate([
+            contentToolbar.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            contentToolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            contentToolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            contentToolbar.heightAnchor.constraint(equalToConstant: 62),
+            splitController.view.topAnchor.constraint(equalTo: contentToolbar.bottomAnchor),
+            splitController.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            splitController.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            splitController.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        window?.contentViewController = chromeRoot
+    }
+
+    private func wireContentToolbar() {
+        contentToolbar.onNew = { [weak self] in self?.promptNewURL() }
+        contentToolbar.onPause = { [weak self] in self?.pauseSelected() }
+        contentToolbar.onResume = { [weak self] in self?.startSelected() }
+        contentToolbar.onClipboardOffer = { [weak self] in
+            self?.openClipboardOffer()
+        }
+        contentToolbar.onSearch = { [weak self] query in
+            self?.searchQuery = query
+            self?.rebuildDisplayedRows(preserveSelection: true)
+        }
+    }
+
     private func configureSplit() {
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
-        sidebarItem.minimumThickness = 168
-        sidebarItem.maximumThickness = 240
+        // Room for semantic zoom without turning the navigation into a squeeze.
+        sidebarItem.minimumThickness = 215
+        sidebarItem.maximumThickness = 268
+        sidebarItem.preferredThicknessFraction = 0.175
         if #available(macOS 11.0, *) {
-            // Keep sidebar material continuous under the traffic lights.
             sidebarItem.titlebarSeparatorStyle = .none
         }
 
@@ -117,9 +188,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         listItem.minimumThickness = 420
 
         let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorController)
-        // Fixed width — long filenames must truncate inside, never shove the split.
-        inspectorItem.minimumThickness = 300
-        inspectorItem.maximumThickness = 300
+        // Full action labels (especially “Show in Finder”) need a real inspector,
+        // not a narrow utility strip.
+        inspectorItem.minimumThickness = 360
+        inspectorItem.maximumThickness = 450
+        inspectorItem.preferredThicknessFraction = 0.30
         inspectorItem.canCollapse = true
         inspectorItem.isCollapsed = false
         inspectorItem.holdingPriority = NSLayoutConstraint.Priority(260)
@@ -127,13 +200,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         splitController.addSplitViewItem(sidebarItem)
         splitController.addSplitViewItem(listItem)
         splitController.addSplitViewItem(inspectorItem)
-        splitController.splitView.autosaveName = "NDM.MainSplit"
+        splitController.splitView.autosaveName = "NDM.MainSplit.v7"
     }
 
     private func configureToolbar() {
         let toolbar = NSToolbar(identifier: "NDM.MainToolbar")
         toolbar.delegate = self
-        toolbar.displayMode = .iconAndLabel
+        toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window?.toolbar = toolbar
     }
@@ -161,56 +234,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             guard let self, let id = self.selectedTaskID else { return }
             self.handleContextAction(action, taskID: id)
         }
-        listController.onClipboardDownload = { [weak self] url in
-            self?.startURL(url)
+        inspectorController.onShare = { [weak self] anchor in
+            guard let self, let id = self.selectedTaskID else { return }
+            self.shareTaskFile(id, from: anchor)
         }
         listController.onEmptyNewDownload = { [weak self] in
             self?.promptNewURL()
-        }
-        listController.onEmptySpeedRace = {
-            SpeedRaceWindowController.present()
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.checkClipboardForDownloadableLink()
-            }
-        }
-    }
-
-    // MARK: - Clipboard awareness
-
-    private var lastPasteboardCount = -1
-
-    /// Copy a link anywhere → switch to the app → a quiet pill offers to
-    /// download it. Never steals focus, never auto-downloads.
-    private func checkClipboardForDownloadableLink() {
-        let pasteboard = NSPasteboard.general
-        guard pasteboard.changeCount != lastPasteboardCount else { return }
-        lastPasteboardCount = pasteboard.changeCount
-
-        guard let raw = pasteboard.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              raw.count < 2048,
-              !raw.contains("\n"),
-              let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(),
-              ["http", "https", "ftp"].contains(scheme),
-              let host = url.host, !host.isEmpty else {
-            return
-        }
-        // Already in the list → nothing to offer.
-        guard !allTasks.contains(where: { $0.url == raw }) else { return }
-        Task {
-            let settings = await manager.currentSettings()
-            guard settings.clipboardWatchEnabled else { return }
-            let name = url.lastPathComponent.isEmpty || url.lastPathComponent == "/"
-                ? host
-                : url.lastPathComponent
-            listController.showClipboardBanner(urlString: raw, displayName: name)
         }
     }
 
@@ -306,6 +335,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         let actions = TaskSelectionActions.make(from: selectedRow())
         startToolbarItem?.isEnabled = actions.canStart
         pauseToolbarItem?.isEnabled = actions.canPause
+        contentToolbar.setResumeEnabled(actions.canStart)
+        contentToolbar.setPauseEnabled(actions.canPause)
     }
 
     // MARK: - Data
@@ -313,6 +344,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     func reload() async {
         do {
             allTasks = try await manager.listTasks()
+            if let clipboardOffer,
+               DuplicateDownloadMatcher.bestMatch(
+                   for: [clipboardOffer.urlString],
+                   in: allTasks
+               ) != nil {
+                clearClipboardOffer()
+            }
             var nextProgress: [Int64: DownloadProgress] = [:]
             for task in allTasks where task.status == .downloading || task.status == .waiting {
                 if let progress = await manager.progress(taskID: task.id) {
@@ -328,6 +366,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 }
             }
             progressByID = nextProgress
+            for task in allTasks {
+                let isVideo = task.category == .video
+                    || ["mp4", "mkv", "mov", "m4v", "webm"].contains(
+                        (task.filename as NSString).pathExtension.lowercased()
+                    )
+                if isVideo || task.status == .complete {
+                    CoverArtCache.shared.ensureCover(
+                        taskID: task.id,
+                        remoteURL: nil,
+                        localFile: task.destinationFileURL
+                    )
+                }
+            }
             sidebarController.update(counts: SidebarFilter.counts(in: allTasks), selected: selectedFilter)
             rebuildDisplayedRows(preserveSelection: true)
         } catch {
@@ -404,7 +455,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             let bytes = max(task.fileSize, progress?.totalBytes ?? 0)
             guard bytes > 0 else { continue }
             total += bytes
-            done += min(progress?.completedBytes ?? 0, bytes)
+            let fraction = progress?.fractionCompleted ?? 0
+            done += min(bytes, Int64((Double(bytes) * fraction).rounded(.down)))
         }
         guard total > 0 else { return 0 }
         return Double(done) / Double(total)
@@ -518,26 +570,78 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: - Actions
 
     @objc func promptNewURL() {
-        let alert = NSAlert()
-        alert.messageText = L10n.newDownload
-        alert.informativeText = L10n.pasteURLHint
-        alert.addButton(withTitle: L10n.download)
-        alert.addButton(withTitle: L10n.cancel)
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
-        field.placeholderString = "https://"
-        field.isEditable = true
-        field.isSelectable = true
-        field.usesSingleLineMode = true
-        alert.accessoryView = field
-        // Layout first, then force key focus — accessory fields often lose
-        // first-responder to the default button without this.
-        alert.layout()
-        alert.window.initialFirstResponder = field
-        _ = alert.window.makeFirstResponder(field)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        startURL(url)
+        presentNewDownload(initialURL: nil)
+    }
+
+    func promptNewURLWithPrefill(_ prefilledText: String?) {
+        presentNewDownload(initialURL: prefilledText)
+    }
+
+    private func presentNewDownload(initialURL: String?) {
+        let parent = window
+        Task { @MainActor in
+            let currentSettings = await manager.currentSettings()
+            switch await NewDownloadWindowController.present(
+                on: parent,
+                existingTasks: allTasks,
+                destinationDirectory: currentSettings.downloadDirectory,
+                initialURL: initialURL
+            ) {
+            case .download(let submission):
+                startURL(
+                    submission.urlString,
+                    preflight: submission.preflight,
+                    readyChoice: submission.readyChoice
+                )
+            case .showExisting(let taskID):
+                focusExistingTask(taskID)
+            case .cancel:
+                return
+            }
+        }
+    }
+
+    /// Offers a newly copied link without downloading behind the user's back.
+    /// Returns false for unrelated text and anything already in the inbox.
+    @discardableResult
+    func offerClipboardText(_ rawText: String) -> Bool {
+        guard let offer = ClipboardDownloadOfferResolver.offer(
+            for: rawText,
+            existingTasks: allTasks
+        ) else {
+            clearClipboardOffer()
+            return false
+        }
+        clipboardOffer = offer
+        contentToolbar.setClipboardOffer(offer)
+        return true
+    }
+
+    func clearClipboardOffer() {
+        clipboardOffer = nil
+        contentToolbar.setClipboardOffer(nil)
+    }
+
+    private func openClipboardOffer() {
+        guard let offer = clipboardOffer else { return }
+        clearClipboardOffer()
+        presentNewDownload(initialURL: offer.urlString)
+    }
+
+    private func focusExistingTask(_ taskID: Int64) {
+        guard allTasks.contains(where: { $0.id == taskID }) else { return }
+        selectedFilter = .all
+        searchQuery = ""
+        selectedTaskID = taskID
+        contentToolbar.setSearchQuery("")
+        sidebarController.update(
+            counts: SidebarFilter.counts(in: allTasks),
+            selected: .all
+        )
+        rebuildDisplayedRows(preserveSelection: true)
+        listController.revealTask(taskID)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func startSelected() {
@@ -607,14 +711,32 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         startURL(urlString)
     }
 
-    private func startURL(_ urlString: String) {
+    private func startURL(
+        _ urlString: String,
+        preflight: MediaPreflightResult? = nil,
+        readyChoice: NewDownloadWindowController.ReadyChoice? = nil
+    ) {
+        let parent = window
         Task {
-            var urlToAdd = urlString
+            var preparedResult = preflight
+            var effectiveURL = preflight?.mediaURL ?? urlString
+            var working: WorkingPanelController?
+            if preflight == nil,
+               ShortLinkExpander.shouldExpand(urlString),
+               !MediaLinkClassifier.looksLikeMediaPage(urlString) {
+                working = WorkingPanelController.show(L10n.shareLinkResolving, on: parent)
+                let expanded = await ShortLinkExpander.expand(urlString)
+                effectiveURL = expanded.resolvedURL
+            }
+
+            var urlToAdd = effectiveURL
             var ltype = "normal"
             // Manually pasted master playlists get the same quality picker
             // as browser captures; probe failures fall back to the plain path.
-            if urlString.lowercased().contains(".m3u8"),
-               let probe = await HLSMasterProbe.probe(urlString: urlString) {
+            if effectiveURL.lowercased().contains(".m3u8"),
+               let probe = await HLSMasterProbe.probe(urlString: effectiveURL) {
+                working?.dismiss()
+                working = nil
                 switch await QualityPickerWindowController.choose(probe: probe, title: "") {
                 case .cancel:
                     return
@@ -624,12 +746,130 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                         ltype = "hls"
                     }
                 }
+            } else if MediaLinkClassifier.looksLikeMediaPage(effectiveURL) {
+                guard YtDlpTool.isAvailable else {
+                    working?.dismiss()
+                    showAlert(message: L10n.advancedVideo, detail: L10n.ytdlpMissingHint)
+                    return
+                }
+                // Probe can take a few seconds. If the site requires a browser
+                // session, turn that resolver error into one guided retry.
+                var cookieSource: YtDlpCookieSource?
+                var resolvedProbe: YtDlpProbe? = preflight?.probe
+                while resolvedProbe == nil {
+                    if let working {
+                        working.update(message: L10n.ytdlpWorking)
+                    } else {
+                        working = WorkingPanelController.show(L10n.ytdlpWorking, on: parent)
+                    }
+                    do {
+                        if cookieSource == nil {
+                            let prepared = try await MediaPreflightStore.shared.result(for: effectiveURL)
+                            preparedResult = prepared
+                            effectiveURL = prepared.mediaURL
+                            resolvedProbe = prepared.probe
+                        } else {
+                            resolvedProbe = try await YtDlpTool.probe(
+                                url: effectiveURL,
+                                cookieSource: cookieSource
+                            )
+                        }
+                        working?.dismiss()
+                        working = nil
+                    } catch {
+                        working?.dismiss()
+                        working = nil
+                        guard cookieSource == nil, YtDlpTool.requiresCookies(error: error) else {
+                            NSLog("Media recognition failed for %@: %@", effectiveURL, error.localizedDescription)
+                            showAlert(
+                                message: L10n.mediaRecognitionFailed,
+                                detail: L10n.mediaRecognitionFailedBody
+                            )
+                            return
+                        }
+                        guard let selected = await MediaAccessPrompt.choose(parentWindow: parent) else {
+                            return
+                        }
+                        cookieSource = selected
+                    }
+                }
+                guard let probe = resolvedProbe else { return }
+                guard !probe.formats.isEmpty else {
+                    showAlert(
+                        message: L10n.mediaRecognitionFailed,
+                        detail: L10n.mediaRecognitionFailedBody
+                    )
+                    return
+                }
+                if let readyChoice, preparedResult?.collection == nil {
+                    await launchSingleMedia(
+                        url: effectiveURL,
+                        probe: probe,
+                        picked: readyChoice.format,
+                        options: readyChoice.options
+                    )
+                    return
+                }
+                let currentSettings = await manager.currentSettings()
+                switch await YtDlpQualityPickerWindowController.choose(
+                    url: effectiveURL,
+                    probe: probe,
+                    collection: preparedResult?.collection,
+                    cookieSource: cookieSource,
+                    destinationDirectory: currentSettings.downloadDirectory,
+                    parentWindow: parent
+                ) {
+                case .cancel:
+                    return
+                case .download(let picked, let options, let scope):
+                    // Same path as ordinary downloads: list row + progress window.
+                    // Probe sheet is only for the short metadata fetch.
+                    do {
+                        if case .collection(let collection) = scope {
+                            let tasks = try await manager.enqueueYtDlpCollection(
+                                collection.items,
+                                formatID: picked.selector(for: options.container),
+                                options: options,
+                                collectionURL: preparedResult?.resolvedURL ?? urlString,
+                                collectionTitle: collection.title.isEmpty ? nil : collection.title,
+                                estimatedSampleBytes: picked.approximateBytes,
+                                estimatedSampleComponentBytes: picked.componentBytes,
+                                sampleDurationSeconds: probe.durationSeconds
+                            )
+                            for (task, item) in zip(tasks, collection.items) {
+                                if let thumbnail = item.thumbnailURL {
+                                    CoverArtCache.shared.prefetchRemote(
+                                        taskID: task.id,
+                                        urlString: thumbnail
+                                    )
+                                }
+                            }
+                            if let first = tasks.first {
+                                selectedTaskID = first.id
+                            }
+                            await reload()
+                            if let first = tasks.first {
+                                showProgress(for: first.id)
+                            }
+                            return
+                        }
+                        await launchSingleMedia(
+                            url: effectiveURL,
+                            probe: probe,
+                            picked: picked,
+                            options: options
+                        )
+                        return
+                    } catch {
+                        showAlert(error)
+                        return
+                    }
+                }
             }
+            working?.dismiss()
             do {
                 let task = try await manager.addURL(urlToAdd, ltype: ltype)
                 selectedTaskID = task.id
-                selectedFilter = .active
-                // Open progress immediately — don't wait for start()/reload().
                 showProgress(for: task.id)
                 try await manager.start(taskID: task.id)
                 await reload()
@@ -637,6 +877,36 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 showAlert(error)
                 await reload()
             }
+        }
+    }
+
+    private func launchSingleMedia(
+        url: String,
+        probe: YtDlpProbe,
+        picked: YtDlpFormat,
+        options: YtDlpDownloadOptions
+    ) async {
+        do {
+            let task = try await manager.startYtDlp(
+                url: url,
+                formatID: picked.selector(for: options.container),
+                options: options,
+                pageTitle: probe.title.isEmpty ? nil : probe.title,
+                estimatedBytes: picked.approximateBytes,
+                estimatedComponentBytes: picked.componentBytes,
+                preferredFilename: probe.title.isEmpty ? nil : probe.title
+            )
+            if let thumb = probe.thumbnailURL {
+                CoverArtCache.shared.prefetchRemote(
+                    taskID: task.id,
+                    urlString: thumb
+                )
+            }
+            selectedTaskID = task.id
+            await reload()
+            showProgress(for: task.id)
+        } catch {
+            showAlert(error)
         }
     }
 
@@ -684,7 +954,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     private func renewURL(for id: Int64) {
-        let current = allTasks.first(where: { $0.id == id })?.url ?? ""
+        let task = allTasks.first(where: { $0.id == id })
+        if let sourceURL = task?.browserRescueURL {
+            NSWorkspace.shared.open(sourceURL)
+            return
+        }
+        let current = task?.url ?? ""
         let alert = NSAlert()
         alert.messageText = L10n.renewURL
         alert.informativeText = L10n.renewURLBody
@@ -736,20 +1011,32 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    private func shareTaskFile(_ id: Int64, from anchor: NSView? = nil) {
+        guard let task = allTasks.first(where: { $0.id == id }),
+              let url = task.destinationFileURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showAlert(message: L10n.fileNotFound, detail: url.path)
+            return
+        }
+        let source = anchor ?? inspectorController.view
+        _ = fileSharePresenter.present(fileURL: url, from: source)
+    }
+
     private func showProperties(for id: Int64) {
         guard let task = allTasks.first(where: { $0.id == id }) else { return }
-        // Open after the current menu/toolbar event finishes. Showing a window
-        // synchronously from an NSMenu action commonly stalls for a beat.
+        // Defer past the context-menu tracking runloop. Do not use showWindow: —
+        // with a filename-like title AppKit hands off to QLSeamlessDocumentOpener
+        // and can abort via NSRemoteView on macOS 26+.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if let existing = self.propsWindow, existing.taskID == id {
-                existing.showWindow(nil)
+                existing.present()
                 NSApp.activate(ignoringOtherApps: true)
                 return
             }
             let wc = TaskPropertiesWindowController(manager: self.manager, task: task)
             self.propsWindow = wc
-            wc.showWindow(nil)
+            wc.present()
             NSApp.activate(ignoringOtherApps: true)
         }
     }
@@ -780,6 +1067,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             openTaskFile(taskID)
         case .reveal:
             revealTaskFile(taskID)
+        case .share:
+            shareTaskFile(taskID)
         case .start, .retry:
             startTask(taskID)
         case .pause:
@@ -842,6 +1131,9 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
     private var counts: [SidebarFilter: Int] = [:]
     private var selected: SidebarFilter = .all
     private var rows: [SidebarRow] = []
+    /// Ignore selection callbacks while we sync table selection from model.
+    private var suppressSelectionCallback = false
+    private var contentScale: CGFloat = InterfaceScale.default
 
     private static func buildRows() -> [SidebarRow] {
         var rows: [SidebarRow] = []
@@ -856,16 +1148,17 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
 
     override func loadView() {
         rows = SidebarViewController.buildRows()
-        // Fully transparent stack: the split item's built-in sidebar material
-        // (translucent blur, continuous under the traffic lights) shows through.
-        // Painting an opaque fill here is what made the titlebar corner look
-        // stitched-on — and go stale when the appearance flipped.
-        view = NSView()
-        tableView.style = .sourceList
+        // Deliberate navigation rail from the approved concept, rather than an
+        // unstyled transparent source list.
+        view = ChromeBox(fill: NDMChrome.sidebarFill)
+        // Plain (not sourceList) so Quiet Finder accent pills aren't fought by system chrome.
+        tableView.style = .plain
         tableView.headerView = nil
-        tableView.rowHeight = 30
+        tableView.rowHeight = 36
         tableView.allowsEmptySelection = false
+        tableView.allowsMultipleSelection = false
         tableView.backgroundColor = .clear
+        tableView.selectionHighlightStyle = .none
         tableView.dataSource = self
         tableView.delegate = self
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("filter"))
@@ -877,19 +1170,91 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
     }
 
+    func setContentScale(_ scale: CGFloat) {
+        let next = min(InterfaceScale.maximum, max(InterfaceScale.minimum, scale))
+        // Navigation participates in zoom, but more gently than content rows;
+        // otherwise the rail turns into oversized system-looking controls.
+        let effectiveScale = 1 + (next - 1) * 0.70
+        let changed = abs(contentScale - effectiveScale) > 0.000_1
+        contentScale = effectiveScale
+        if !isViewLoaded { _ = view }
+        // `loadView()` starts with a safe fallback; always apply the designed
+        // 40 pt rhythm, including the first call at the default 100% scale.
+        tableView.rowHeight = 40 * contentScale
+        guard changed else { return }
+        tableView.reloadData()
+        applyTableSelection(to: selected)
+    }
+
+    func relocalizeChrome() {
+        rows = SidebarViewController.buildRows()
+        if isViewLoaded {
+            tableView.reloadData()
+            applyTableSelection(to: selected)
+        }
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = QuietFinderRowView()
+        if case .filter(let filter) = rows[row] {
+            view.usesAccentFill = true
+            view.forcedSelected = (filter == selected)
+        } else {
+            view.usesAccentFill = false
+            view.forcedSelected = false
+        }
+        return view
+    }
+
     func update(counts: [SidebarFilter: Int], selected: SidebarFilter) {
+        let countsChanged = self.counts != counts
+        let selectionChanged = self.selected != selected
         self.counts = counts
         self.selected = selected
-        tableView.reloadData()
-        if let index = rows.firstIndex(of: .filter(selected)) {
-            tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        if tableView.numberOfRows != rows.count {
+            tableView.reloadData()
+        } else if countsChanged || selectionChanged {
+            // In-place refresh — full reloadData steals the blue pill mid-click.
+            let all = IndexSet(integersIn: 0..<rows.count)
+            tableView.reloadData(forRowIndexes: all, columnIndexes: IndexSet(integer: 0))
+            syncSelectionAppearance()
+        } else {
+            syncSelectionAppearance()
+        }
+        applyTableSelection(to: selected)
+    }
+
+    private func applyTableSelection(to filter: SidebarFilter) {
+        guard let index = rows.firstIndex(of: .filter(filter)) else { return }
+        if tableView.selectedRow == index {
+            syncSelectionAppearance()
+            return
+        }
+        suppressSelectionCallback = true
+        tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        suppressSelectionCallback = false
+        syncSelectionAppearance()
+    }
+
+    private func syncSelectionAppearance() {
+        for row in 0..<rows.count {
+            guard let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
+                continue
+            }
+            if case .filter(let filter) = rows[row] {
+                rowView.usesAccentFill = true
+                rowView.forcedSelected = (filter == selected)
+            } else {
+                rowView.forcedSelected = false
+            }
+            rowView.needsDisplay = true
         }
     }
 
@@ -905,58 +1270,125 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         return true
     }
 
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        switch rows[row] {
+        case .header: return 30 * contentScale
+        case .filter: return 40 * contentScale
+        }
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch rows[row] {
         case .header(let title):
-            let label = NSTextField(labelWithString: title.uppercased())
-            label.font = .systemFont(ofSize: 11, weight: .semibold)
-            label.textColor = .tertiaryLabelColor
+            let id = NSUserInterfaceItemIdentifier("SidebarHeader")
+            let label = (tableView.makeView(withIdentifier: id, owner: self) as? NSTextField)
+                ?? NSTextField(labelWithString: "")
+            label.identifier = id
+            label.attributedStringValue = NSAttributedString(
+                string: title.uppercased(),
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 10 * contentScale, weight: .semibold),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .kern: 0.7 * contentScale,
+                ]
+            )
             return label
         case .filter(let filter):
-            let count = counts[filter] ?? 0
-            let cell = NSTableCellView()
-            let icon = NSImageView()
-            icon.image = NDMChrome.symbol(NDMChrome.sidebarSymbolName(for: filter), pointSize: 13)
-            icon.contentTintColor = .secondaryLabelColor
-            icon.translatesAutoresizingMaskIntoConstraints = false
-            let title = NSTextField(labelWithString: filter.title)
-            title.font = .systemFont(ofSize: 13, weight: .medium)
-            title.translatesAutoresizingMaskIntoConstraints = false
-            let badge = NSTextField(labelWithString: "\(count)")
-            badge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            badge.textColor = .tertiaryLabelColor
-            badge.alignment = .right
-            badge.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(icon)
-            cell.addSubview(title)
-            cell.addSubview(badge)
-            NSLayoutConstraint.activate([
-                icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-                icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                icon.widthAnchor.constraint(equalToConstant: 16),
-                icon.heightAnchor.constraint(equalToConstant: 16),
-                title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-                title.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-                badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
-            ])
+            let id = NSUserInterfaceItemIdentifier("SidebarFilter")
+            let cell = (tableView.makeView(withIdentifier: id, owner: self) as? SidebarFilterCellView)
+                ?? SidebarFilterCellView()
+            cell.identifier = id
+            cell.apply(
+                filter: filter,
+                count: counts[filter] ?? 0,
+                selected: filter == selected,
+                scale: contentScale
+            )
             return cell
         }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if suppressSelectionCallback { return }
         let row = tableView.selectedRow
         guard row >= 0, row < rows.count, case .filter(let filter) = rows[row] else { return }
+        guard filter != selected else {
+            syncSelectionAppearance()
+            return
+        }
         selected = filter
+        syncSelectionAppearance()
+        // Refresh cell ink (white on blue) for old + new rows.
+        if tableView.numberOfRows == rows.count {
+            tableView.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: IndexSet(integer: 0))
+            syncSelectionAppearance()
+        }
         onSelectFilter?(filter)
+    }
+}
+
+/// Sidebar filter row — ink colors driven by model selection, not stale cell reuse.
+private final class SidebarFilterCellView: NSTableCellView {
+    private let icon = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let badge = NSTextField(labelWithString: "")
+    private var iconWidth: NSLayoutConstraint?
+    private var iconHeight: NSLayoutConstraint?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.alignment = .right
+        badge.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+        addSubview(icon)
+        addSubview(titleLabel)
+        addSubview(badge)
+        let iconWidth = icon.widthAnchor.constraint(equalToConstant: 16)
+        let iconHeight = icon.heightAnchor.constraint(equalToConstant: 16)
+        self.iconWidth = iconWidth
+        self.iconHeight = iconHeight
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconWidth,
+            iconHeight,
+            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 9),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(filter: SidebarFilter, count: Int, selected: Bool, scale: CGFloat) {
+        let ink: NSColor = selected ? .white : .labelColor
+        let muted: NSColor = selected ? NSColor.white.withAlphaComponent(0.78) : .tertiaryLabelColor
+        iconWidth?.constant = 17 * scale
+        iconHeight?.constant = 17 * scale
+        icon.image = NDMChrome.symbol(
+            NDMChrome.sidebarSymbolName(for: filter),
+            pointSize: 13.5 * scale,
+            weight: selected ? .semibold : .medium
+        )
+        icon.contentTintColor = selected ? .white : .secondaryLabelColor
+        titleLabel.stringValue = filter.title
+        titleLabel.font = .systemFont(ofSize: 13.5 * scale, weight: selected ? .semibold : .medium)
+        titleLabel.textColor = ink
+        badge.stringValue = "\(count)"
+        badge.font = .monospacedDigitSystemFont(ofSize: 11.5 * scale, weight: .regular)
+        badge.textColor = muted
     }
 }
 
 // MARK: - Task list
 
 enum TaskListContextAction {
-    case open, reveal, start, pause, retry, renew, progress, properties, copyURL, delete
+    case open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, delete
 }
 
 @MainActor
@@ -966,7 +1398,6 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     var onContextAction: ((TaskListContextAction, Int64) -> Void)?
     var onDropURL: ((String) -> Void)?
     var onEmptyNewDownload: (() -> Void)?
-    var onEmptySpeedRace: (() -> Void)?
 
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
@@ -974,19 +1405,13 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private let emptySubtitleLabel = NSTextField(labelWithString: "")
     private let emptyStack = NSStackView()
     private var rows: [TaskRowPresentation] = []
+    private var selectedTaskID: Int64?
+    private var suppressSelectionCallback = false
     private var contextMenuDelegate: ContextMenuDelegate?
+    /// Captured while the menu opens — `clickedRow` often clears before the item action runs.
+    private var menuContextTaskID: Int64?
     private var emptyActionsRow: NSStackView?
-
-    // Clipboard banner — a quiet floating pill above the list.
-    var onClipboardDownload: ((String) -> Void)?
-    private let clipboardBanner = ChromeBox(
-        fill: NDMChrome.windowFill,
-        borderColor: NDMChrome.hairline,
-        cornerRadius: 10,
-        borderWidth: 1
-    )
-    private let clipboardLabel = NSTextField(labelWithString: "")
-    private var clipboardURLString: String?
+    private var contentScale: CGFloat = InterfaceScale.default
 
     override func loadView() {
         let root = URLDropView(frame: .zero)
@@ -999,12 +1424,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         root.fill = NDMChrome.contentSurface
 
         tableView.headerView = nil
-        tableView.style = .inset
-        tableView.rowHeight = 72
+        // Plain + custom row paint — inset style fights single-selection redraw.
+        tableView.style = .plain
+        tableView.rowHeight = 70
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.backgroundColor = NDMChrome.contentSurface
-        tableView.selectionHighlightStyle = .regular
+        tableView.selectionHighlightStyle = .none
         tableView.allowsMultipleSelection = false
+        tableView.allowsEmptySelection = true
         tableView.dataSource = self
         tableView.delegate = self
         tableView.doubleAction = #selector(doubleClicked)
@@ -1012,6 +1439,17 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         tableView.menu = makeContextMenu()
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("task"))
         tableView.addTableColumn(col)
+
+        NotificationCenter.default.addObserver(
+            forName: CoverArtCache.didUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let taskID = note.userInfo?["taskID"] as? Int64
+            Task { @MainActor [weak self] in
+                self?.refreshCover(for: taskID)
+            }
+        }
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
@@ -1025,74 +1463,50 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         scrollView.layer?.borderColor = NDMChrome.accent.cgColor
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        emptyLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        emptyLabel.textColor = .secondaryLabelColor
+        let mark = ChromeBox(fill: NDMChrome.accent, cornerRadius: 14)
+        mark.translatesAutoresizingMaskIntoConstraints = false
+        let markIcon = NSImageView()
+        markIcon.image = NDMChrome.symbol("arrow.down.to.line", pointSize: 22, weight: .semibold)
+        markIcon.contentTintColor = .white
+        markIcon.translatesAutoresizingMaskIntoConstraints = false
+        mark.addSubview(markIcon)
+        NSLayoutConstraint.activate([
+            mark.widthAnchor.constraint(equalToConstant: 52),
+            mark.heightAnchor.constraint(equalToConstant: 52),
+            markIcon.centerXAnchor.constraint(equalTo: mark.centerXAnchor),
+            markIcon.centerYAnchor.constraint(equalTo: mark.centerYAnchor),
+        ])
+
+        emptyLabel.font = .systemFont(ofSize: 20, weight: .bold)
+        emptyLabel.textColor = .labelColor
         emptyLabel.alignment = .center
         emptySubtitleLabel.font = .systemFont(ofSize: 13)
-        emptySubtitleLabel.textColor = .tertiaryLabelColor
+        emptySubtitleLabel.textColor = .secondaryLabelColor
         emptySubtitleLabel.alignment = .center
+        emptySubtitleLabel.maximumNumberOfLines = 3
         emptyStack.orientation = .vertical
         emptyStack.alignment = .centerX
-        emptyStack.spacing = 8
+        emptyStack.spacing = 10
+        emptyStack.addArrangedSubview(mark)
         emptyStack.addArrangedSubview(emptyLabel)
         emptyStack.addArrangedSubview(emptySubtitleLabel)
+        emptyStack.setCustomSpacing(18, after: mark)
 
-        // First-run invitations: a real download, or the demo race.
         let newButton = NSButton(title: L10n.newDownloadEllipsis, target: self, action: #selector(emptyNewClicked))
-        newButton.bezelStyle = .rounded
+        NDMChrome.styleMainButton(newButton)
         newButton.controlSize = .large
-        if #available(macOS 11.0, *) {
-            newButton.bezelColor = NDMChrome.accent
-        }
-        let raceButton = NSButton(title: L10n.raceMenuTitle, target: self, action: #selector(emptyRaceClicked))
-        raceButton.bezelStyle = .rounded
-        raceButton.controlSize = .large
-        let emptyActions = NSStackView(views: [newButton, raceButton])
+        let emptyActions = NSStackView(views: [newButton])
         emptyActions.orientation = .horizontal
         emptyActions.spacing = 10
         emptyActionsRow = emptyActions
-        emptyStack.setCustomSpacing(18, after: emptySubtitleLabel)
+        emptyStack.setCustomSpacing(22, after: emptySubtitleLabel)
         emptyStack.addArrangedSubview(emptyActions)
 
         emptyStack.isHidden = true
         emptyStack.translatesAutoresizingMaskIntoConstraints = false
 
-        // Clipboard pill: icon + link name + Download + dismiss.
-        clipboardBanner.layer?.shadowOpacity = 0.18
-        clipboardBanner.layer?.shadowRadius = 12
-        clipboardBanner.layer?.shadowOffset = CGSize(width: 0, height: -4)
-        clipboardBanner.isHidden = true
-        clipboardBanner.translatesAutoresizingMaskIntoConstraints = false
-
-        let clipIcon = NSImageView()
-        clipIcon.image = NDMChrome.symbol("link", pointSize: 12, weight: .semibold)
-        clipIcon.contentTintColor = NDMChrome.accent
-        clipboardLabel.font = .systemFont(ofSize: 12)
-        clipboardLabel.lineBreakMode = .byTruncatingMiddle
-        clipboardLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let clipDownload = NSButton(title: L10n.download, target: self, action: #selector(clipboardDownloadClicked))
-        clipDownload.bezelStyle = .rounded
-        clipDownload.controlSize = .small
-        clipDownload.font = .systemFont(ofSize: 11, weight: .semibold)
-        if #available(macOS 11.0, *) {
-            clipDownload.bezelColor = NDMChrome.accent
-        }
-        let clipClose = NSButton(title: "", target: self, action: #selector(clipboardDismissClicked))
-        clipClose.bezelStyle = .circular
-        clipClose.isBordered = false
-        clipClose.image = NDMChrome.symbol("xmark.circle.fill", pointSize: 12, weight: .regular)
-        clipClose.contentTintColor = .tertiaryLabelColor
-        let clipStack = NSStackView(views: [clipIcon, clipboardLabel, clipDownload, clipClose])
-        clipStack.orientation = .horizontal
-        clipStack.alignment = .centerY
-        clipStack.spacing = 8
-        clipStack.edgeInsets = NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 8)
-        clipStack.translatesAutoresizingMaskIntoConstraints = false
-        clipboardBanner.addSubview(clipStack)
-
         view.addSubview(scrollView)
         view.addSubview(emptyStack)
-        view.addSubview(clipboardBanner)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -1102,47 +1516,36 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             emptyStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             emptyStack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
             emptyStack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
-            clipboardBanner.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
-            clipboardBanner.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
-            clipboardBanner.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            clipStack.topAnchor.constraint(equalTo: clipboardBanner.topAnchor),
-            clipStack.leadingAnchor.constraint(equalTo: clipboardBanner.leadingAnchor),
-            clipStack.trailingAnchor.constraint(equalTo: clipboardBanner.trailingAnchor),
-            clipStack.bottomAnchor.constraint(equalTo: clipboardBanner.bottomAnchor),
         ])
-    }
-
-    func showClipboardBanner(urlString: String, displayName: String) {
-        clipboardURLString = urlString
-        clipboardLabel.stringValue = L10n.clipboardBanner(displayName)
-        clipboardBanner.isHidden = false
-    }
-
-    func hideClipboardBanner() {
-        clipboardBanner.isHidden = true
-        clipboardURLString = nil
-    }
-
-    @objc private func clipboardDownloadClicked() {
-        guard let url = clipboardURLString else { return }
-        hideClipboardBanner()
-        onClipboardDownload?(url)
-    }
-
-    @objc private func clipboardDismissClicked() {
-        hideClipboardBanner()
     }
 
     @objc private func emptyNewClicked() {
         onEmptyNewDownload?()
     }
 
-    @objc private func emptyRaceClicked() {
-        onEmptySpeedRace?()
-    }
-
     func relocalizeChrome() {
         tableView.menu = makeContextMenu()
+    }
+
+    /// Zoom task content while the titlebar, toolbar, sidebar, inspector, and
+    /// window geometry remain stable.
+    func setContentScale(_ scale: CGFloat) {
+        let next = min(InterfaceScale.maximum, max(InterfaceScale.minimum, scale))
+        let changed = abs(contentScale - next) > 0.000_1
+        contentScale = next
+        if !isViewLoaded { _ = view }
+        guard changed else { return }
+
+        tableView.rowHeight = 70 * next
+        emptyLabel.font = .systemFont(ofSize: 20 * next, weight: .bold)
+        emptySubtitleLabel.font = .systemFont(ofSize: 13 * next)
+        if tableView.numberOfRows > 0 {
+            let all = IndexSet(integersIn: 0..<tableView.numberOfRows)
+            tableView.reloadData(forRowIndexes: all, columnIndexes: IndexSet(integer: 0))
+            tableView.noteHeightOfRows(withIndexesChanged: all)
+        }
+        view.needsLayout = true
+        view.needsDisplay = true
     }
 
     func update(
@@ -1152,25 +1555,92 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptySubtitle: String,
         emptyShowsActions: Bool = false
     ) {
+        let previousIDs = self.rows.map(\.taskID)
+        let nextIDs = rows.map(\.taskID)
         self.rows = rows
+        self.selectedTaskID = selectedTaskID
         emptyLabel.stringValue = emptyTitle
         emptySubtitleLabel.stringValue = emptySubtitle
         emptyActionsRow?.isHidden = !emptyShowsActions
         emptyStack.isHidden = !rows.isEmpty
         tableView.isHidden = rows.isEmpty
-        tableView.reloadData()
-        if let selectedTaskID, let index = rows.firstIndex(where: { $0.taskID == selectedTaskID }) {
+
+        if previousIDs != nextIDs {
+            tableView.reloadData()
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
+        } else if !rows.isEmpty {
+            // Same identity order — refresh cells without nuking selection.
+            let all = IndexSet(integersIn: 0..<rows.count)
+            tableView.reloadData(forRowIndexes: all, columnIndexes: IndexSet(integer: 0))
+            tableView.noteHeightOfRows(withIndexesChanged: all)
+        }
+
+        applyTableSelection(to: selectedTaskID)
+    }
+
+    func revealTask(_ taskID: Int64) {
+        applyTableSelection(to: taskID)
+        guard let index = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
+        tableView.scrollRowToVisible(index)
+    }
+
+    private func applyTableSelection(to taskID: Int64?) {
+        suppressSelectionCallback = true
+        defer {
+            suppressSelectionCallback = false
+            syncSelectionAppearance()
+        }
+        guard let taskID, let index = rows.firstIndex(where: { $0.taskID == taskID }) else {
+            if tableView.selectedRow != -1 {
+                tableView.deselectAll(nil)
+            }
+            return
+        }
+        if tableView.selectedRow != index {
             tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        } else {
-            tableView.deselectAll(nil)
+        }
+    }
+
+    private func syncSelectionAppearance() {
+        for row in 0..<rows.count {
+            guard let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
+                continue
+            }
+            let on = (rows[row].taskID == selectedTaskID)
+            rowView.forcedSelected = on
+            rowView.needsDisplay = true
+        }
+    }
+
+    private func refreshCover(for taskID: Int64?) {
+        for row in 0..<rows.count {
+            if let taskID, rows[row].taskID != taskID { continue }
+            if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView {
+                applyArtwork(to: rowView, item: rows[row])
+            }
+            if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TaskRowCellView {
+                cell.apply(rows[row], scale: contentScale)
+            }
+            if taskID != nil { break }
         }
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        guard row < rows.count else { return 72 }
-        return rows[row].showsProgressBar ? 72 : 56
+        guard row < rows.count else { return 70 * contentScale }
+        return (rows[row].showsProgressBar ? 74 : 66) * contentScale
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = QuietFinderRowView()
+        view.usesAccentFill = false
+        if row < rows.count {
+            let item = rows[row]
+            view.forcedSelected = (item.taskID == selectedTaskID)
+            applyArtwork(to: view, item: item)
+        }
+        return view
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -1178,15 +1648,45 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let id = NSUserInterfaceItemIdentifier("TaskRow")
         let cell = (tableView.makeView(withIdentifier: id, owner: self) as? TaskRowCellView) ?? TaskRowCellView()
         cell.identifier = id
-        cell.apply(rows[row])
+        let taskID = rows[row].taskID
+        cell.onInlineRenew = { [weak self] in
+            self?.onContextAction?(.renew, taskID)
+        }
+        cell.apply(rows[row], scale: contentScale)
+        if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView {
+            applyArtwork(to: rowView, item: rows[row])
+        }
         return cell
     }
 
+    private func applyArtwork(to rowView: QuietFinderRowView, item: TaskRowPresentation) {
+        let ext = (item.filename as NSString).pathExtension.lowercased()
+        let usesContentBackdrop = [
+            "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts",
+            "png", "jpg", "jpeg", "gif", "webp", "heic",
+        ].contains(ext)
+        let preview = CoverArtCache.shared.image(for: item.taskID)
+        rowView.artworkStyle = usesContentBackdrop ? .fullBleed : .ambient
+        if usesContentBackdrop {
+            rowView.coverImage = preview
+            rowView.washColor = preview == nil ? FileCategoryWash.color(forFilename: item.filename) : nil
+        } else {
+            rowView.coverImage = preview ?? NDMChrome.fileIcon(filename: item.filename, pointSize: 128)
+            rowView.washColor = FileCategoryWash.color(forFilename: item.filename)
+        }
+        rowView.needsDisplay = true
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if suppressSelectionCallback { return }
         let row = tableView.selectedRow
         if row >= 0, row < rows.count {
+            selectedTaskID = rows[row].taskID
+            syncSelectionAppearance()
             onSelectTaskID?(rows[row].taskID)
         } else {
+            selectedTaskID = nil
+            syncSelectionAppearance()
             onSelectTaskID?(nil)
         }
     }
@@ -1208,6 +1708,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let specs: [(String, Selector, String?, String)?] = [
             (L10n.open, #selector(ctxOpen), "o", "doc.fill"),
             (L10n.showInFinder, #selector(ctxReveal), "r", "folder.fill"),
+            (L10n.share, #selector(ctxShare), nil, "square.and.arrow.up"),
             nil,
             (L10n.retry, #selector(ctxRetry), nil, "arrow.clockwise"),
             (L10n.renewURLEllipsis, #selector(ctxRenew), nil, "link"),
@@ -1233,34 +1734,63 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func configureContextMenu(_ menu: NSMenu) {
-        let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
-        guard row >= 0, row < rows.count else {
+        guard let row = resolveContextRowIndex() else {
+            menuContextTaskID = nil
             menu.items.forEach { $0.isEnabled = false }
             return
         }
-        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        menuContextTaskID = rows[row].taskID
+        selectedTaskID = rows[row].taskID
+        applyTableSelection(to: selectedTaskID)
+        onSelectTaskID?(selectedTaskID)
         let presentation = rows[row]
         for item in menu.items {
             switch item.action {
             case #selector(ctxOpen): item.isEnabled = presentation.canOpen
             case #selector(ctxReveal): item.isEnabled = presentation.canShowInFinder
+            case #selector(ctxShare): item.isEnabled = presentation.canOpen
             case #selector(ctxRetry):
                 item.isEnabled = presentation.canRetry
                 item.title = L10n.retry
             case #selector(ctxRenew): item.isEnabled = presentation.canRenew
             case #selector(ctxStart):
+                // Start/Resume for paused & waiting; Retry covers error + incomplete.
                 item.isEnabled = presentation.canStart && !presentation.canRetry
+                item.title = presentation.isQueued ? L10n.start : L10n.resume
             case #selector(ctxPause): item.isEnabled = presentation.canPause
-            case #selector(ctxProgress): item.isEnabled = presentation.canShowProgress
+            case #selector(ctxProgress):
+                item.isEnabled = presentation.canShowProgress
+                item.title = presentation.isComplete ? L10n.resultDetails : L10n.progressDetails
+                item.ndmSymbol(presentation.isComplete ? "sparkles.rectangle.stack" : "chart.bar.fill")
             case #selector(ctxProperties), #selector(ctxDelete), #selector(ctxCopyURL): item.isEnabled = true
             default: break
             }
         }
     }
 
+    private func resolveContextRowIndex() -> Int? {
+        if tableView.clickedRow >= 0, tableView.clickedRow < rows.count {
+            return tableView.clickedRow
+        }
+        if let id = selectedTaskID, let idx = rows.firstIndex(where: { $0.taskID == id }) {
+            return idx
+        }
+        let selected = tableView.selectedRow
+        if selected >= 0, selected < rows.count {
+            return selected
+        }
+        // Last resort: row under the mouse (custom cell views sometimes skip clickedRow).
+        if let window = tableView.window {
+            let point = tableView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            let row = tableView.row(at: point)
+            if row >= 0, row < rows.count { return row }
+        }
+        return nil
+    }
+
     private func currentContextTaskID() -> Int64? {
-        let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
-        guard row >= 0, row < rows.count else { return nil }
+        if let id = menuContextTaskID { return id }
+        guard let row = resolveContextRowIndex() else { return nil }
         return rows[row].taskID
     }
 
@@ -1272,6 +1802,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     @objc private func ctxOpen() { if let id = currentContextTaskID() { onContextAction?(.open, id) } }
     @objc private func ctxReveal() { if let id = currentContextTaskID() { onContextAction?(.reveal, id) } }
+    @objc private func ctxShare() { if let id = currentContextTaskID() { onContextAction?(.share, id) } }
     @objc private func ctxRetry() { if let id = currentContextTaskID() { onContextAction?(.retry, id) } }
     @objc private func ctxRenew() { if let id = currentContextTaskID() { onContextAction?(.renew, id) } }
     @objc private func ctxStart() { if let id = currentContextTaskID() { onContextAction?(.start, id) } }
@@ -1290,123 +1821,186 @@ private final class ContextMenuDelegate: NSObject, NSMenuDelegate {
 
 @MainActor
 private final class TaskRowCellView: NSTableCellView {
-    private let iconView = NSImageView()
+    var onInlineRenew: (() -> Void)?
+
+    private let glyph = FileGlyphView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let badgeLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
-    private let progressBar = NSProgressIndicator()
+    private let progressBar = ThinProgressView()
     private let trailingLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
+    private let renewButton = NSButton(title: L10n.renew, target: nil, action: nil)
     private var progressHeight: NSLayoutConstraint?
     private var progressTop: NSLayoutConstraint?
+    private var titleTop: NSLayoutConstraint?
+    private var badgeHeight: NSLayoutConstraint?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingMiddle
-        subtitleLabel.font = .systemFont(ofSize: 11)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        badgeLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        badgeLabel.textColor = .systemGreen
+        badgeLabel.backgroundColor = NDMChrome.okSoft
+        badgeLabel.isBordered = false
+        badgeLabel.drawsBackground = true
+        badgeLabel.wantsLayer = true
+        badgeLabel.layer?.cornerRadius = 5
+        badgeLabel.alignment = .center
+        badgeLabel.isHidden = true
+        subtitleLabel.font = .systemFont(ofSize: 11.5)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.lineBreakMode = .byTruncatingTail
-        progressBar.isIndeterminate = false
-        progressBar.minValue = 0
-        progressBar.maxValue = 1
-        progressBar.controlSize = .small
-        progressBar.style = .bar
-        trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         trailingLabel.alignment = .right
-        trailingLabel.textColor = .secondaryLabelColor
-        metaLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        metaLabel.textColor = .tertiaryLabelColor
-        metaLabel.alignment = .right
-        metaLabel.lineBreakMode = .byTruncatingTail
+        trailingLabel.textColor = .labelColor
+        trailingLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        renewButton.bezelStyle = .rounded
+        renewButton.controlSize = .small
+        renewButton.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        renewButton.target = self
+        renewButton.action = #selector(renewTapped)
+        renewButton.isHidden = true
+        if #available(macOS 11.0, *) {
+            renewButton.bezelColor = NDMChrome.accent
+        }
 
-        for view in [iconView, titleLabel, subtitleLabel, progressBar, trailingLabel, metaLabel] {
+        for view in [glyph, titleLabel, badgeLabel, subtitleLabel, progressBar, trailingLabel, renewButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        let barTop = progressBar.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 7)
+        let titleTop = titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 12)
+        let badgeHeight = badgeLabel.heightAnchor.constraint(equalToConstant: 16)
+        let barTop = progressBar.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 6)
         let barHeight = progressBar.heightAnchor.constraint(equalToConstant: 4)
+        self.titleTop = titleTop
+        self.badgeHeight = badgeHeight
         progressTop = barTop
         progressHeight = barHeight
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 38),
-            iconView.heightAnchor.constraint(equalToConstant: 38),
+            glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 11),
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -12),
+            titleTop,
+            titleLabel.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -10),
+
+            badgeLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 6),
+            badgeLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            badgeHeight,
+            badgeLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -8),
 
             trailingLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            trailingLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            trailingLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            trailingLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+
+            renewButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            renewButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
 
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: metaLabel.leadingAnchor, constant: -12),
-
-            metaLabel.centerYAnchor.constraint(equalTo: subtitleLabel.centerYAnchor),
-            metaLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            metaLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
+            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
 
             barTop,
             progressBar.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            progressBar.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -11),
+            progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            progressBar.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -10),
             barHeight,
         ])
     }
 
+    @objc private func renewTapped() { onInlineRenew?() }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func apply(_ row: TaskRowPresentation) {
-        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 38)
+    func apply(_ row: TaskRowPresentation, scale: CGFloat) {
+        glyph.setContentScale(scale)
+        titleLabel.font = .systemFont(ofSize: 13 * scale, weight: .semibold)
+        badgeLabel.font = .systemFont(ofSize: 10 * scale, weight: .bold)
+        subtitleLabel.font = .systemFont(ofSize: 11.5 * scale)
+        trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
+        renewButton.font = .systemFont(ofSize: 11.5 * scale, weight: .semibold)
+        titleTop?.constant = 12 * scale
+        badgeHeight?.constant = 16 * scale
+
+        let cover = CoverArtCache.shared.image(for: row.taskID)
+        let wash = FileCategoryWash.color(forFilename: row.filename)
+        glyph.apply(filename: row.filename, cover: cover, categoryWash: wash)
         titleLabel.stringValue = row.filename
-        if let error = row.errorText, !error.isEmpty {
-            // Human diagnostic: red headline, quiet hint ("链接已过期 · 回到页面…").
-            subtitleLabel.attributedStringValue = Self.errorSubtitle(error)
-        } else if row.host.isEmpty {
-            subtitleLabel.stringValue = row.statusTitle
-            subtitleLabel.textColor = .secondaryLabelColor
+        // Soft contrast lift when sitting on a frosted cover wash.
+        if cover != nil {
+            titleLabel.textColor = .labelColor
+            trailingLabel.textColor = .labelColor
         } else {
-            subtitleLabel.stringValue = "\(row.statusTitle) · \(row.host)"
+            titleLabel.textColor = .labelColor
+            trailingLabel.textColor = .labelColor
+        }
+
+        if let badge = row.mediaBadge {
+            badgeLabel.stringValue = " \(badge) "
+            badgeLabel.isHidden = false
+        } else {
+            badgeLabel.isHidden = true
+        }
+
+        if row.isFailed, let error = row.errorText, !error.isEmpty {
+            subtitleLabel.attributedStringValue = Self.errorSubtitle(error, scale: scale)
+        } else if row.isComplete {
+            let head = NSMutableAttributedString(string: L10n.completed, attributes: [
+                .font: NSFont.systemFont(ofSize: 11.5 * scale, weight: .semibold),
+                .foregroundColor: NSColor.systemGreen,
+            ])
+            if !row.statusDetail.isEmpty, row.statusDetail != L10n.completed {
+                head.append(NSAttributedString(string: " · \(row.statusDetail)", attributes: [
+                    .font: NSFont.systemFont(ofSize: 11.5 * scale),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]))
+            }
+            subtitleLabel.attributedStringValue = head
+        } else {
+            subtitleLabel.stringValue = row.statusDetail
             subtitleLabel.textColor = .secondaryLabelColor
         }
 
-        let showBar = row.showsProgressBar
+        let showRenew = row.isFailed && row.canRenew
+        renewButton.isHidden = !showRenew
+        trailingLabel.isHidden = showRenew
+
+        let showBar = row.isDownloading
         progressBar.isHidden = !showBar
-        progressTop?.constant = showBar ? 8 : 0
-        progressHeight?.constant = showBar ? 6 : 0
+        progressTop?.constant = showBar ? 7 * scale : 0
+        // ThinProgressView owns a fixed 4 pt hairline. Scaling this constraint
+        // would fight its internal height constraint.
+        progressHeight?.constant = showBar ? 4 : 0
         if showBar {
-            progressBar.doubleValue = row.progressFraction
-            trailingLabel.stringValue = row.progressText
-            metaLabel.stringValue = [row.sizeText, row.speedText, row.etaText]
-                .filter { $0 != "—" && $0 != L10n.emDash }
-                .joined(separator: "  ·  ")
-        } else {
-            // Quiet Finder: completed rows lead with size, not a candy status chip.
+            progressBar.progress = row.progressFraction
+            // Design Suite: bold speed leads; percent is secondary.
+            let speed = row.speedText
+            if speed != L10n.emDash && speed != "—" {
+                trailingLabel.stringValue = "\(speed) · \(row.progressText)"
+            } else {
+                trailingLabel.stringValue = row.progressText
+            }
+            trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .bold)
+            trailingLabel.textColor = .labelColor
+        } else if !showRenew {
             trailingLabel.stringValue = row.sizeText
-            metaLabel.stringValue = ""
-        }
-        trailingLabel.textColor = .secondaryLabelColor
-        trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        if metaLabel.stringValue.isEmpty && showBar {
-            metaLabel.stringValue = row.sizeText
+            trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
+            trailingLabel.textColor = .secondaryLabelColor
         }
     }
 
-    private static func errorSubtitle(_ summary: String) -> NSAttributedString {
-        let font = NSFont.systemFont(ofSize: 11)
+    private static func errorSubtitle(_ summary: String, scale: CGFloat) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 11 * scale)
         let result = NSMutableAttributedString()
         if let sep = summary.range(of: " · ") {
             let head = String(summary[..<sep.lowerBound])
             let rest = String(summary[sep.lowerBound...])
             result.append(NSAttributedString(string: head, attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .font: NSFont.systemFont(ofSize: 11 * scale, weight: .semibold),
                 .foregroundColor: NSColor.systemRed,
             ]))
             result.append(NSAttributedString(string: rest, attributes: [
@@ -1425,10 +2019,11 @@ private final class TaskRowCellView: NSTableCellView {
 
 // MARK: - Inspector
 
-/// B glance + A Get Info; docked action grid; width locked so text never expands the split.
+/// Flat Get Info inspector with a quiet, file-derived ambient preview.
 @MainActor
 private final class InspectorViewController: NSViewController {
     var onAction: ((TaskListContextAction) -> Void)?
+    var onShare: ((NSView) -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: L10n.details)
     private let glanceValueLabel = NSTextField(labelWithString: "")
@@ -1437,28 +2032,31 @@ private final class InspectorViewController: NSViewController {
     private let iconView = NSImageView()
     private let filenameLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
-    private let progressBar = NSProgressIndicator()
+    private let progressBar = ThinProgressView()
     private let kvStack = NSStackView()
     private let primaryButton = NSButton(title: L10n.start, target: nil, action: nil)
     private let secondaryButton = NSButton(title: L10n.pause, target: nil, action: nil)
     private let tertiaryButton = NSButton(title: L10n.detailsEllipsis, target: nil, action: nil)
     private let copyURLButton = NSButton(title: L10n.copyURL, target: nil, action: nil)
+    private let moreButton = NSButton(title: "", target: nil, action: nil)
     private let deleteButton = NSButton(title: L10n.removeEllipsis, target: nil, action: nil)
     private let placeholderLabel = NSTextField(wrappingLabelWithString: L10n.selectDownloadHint)
     private let contentStack = NSStackView()
     private let glanceRow = NSStackView()
     private let actionsStack = NSStackView()
+    private let actionDivider = ChromeBox(fill: NDMChrome.hairline)
+    private let firstActionSeparator = ChromeBox(fill: NDMChrome.hairline)
+    private let secondActionSeparator = ChromeBox(fill: NDMChrome.hairline)
+    private let ambientArtifactView = InspectorArtifactView()
     private let diagBox = ChromeBox(
-        fill: NSColor.systemRed.withAlphaComponent(0.09),
-        borderColor: NSColor.systemRed.withAlphaComponent(0.22),
-        cornerRadius: 9,
-        borderWidth: 1
+        fill: NSColor.systemRed.withAlphaComponent(0.08),
+        cornerRadius: 8
     )
     private let diagTitleLabel = NSTextField(wrappingLabelWithString: "")
     private let diagMessageLabel = NSTextField(wrappingLabelWithString: "")
     private let diagRawLabel = NSTextField(labelWithString: "")
     private let tuneBox = ChromeBox(
-        fill: NSColor.systemGreen.withAlphaComponent(0.09),
+        fill: NDMChrome.okSoft,
         borderColor: NSColor.systemGreen.withAlphaComponent(0.22),
         cornerRadius: 9,
         borderWidth: 1
@@ -1466,15 +2064,24 @@ private final class InspectorViewController: NSViewController {
     private let tuneLabel = NSTextField(wrappingLabelWithString: "")
     private var progressButtonShowsConnectionDetails = false
     private var primaryFiresRenew = false
+    private var utilityButtonSharesFile = false
     private var currentRow: TaskRowPresentation?
+    private var contentScale: CGFloat = InterfaceScale.default
+    private var actionButtonHeights: [NSLayoutConstraint] = []
+    private var iconSizeConstraints: [NSLayoutConstraint] = []
+    private var ambientHeightConstraint: NSLayoutConstraint?
 
     override func loadView() {
         view = ChromeBox(fill: NDMChrome.contentSurface)
+        view.wantsLayer = true
+        view.layer?.masksToBounds = true
+
+        ambientArtifactView.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         titleLabel.textColor = .tertiaryLabelColor
 
-        glanceValueLabel.font = .monospacedDigitSystemFont(ofSize: 34, weight: .semibold)
+        glanceValueLabel.font = .monospacedDigitSystemFont(ofSize: 30, weight: .semibold)
         glanceValueLabel.textColor = .labelColor
         glanceValueLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         glanceUnitLabel.font = .systemFont(ofSize: 15, weight: .medium)
@@ -1494,10 +2101,10 @@ private final class InspectorViewController: NSViewController {
 
         filenameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         filenameLabel.alignment = .left
-        filenameLabel.maximumNumberOfLines = 2
+        filenameLabel.maximumNumberOfLines = 1
         filenameLabel.lineBreakMode = .byTruncatingMiddle
-        filenameLabel.cell?.wraps = true
-        filenameLabel.cell?.truncatesLastVisibleLine = true
+        filenameLabel.usesSingleLineMode = true
+        filenameLabel.cell?.wraps = false
         filenameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         filenameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filenameLabel.toolTip = nil
@@ -1506,12 +2113,6 @@ private final class InspectorViewController: NSViewController {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        progressBar.isIndeterminate = false
-        progressBar.minValue = 0
-        progressBar.maxValue = 1
-        progressBar.controlSize = .small
-        progressBar.style = .bar
 
         kvStack.orientation = .vertical
         kvStack.alignment = .leading
@@ -1522,60 +2123,70 @@ private final class InspectorViewController: NSViewController {
         placeholderLabel.alignment = .center
         placeholderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        stylePrimary(primaryButton)
-        styleSecondary(secondaryButton)
-        styleSoft(tertiaryButton)
-        styleSoft(copyURLButton)
-        styleDelete(deleteButton)
+        NDMChrome.styleMainButton(primaryButton)
+        NDMChrome.styleGhostButton(secondaryButton)
+        NDMChrome.styleGhostButton(tertiaryButton)
+        NDMChrome.styleGhostButton(copyURLButton)
+        NDMChrome.styleDangerButton(deleteButton)
+        primaryButton.keyEquivalent = "\r"
 
         primaryButton.action = #selector(tapPrimary)
+        primaryButton.target = self
         secondaryButton.action = #selector(tapSecondary)
+        secondaryButton.target = self
         tertiaryButton.action = #selector(tapProgress)
+        tertiaryButton.target = self
         copyURLButton.action = #selector(tapCopyURL)
+        copyURLButton.target = self
+        moreButton.action = #selector(tapMore)
+        moreButton.target = self
+        moreButton.isBordered = false
+        moreButton.bezelStyle = .inline
+        moreButton.imagePosition = .imageOnly
+        moreButton.toolTip = L10n.moreActions
+        moreButton.setAccessibilityLabel(L10n.moreActions)
         deleteButton.action = #selector(tapDelete)
+        deleteButton.target = self
 
+        // The file itself leads the inspector. A quiet, bounded type mark uses
+        // the otherwise empty lower-right corner without becoming a fake player.
+        filenameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        statusLabel.font = .systemFont(ofSize: 12)
         let nameBlock = NSStackView(views: [filenameLabel, statusLabel])
         nameBlock.orientation = .vertical
         nameBlock.alignment = .leading
-        nameBlock.spacing = 2
+        nameBlock.spacing = 3
         nameBlock.setHuggingPriority(.defaultLow, for: .horizontal)
 
         let header = NSStackView(views: [iconView, nameBlock])
         header.orientation = .horizontal
         header.alignment = .centerY
-        header.spacing = 10
+        header.spacing = 12
         header.setHuggingPriority(.defaultLow, for: .horizontal)
+        nameBlock.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let glanceBlock = NSStackView(views: [glanceRow, glanceCaptionLabel])
-        glanceBlock.orientation = .vertical
-        glanceBlock.alignment = .leading
-        glanceBlock.spacing = 4
+        // Third-concept action rail: native, flat and direct. Separators create
+        // rhythm without turning each action into a bordered form control.
+        tertiaryButton.isHidden = true
+        deleteButton.isHidden = true
 
-        // Actions live at the bottom of the panel — one confident primary,
-        // a clear secondary, then quiet utilities. No cramped icon tiles.
-        let pairRow = NSStackView(views: [tertiaryButton, copyURLButton])
-        pairRow.orientation = .horizontal
-        pairRow.alignment = .centerY
-        pairRow.spacing = 8
-        pairRow.distribution = .fillEqually
-
-        actionsStack.orientation = .vertical
-        actionsStack.alignment = .leading
-        actionsStack.spacing = 8
-        actionsStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 16, right: 16)
-        actionsStack.translatesAutoresizingMaskIntoConstraints = false
+        actionsStack.orientation = .horizontal
+        actionsStack.alignment = .centerY
+        actionsStack.spacing = 10
+        actionsStack.distribution = .fill
         actionsStack.addArrangedSubview(primaryButton)
+        actionsStack.addArrangedSubview(firstActionSeparator)
         actionsStack.addArrangedSubview(secondaryButton)
-        actionsStack.addArrangedSubview(pairRow)
-        actionsStack.setCustomSpacing(12, after: pairRow)
-        actionsStack.addArrangedSubview(deleteButton)
+        actionsStack.addArrangedSubview(secondActionSeparator)
+        actionsStack.addArrangedSubview(copyURLButton)
+        actionsStack.addArrangedSubview(moreButton)
 
         // Diagnostic note — headline + plain-language explanation + raw code.
         diagTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        diagTitleLabel.textColor = .systemRed
+        diagTitleLabel.textColor = .labelColor
         diagTitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         diagMessageLabel.font = .systemFont(ofSize: 11)
-        diagMessageLabel.textColor = .labelColor
+        diagMessageLabel.textColor = .secondaryLabelColor
         diagMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         diagRawLabel.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
         diagRawLabel.textColor = .tertiaryLabelColor
@@ -1603,13 +2214,28 @@ private final class InspectorViewController: NSViewController {
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
         contentStack.spacing = 12
-        contentStack.edgeInsets = NSEdgeInsets(top: 18, left: 16, bottom: 14, right: 16)
+        contentStack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 12, right: 14)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        for sub in [titleLabel, header, glanceBlock, progressBar, diagBox, tuneBox, kvStack] {
+        // Actions belong with the selected item, directly after its information;
+        // they should not float at the bottom of a mostly empty inspector.
+        for sub in [titleLabel, header, kvStack, progressBar, actionDivider, actionsStack, tuneBox, diagBox] {
             contentStack.addArrangedSubview(sub)
         }
         contentStack.setCustomSpacing(14, after: titleLabel)
-        contentStack.setCustomSpacing(18, after: header)
+        contentStack.setCustomSpacing(14, after: header)
+        contentStack.setCustomSpacing(14, after: progressBar)
+        contentStack.setCustomSpacing(10, after: actionDivider)
+        glanceRow.isHidden = true
+        glanceCaptionLabel.isHidden = true
+        let actionButtonHeights = [primaryButton, secondaryButton, copyURLButton, moreButton].map {
+            $0.heightAnchor.constraint(equalToConstant: 34)
+        }
+        self.actionButtonHeights = actionButtonHeights
+        iconSizeConstraints = [
+            iconView.widthAnchor.constraint(equalToConstant: 54),
+            iconView.heightAnchor.constraint(equalToConstant: 54),
+        ]
+        ambientHeightConstraint = ambientArtifactView.heightAnchor.constraint(equalToConstant: 230)
         NSLayoutConstraint.activate([
             diagBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             diagStack.topAnchor.constraint(equalTo: diagBox.topAnchor),
@@ -1625,121 +2251,155 @@ private final class InspectorViewController: NSViewController {
             tuneStack.bottomAnchor.constraint(equalTo: tuneBox.bottomAnchor),
             tuneLabel.widthAnchor.constraint(equalTo: tuneStack.widthAnchor, constant: -24),
         ])
-        contentStack.setCustomSpacing(14, after: glanceBlock)
-
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ambientArtifactView)
         view.addSubview(contentStack)
-        view.addSubview(actionsStack)
         view.addSubview(placeholderLabel)
         NSLayoutConstraint.activate([
+            ambientArtifactView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            ambientArtifactView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            ambientArtifactView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             contentStack.topAnchor.constraint(equalTo: view.topAnchor),
             contentStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: actionsStack.topAnchor, constant: -12),
-            actionsStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            actionsStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            actionsStack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 44),
-            iconView.heightAnchor.constraint(equalToConstant: 44),
-            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
-            nameBlock.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -54),
-            progressBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
-            progressBar.heightAnchor.constraint(equalToConstant: 5),
-            kvStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -32),
-            primaryButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
-            secondaryButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
-            pairRow.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
-            deleteButton.widthAnchor.constraint(equalTo: actionsStack.widthAnchor, constant: -32),
-            primaryButton.heightAnchor.constraint(equalToConstant: 38),
-            secondaryButton.heightAnchor.constraint(equalToConstant: 32),
-            tertiaryButton.heightAnchor.constraint(equalToConstant: 28),
-            copyURLButton.heightAnchor.constraint(equalToConstant: 28),
-            deleteButton.heightAnchor.constraint(equalToConstant: 24),
+            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -14),
+            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            progressBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            kvStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            actionDivider.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            actionDivider.heightAnchor.constraint(equalToConstant: 1),
+            actionsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            firstActionSeparator.widthAnchor.constraint(equalToConstant: 1),
+            firstActionSeparator.heightAnchor.constraint(equalToConstant: 22),
+            secondActionSeparator.widthAnchor.constraint(equalToConstant: 1),
+            secondActionSeparator.heightAnchor.constraint(equalToConstant: 22),
+            moreButton.widthAnchor.constraint(equalToConstant: 28),
+            actionButtonHeights[0],
+            actionButtonHeights[1],
+            actionButtonHeights[2],
+            actionButtonHeights[3],
             placeholderLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             placeholderLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             placeholderLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
             placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
-        ])
+            ambientHeightConstraint!,
+        ] + iconSizeConstraints)
+
+        NotificationCenter.default.addObserver(
+            forName: CoverArtCache.didUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let taskID = note.userInfo?["taskID"] as? Int64 else { return }
+            Task { @MainActor [weak self] in
+                guard let self, taskID == self.currentRow?.taskID else { return }
+                self.refreshAmbientPreview()
+            }
+        }
         update(row: nil)
     }
 
-    private func stylePrimary(_ button: NSButton) {
-        button.bezelStyle = .rounded
-        button.setButtonType(.momentaryPushIn)
-        button.controlSize = .large
-        button.imagePosition = .imageLeading
-        button.isBordered = true
-        button.target = self
-        button.keyEquivalent = "\r"
-        button.font = .systemFont(ofSize: 13, weight: .semibold)
-        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
-        if #available(macOS 11.0, *) {
-            button.bezelColor = NDMChrome.accent
-        }
-    }
+    func setContentScale(_ scale: CGFloat) {
+        let next = min(InterfaceScale.maximum, max(InterfaceScale.minimum, scale))
+        let changed = abs(contentScale - next) > 0.000_1
+        contentScale = next
+        if !isViewLoaded { _ = view }
+        guard changed else { return }
 
-    private func styleSecondary(_ button: NSButton) {
-        button.bezelStyle = .rounded
-        button.controlSize = .regular
-        button.imagePosition = .imageLeading
-        button.isBordered = true
-        button.target = self
-        button.font = .systemFont(ofSize: 12.5, weight: .medium)
-        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
-    }
+        titleLabel.font = .systemFont(ofSize: 10 * next, weight: .semibold)
+        filenameLabel.font = .systemFont(ofSize: 15 * next, weight: .semibold)
+        statusLabel.font = .systemFont(ofSize: 12 * next)
+        placeholderLabel.font = .systemFont(ofSize: 13 * next)
+        diagTitleLabel.font = .systemFont(ofSize: 12 * next, weight: .semibold)
+        diagMessageLabel.font = .systemFont(ofSize: 11 * next)
+        diagRawLabel.font = .monospacedSystemFont(ofSize: 9 * next, weight: .regular)
+        tuneLabel.font = .systemFont(ofSize: 11 * next)
 
-    private func styleSoft(_ button: NSButton) {
-        button.bezelStyle = .rounded
-        button.setButtonType(.momentaryPushIn)
-        button.controlSize = .small
-        button.imagePosition = .imageLeading
-        button.isBordered = true
-        button.target = self
-        button.font = .systemFont(ofSize: 11.5, weight: .medium)
-        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
-    }
-
-    private func styleDelete(_ button: NSButton) {
-        button.bezelStyle = .inline
-        button.isBordered = false
-        button.target = self
-        button.font = .systemFont(ofSize: 11.5, weight: .medium)
-        button.contentTintColor = .systemRed
-        button.alignment = .center
-        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
+        let layoutScale = 1 + (next - 1) * 0.45
+        kvStack.spacing = 8 * layoutScale
+        contentStack.spacing = 12 * layoutScale
+        actionsStack.spacing = 10 * layoutScale
+        actionButtonHeights.forEach { $0.constant = 34 * layoutScale }
+        moreButton.image = NDMChrome.symbol("ellipsis", pointSize: 12 * layoutScale, weight: .semibold)
+        iconSizeConstraints.forEach { $0.constant = 54 * layoutScale }
+        ambientHeightConstraint?.constant = 230 * layoutScale
+        ambientArtifactView.setContentScale(next)
+        update(row: currentRow)
+        view.needsLayout = true
     }
 
     private enum ActionChrome {
-        case primary(symbol: String)
-        case secondary(symbol: String)
-        case soft(symbol: String)
+        case primary
+        case soft
     }
 
-    private func decorate(_ button: NSButton, title: String, chrome: ActionChrome) {
+    private func decorate(
+        _ button: NSButton,
+        title: String,
+        symbol: String,
+        chrome: ActionChrome
+    ) {
         button.title = title
         button.toolTip = title
+        button.isBordered = false
+        button.bezelStyle = .inline
+        button.controlSize = .regular
+        button.image = NDMChrome.symbol(
+            symbol,
+            pointSize: 12.5 * (1 + (contentScale - 1) * 0.45),
+            weight: chrome == .primary ? .semibold : .medium
+        )
+        button.imagePosition = .imageLeading
+        button.imageHugsTitle = true
+        let buttonScale = 1 + (contentScale - 1) * 0.52
         switch chrome {
-        case .primary(let symbol):
-            button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .semibold)
-            button.imagePosition = .imageLeading
-        case .secondary(let symbol):
-            button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .medium)
-            button.imagePosition = .imageLeading
-        case .soft(let symbol):
-            button.image = NDMChrome.symbol(symbol, pointSize: 10, weight: .medium)
-            button.imagePosition = .imageLeading
+        case .primary:
+            button.font = .systemFont(ofSize: 12.5 * buttonScale, weight: .semibold)
+            button.contentTintColor = NDMChrome.accent
+        case .soft:
+            button.font = .systemFont(ofSize: 12.5 * buttonScale, weight: .medium)
+            button.contentTintColor = .secondaryLabelColor
         }
+    }
+
+    private func refreshAmbientPreview() {
+        guard let row = currentRow else {
+            iconView.image = nil
+            ambientArtifactView.apply(image: nil, filename: "")
+            return
+        }
+        let preview = CoverArtCache.shared.image(for: row.taskID)
+        let image = preview ?? NDMChrome.fileIcon(filename: row.filename, pointSize: 192)
+        iconView.image = image
+        // The small header icon stays literal. The ambient mark is decorative,
+        // bounded, and intentionally non-interactive.
+        ambientArtifactView.apply(
+            image: preview,
+            filename: row.filename
+        )
+    }
+
+    private func fileTypeText(for row: TaskRowPresentation) -> String {
+        let ext = (row.filename as NSString).pathExtension.lowercased()
+        guard !ext.isEmpty else { return L10n.other }
+        return UTType(filenameExtension: ext)?.localizedDescription ?? ext.uppercased()
+    }
+
+    private func locationText(for row: TaskRowPresentation) -> String? {
+        guard let folder = row.localFileURL?.deletingLastPathComponent() else { return nil }
+        let name = folder.lastPathComponent
+        return name.isEmpty ? folder.path : name
     }
 
     private func makeKVRow(key: String, value: String) -> NSView {
         let keyLabel = NSTextField(labelWithString: key)
-        keyLabel.font = .systemFont(ofSize: 11)
+        keyLabel.font = .systemFont(ofSize: 11 * contentScale)
         keyLabel.textColor = .secondaryLabelColor
         keyLabel.translatesAutoresizingMaskIntoConstraints = false
         keyLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         let valueLabel = NSTextField(labelWithString: value)
-        valueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 12 * contentScale, weight: .medium)
         valueLabel.textColor = .labelColor
         valueLabel.lineBreakMode = .byTruncatingMiddle
         valueLabel.maximumNumberOfLines = 1
@@ -1799,118 +2459,128 @@ private final class InspectorViewController: NSViewController {
         placeholderLabel.isHidden = hasSelection
         contentStack.isHidden = !hasSelection
         actionsStack.isHidden = !hasSelection
+        ambientArtifactView.isHidden = !hasSelection
         titleLabel.stringValue = L10n.details.uppercased()
-        guard let row else { return }
+        guard let row else {
+            refreshAmbientPreview()
+            return
+        }
 
-        iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 44)
+        refreshAmbientPreview()
+
         filenameLabel.stringValue = row.filename
         filenameLabel.toolTip = row.filename
-        statusLabel.stringValue = row.statusTitle
+        // Design Suite: "host · Downloading" under the title — not a giant glance.
+        if row.host.isEmpty {
+            statusLabel.stringValue = row.statusTitle
+        } else {
+            statusLabel.stringValue = "\(row.host) · \(row.statusTitle)"
+        }
+        glanceValueLabel.isHidden = true
+        glanceUnitLabel.isHidden = true
+        glanceCaptionLabel.isHidden = true
 
         if let diag = row.diagnostic {
             diagTitleLabel.stringValue = diag.title
             diagMessageLabel.stringValue = diag.message
             diagRawLabel.stringValue = diag.rawLabel
+            diagRawLabel.isHidden = diag.rawLabel.isEmpty
             diagBox.isHidden = false
         } else if let error = row.errorText, !error.isEmpty {
-            // Legacy plain-text error — still surface it, without structured copy.
             diagTitleLabel.stringValue = L10n.downloadFailed
             diagMessageLabel.stringValue = error
             diagRawLabel.stringValue = ""
+            diagRawLabel.isHidden = true
             diagBox.isHidden = false
         } else {
             diagBox.isHidden = true
         }
 
         if let note = row.tuningNote {
-            tuneLabel.stringValue = note
+            tuneLabel.stringValue = "\(L10n.whySoFastPrefix)\(note)"
             tuneBox.isHidden = false
         } else {
             tuneBox.isHidden = true
         }
 
         if row.isComplete {
-            let split = Self.splitMagnitude(row.sizeText)
-            applyGlance(value: split.0, unit: split.1, caption: L10n.size)
             progressBar.isHidden = true
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
             if !row.host.isEmpty { pairs.append((L10n.source, row.host)) }
+            pairs.append((L10n.type, fileTypeText(for: row)))
+            if let location = locationText(for: row) {
+                pairs.append((L10n.location, location))
+            }
             reloadKV(pairs)
         } else {
-            let split = Self.splitMagnitude(row.progressText)
-            applyGlance(value: split.0, unit: split.1, caption: L10n.progress)
-            progressBar.isHidden = false
-            progressBar.doubleValue = row.progressFraction
-            var pairs: [(String, String)] = [
-                (L10n.progress, row.progressText),
-                (L10n.size, row.sizeText),
-            ]
+            progressBar.isHidden = !row.isDownloading
+            progressBar.progress = row.progressFraction
+            var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
             if row.speedText != L10n.emDash && row.speedText != "—" {
                 pairs.append((L10n.speed, row.speedText))
             }
             if row.etaText != L10n.emDash && row.etaText != "—" {
                 pairs.append((L10n.timeLeft, row.etaText))
             }
-            if !row.host.isEmpty { pairs.append((L10n.source, row.host)) }
+            if row.isDownloading, let n = Int(row.connectionsText), n > 0 {
+                pairs.append((L10n.connections, "\(n) / \(n)"))
+            }
+            pairs.append((L10n.type, fileTypeText(for: row)))
             reloadKV(pairs)
         }
 
+        tertiaryButton.isHidden = true
+        utilityButtonSharesFile = row.canOpen
+        // Flat utility rail from the selected third concept.
         if row.canOpen {
-            decorate(primaryButton, title: L10n.open, chrome: .primary(symbol: "arrow.up.forward.app"))
+            decorate(primaryButton, title: L10n.open, symbol: "arrow.up.forward.app", chrome: .primary)
             primaryButton.isEnabled = true
-            decorate(secondaryButton, title: L10n.showInFinder, chrome: .secondary(symbol: "folder"))
+            decorate(secondaryButton, title: L10n.showInFinder, symbol: "folder", chrome: .soft)
             secondaryButton.isEnabled = row.canShowInFinder
-            secondaryButton.isHidden = false
-            decorate(tertiaryButton, title: L10n.properties, chrome: .soft(symbol: "info.circle"))
-            tertiaryButton.isEnabled = true
             progressButtonShowsConnectionDetails = false
         } else if row.canRetry {
-            // Follow the diagnostic's recommendation: expired links lead with Renew.
             primaryFiresRenew = row.diagnostic?.primaryAction == .renew && row.canRenew
             if primaryFiresRenew {
-                decorate(primaryButton, title: L10n.renew, chrome: .primary(symbol: "link"))
+                decorate(primaryButton, title: L10n.renew, symbol: "arrow.triangle.2.circlepath", chrome: .primary)
                 primaryButton.isEnabled = true
-                decorate(secondaryButton, title: L10n.retry, chrome: .secondary(symbol: "arrow.clockwise"))
+                decorate(secondaryButton, title: L10n.retry, symbol: "arrow.clockwise", chrome: .soft)
                 secondaryButton.isEnabled = true
             } else {
-                decorate(primaryButton, title: L10n.retry, chrome: .primary(symbol: "arrow.clockwise"))
+                decorate(primaryButton, title: L10n.retry, symbol: "arrow.clockwise", chrome: .primary)
                 primaryButton.isEnabled = true
-                decorate(secondaryButton, title: L10n.renew, chrome: .secondary(symbol: "link"))
+                decorate(secondaryButton, title: L10n.renew, symbol: "arrow.triangle.2.circlepath", chrome: .soft)
                 secondaryButton.isEnabled = row.canRenew
             }
-            secondaryButton.isHidden = false
-            decorate(tertiaryButton, title: L10n.details, chrome: .soft(symbol: "chart.bar"))
-            tertiaryButton.isEnabled = row.canShowProgress
             progressButtonShowsConnectionDetails = true
         } else if row.canPause {
-            decorate(primaryButton, title: L10n.pause, chrome: .primary(symbol: "pause.fill"))
+            decorate(primaryButton, title: L10n.pause, symbol: "pause.fill", chrome: .primary)
             primaryButton.isEnabled = true
-            decorate(secondaryButton, title: L10n.progress, chrome: .secondary(symbol: "chart.bar"))
+            decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
             secondaryButton.isEnabled = row.canShowProgress
-            secondaryButton.isHidden = false
-            decorate(tertiaryButton, title: L10n.properties, chrome: .soft(symbol: "info.circle"))
-            tertiaryButton.isEnabled = true
-            progressButtonShowsConnectionDetails = false
+            progressButtonShowsConnectionDetails = true
         } else {
-            decorate(primaryButton, title: L10n.start, chrome: .primary(symbol: "play.fill"))
+            decorate(primaryButton, title: L10n.start, symbol: "play.fill", chrome: .primary)
             primaryButton.isEnabled = row.canStart
-            if row.canRenew {
-                decorate(secondaryButton, title: L10n.renew, chrome: .secondary(symbol: "link"))
-                secondaryButton.isEnabled = true
-            } else {
-                decorate(secondaryButton, title: L10n.progress, chrome: .secondary(symbol: "chart.bar"))
-                secondaryButton.isEnabled = row.canShowProgress
-            }
-            secondaryButton.isHidden = false
-            decorate(tertiaryButton, title: L10n.properties, chrome: .soft(symbol: "info.circle"))
-            tertiaryButton.isEnabled = true
+            decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
+            secondaryButton.isEnabled = row.canShowProgress
             progressButtonShowsConnectionDetails = false
         }
 
-        decorate(copyURLButton, title: L10n.copy, chrome: .soft(symbol: "doc.on.doc"))
-        copyURLButton.toolTip = L10n.copyURL
-        decorate(deleteButton, title: L10n.delete, chrome: .soft(symbol: "trash"))
-        deleteButton.toolTip = L10n.removeEllipsis
+        if utilityButtonSharesFile {
+            decorate(copyURLButton, title: L10n.share, symbol: "square.and.arrow.up", chrome: .soft)
+            copyURLButton.toolTip = L10n.share
+        } else {
+            decorate(copyURLButton, title: L10n.copyURL, symbol: "link", chrome: .soft)
+            copyURLButton.toolTip = L10n.copyURL
+        }
+        moreButton.image = NDMChrome.symbol(
+            "ellipsis",
+            pointSize: 12 * (1 + (contentScale - 1) * 0.45),
+            weight: .semibold
+        )
+        moreButton.toolTip = L10n.moreActions
+        moreButton.setAccessibilityLabel(L10n.moreActions)
+        deleteButton.isHidden = true
     }
 
     @objc private func tapPrimary() {
@@ -1950,7 +2620,41 @@ private final class InspectorViewController: NSViewController {
         }
     }
 
-    @objc private func tapCopyURL() { onAction?(.copyURL) }
+    @objc private func tapCopyURL() {
+        if utilityButtonSharesFile {
+            onShare?(copyURLButton)
+        } else {
+            onAction?(.copyURL)
+        }
+    }
+
+    @objc private func tapMore() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if utilityButtonSharesFile {
+            addMoreItem(menu, title: L10n.copyURL, selector: #selector(moreCopyURL), symbol: "link")
+        }
+        addMoreItem(menu, title: L10n.propertiesEllipsis, selector: #selector(moreProperties), symbol: "info.circle")
+        menu.addItem(.separator())
+        addMoreItem(menu, title: L10n.removeEllipsis, selector: #selector(moreDelete), symbol: "trash")
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: moreButton.bounds.minX, y: moreButton.bounds.maxY + 4),
+            in: moreButton
+        )
+    }
+
+    private func addMoreItem(_ menu: NSMenu, title: String, selector: Selector, symbol: String) {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.ndmSymbol(symbol)
+        item.isEnabled = true
+        menu.addItem(item)
+    }
+
+    @objc private func moreCopyURL() { onAction?(.copyURL) }
+    @objc private func moreProperties() { onAction?(.properties) }
+    @objc private func moreDelete() { onAction?(.delete) }
     @objc private func tapDelete() { onAction?(.delete) }
 }
 
@@ -1998,11 +2702,9 @@ private final class URLDropView: NSView {
             onDropURL?(first.absoluteString)
             return true
         }
-        if let str = pb.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           str.contains("://"),
-           let first = str.components(separatedBy: .whitespacesAndNewlines).first {
-            onDropURL?(first)
+        if let text = pb.string(forType: .string),
+           let resolution = SharedLinkResolver.resolve(text) {
+            onDropURL?(resolution.urlString)
             return true
         }
         return false

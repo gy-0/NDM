@@ -78,6 +78,8 @@ public enum L10n: Sendable {
     public static var emDash: String { "—" }
 
     public static var showInFinder: String { t("Show in Finder", "在访达中显示") }
+    public static var share: String { t("Share", "分享") }
+    public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
     public static var renewURL: String { t("Renew URL", "更换链接") }
     public static var renewURLEllipsis: String { t("Renew URL…", "更换链接…") }
@@ -88,6 +90,7 @@ public enum L10n: Sendable {
     public static var detailsEllipsis: String { t("Details…", "详情…") }
     public static var connectionDetails: String { t("Connection details…", "连接详情…") }
     public static var progressDetails: String { t("Progress Details", "进度详情") }
+    public static var resultDetails: String { t("Result Details", "成果详情") }
     public static var showProgress: String { t("Show Progress", "显示进度") }
     public static var removeEllipsis: String { t("Remove…", "移除…") }
     public static var removeTask: String { t("Remove Task", "仅移除任务") }
@@ -119,6 +122,21 @@ public enum L10n: Sendable {
 
     public static var untitled: String { t("Untitled", "未命名") }
     public static var hlsStream: String { t("HLS stream", "HLS 流") }
+    public static var hlsToMp4Badge: String { t("HLS → MP4", "HLS → MP4") }
+    public static var completedReadyToShare: String {
+        t(
+            "Merged and remuxed automatically — ready to play and share",
+            "已自动合并音视频并转封装，可直接播放与分享"
+        )
+    }
+    public static var queuedWillStart: String {
+        t("Will start after the current task finishes", "将在当前任务完成后开始")
+    }
+    public static func connectionsCount(_ n: Int) -> String {
+        t("\(n) connections", "\(n) 条连接")
+    }
+    public static var showInFinderShort: String { t("Finder", "访达") }
+    public static var detailsShort: String { t("Details…", "详情…") }
     public static var multiTrackMedia: String { t("Multi-track media", "多轨媒体") }
     public static var ftp: String { t("FTP", "FTP") }
 
@@ -140,9 +158,14 @@ public enum L10n: Sendable {
     public static var details: String { t("Details", "详情") }
     public static var selectDownloadHint: String { t("Select a download to see actions.", "选择一项下载以查看操作。") }
 
-    public static var emptyNoDownloads: String { t("No downloads yet", "还没有下载任务") }
+    public static var emptyNoDownloads: String {
+        t("IDM-class speed. Mac-native design.", "IDM 级速度，原生 Mac 体验")
+    }
     public static var emptyDropHint: String {
-        t("Press ⌘N or drop a link here to start.", "按 ⌘N 或把链接拖到这里开始。")
+        t(
+            "Press ⌘N or drop a link — one click, finished as a playable MP4.",
+            "按 ⌘N 或把链接拖到这里——点一下，下完就是能播的 MP4。"
+        )
     }
     public static var emptyTrySearch: String {
         t("Try another search, or clear the search field.", "试试其他关键词，或清空搜索框。")
@@ -161,6 +184,330 @@ public enum L10n: Sendable {
 
     public static var pasteURLHint: String {
         t("Paste an HTTP, HTTPS, or FTP URL.", "粘贴 HTTP、HTTPS 或 FTP 链接。")
+    }
+    public static var newDownloadLede: String {
+        t(
+            "Paste a link or a copied share message. YouTube, Bilibili, Douyin, Xiaohongshu, and similar pages are recognized automatically.",
+            "粘贴链接或整段分享口令。YouTube、B 站、抖音、小红书等页面都会自动识别。"
+        )
+    }
+    public static var clipboardURLFilled: String {
+        t("Filled from clipboard", "已从剪贴板填入")
+    }
+    public static var clipboardURLEmpty: String {
+        t("Clipboard has no download link — paste one below", "剪贴板里没有下载链接，请手动粘贴")
+    }
+    public static var clipboardURLEdited: String {
+        t("Edit the URL, then download", "可继续编辑链接后下载")
+    }
+    public static var urlReadyToDownload: String {
+        t("Link ready", "链接已就绪")
+    }
+    public static var shareTextLinkFound: String {
+        t("Link found in the shared text — ready", "已从分享口令中找到链接")
+    }
+    public static var shareLinkResolving: String {
+        t("Recognizing shared link…", "正在识别分享内容…")
+    }
+    public static var linkLensContinue: String {
+        t("Continue", "继续")
+    }
+    public static var linkLensViewExisting: String {
+        t("View existing", "查看现有")
+    }
+    public static var linkLensDownloadAgain: String {
+        t("Download again", "再下载一份")
+    }
+    public static var linkLensOptions: String {
+        t("Options…", "选项…")
+    }
+    public static func linkLensDownloadReadyChoice(_ quality: String, container: String) -> String {
+        t("Download \(quality) · \(container)", "下载 \(quality) · \(container)")
+    }
+    public static var linkLensReadyChoiceTooltip: String {
+        t(
+            "Uses your last successful choice for this site. Open Options to change it.",
+            "使用你上次在此站点确认的选择；如需更改，请打开“选项”。"
+        )
+    }
+    public static func linkLensExistingComplete(_ filename: String) -> String {
+        t("Already downloaded · \(filename)", "已经下载过 · \(filename)")
+    }
+    public static func linkLensExistingActive(_ filename: String) -> String {
+        t("Already in progress · \(filename)", "已经在下载 · \(filename)")
+    }
+    public static func linkLensExistingTask(_ filename: String) -> String {
+        t("Already in your downloads · \(filename)", "下载列表中已有 · \(filename)")
+    }
+    public static var linkLensRecognizing: String {
+        t("Recognizing this media…", "正在识别这个媒体…")
+    }
+    public static var linkLensContinueAnytime: String {
+        t("You can continue now — details will follow automatically", "现在就可以继续，详细选项会自动补齐")
+    }
+    public static var linkLensPreviewUnavailable: String {
+        t("Preview isn't available yet — continue to prepare download options", "暂时没有预览，继续后仍会准备下载选项")
+    }
+    public static func linkLensPreviewSummary(
+        qualityCount: Int,
+        durationSeconds: Double?,
+        subtitleCount: Int
+    ) -> String {
+        var parts: [String] = []
+        if let durationSeconds {
+            parts.append(ytdlpDuration(durationSeconds))
+        }
+        if qualityCount > 0 {
+            parts.append(t("\(qualityCount) quality options", "\(qualityCount) 档画质"))
+        }
+        if subtitleCount > 0 {
+            parts.append(t("\(subtitleCount) subtitle tracks", "\(subtitleCount) 种字幕"))
+        }
+        return parts.isEmpty
+            ? t("Media details ready", "媒体信息已就绪")
+            : parts.joined(separator: " · ")
+    }
+    public static func linkLensCollectionSummary(itemCount: Int, isTruncated: Bool) -> String {
+        let count = isTruncated
+            ? t("First \(itemCount)+ items ready", "已准备前 \(itemCount)+ 项")
+            : t("\(itemCount) items", "\(itemCount) 项内容")
+        return t("\(count) · choose one or the whole collection next", "\(count) · 下一步可选当前内容或整个合集")
+    }
+    public static var ytdlpCurrentVideo: String {
+        t("This video", "当前视频")
+    }
+    public static func ytdlpEntireCollection(_ count: Int, isTruncated: Bool = false) -> String {
+        if isTruncated {
+            return t("First \(count) items", "前 \(count) 项")
+        }
+        return t("Entire collection · \(count) items", "整个合集 · \(count) 项")
+    }
+    public static var ytdlpCollectionQueueHint: String {
+        t(
+            "Collection items are added as separate downloads and run quietly in order.",
+            "合集内容会作为独立任务加入，并按顺序安静下载。"
+        )
+    }
+    public static func downloadCollection(_ count: Int, quality: String) -> String {
+        t("Download \(count) items · \(quality)", "下载 \(count) 项 · \(quality)")
+    }
+    public static func storageComfortable(
+        finalBytes: Int64,
+        availableBytes: Int64,
+        isCollection: Bool
+    ) -> String {
+        let size = TaskPresentationFormatting.byteCount(finalBytes)
+        let free = TaskPresentationFormatting.byteCount(availableBytes)
+        return isCollection
+            ? t("Collection about \(size) · \(free) free · Enough space", "合集约 \(size) · 可用 \(free) · 空间充足")
+            : t("About \(size) · \(free) free · Enough space", "约 \(size) · 可用 \(free) · 空间充足")
+    }
+    public static func storageTight(
+        finalBytes: Int64,
+        projectedFreeBytes: Int64,
+        isCollection: Bool
+    ) -> String {
+        let size = TaskPresentationFormatting.byteCount(finalBytes)
+        let remaining = TaskPresentationFormatting.byteCount(projectedFreeBytes)
+        return isCollection
+            ? t("Collection about \(size) · only \(remaining) left afterward", "合集约 \(size) · 完成后仅剩 \(remaining)")
+            : t("About \(size) · only \(remaining) left afterward", "约 \(size) · 完成后仅剩 \(remaining)")
+    }
+    public static func storageInsufficient(shortfallBytes: Int64) -> String {
+        let shortfall = TaskPresentationFormatting.byteCount(shortfallBytes)
+        return t(
+            "Free up about \(shortfall) for download and assembly, or choose a smaller quality.",
+            "下载和合并还差约 \(shortfall)，请释放空间或选择更小画质。"
+        )
+    }
+    public static func storageUnknown(availableBytes: Int64?) -> String {
+        guard let availableBytes else {
+            return t(
+                "Final size will be confirmed when download starts.",
+                "最终大小将在开始下载时确认。"
+            )
+        }
+        let free = TaskPresentationFormatting.byteCount(availableBytes)
+        return t(
+            "Final size will be confirmed when download starts · \(free) free",
+            "最终大小将在开始下载时确认 · 可用 \(free)"
+        )
+    }
+    public static func storageGuardError(requiredBytes: Int64, availableBytes: Int64) -> String {
+        let required = TaskPresentationFormatting.byteCount(requiredBytes)
+        let available = TaskPresentationFormatting.byteCount(availableBytes)
+        return t(
+            "This delivery may need \(required) while assembling, but only \(available) is free. Choose a smaller quality or change the download location.",
+            "这个成果在下载和合并时可能需要 \(required)，当前仅有 \(available) 可用。请选择更小画质或更换下载位置。"
+        )
+    }
+    public static var ytdlpReadyHint: String {
+        t("Video pages are recognized automatically — no extra setup needed.", "视频页面会自动识别，无需额外设置。")
+    }
+    public static var ytdlpRecognizedVideoLink: String {
+        t("Video link · quality, format, and subtitles available", "视频链接 · 可选择画质、格式和字幕")
+    }
+    public static var ytdlpRecognizedPageLink: String {
+        t("Page link · we'll check for downloadable media", "网页链接 · 将检查可下载的媒体")
+    }
+    public static var directFileLink: String {
+        t("Direct file link · ready to download", "文件直链 · 可以直接下载")
+    }
+    public static var bilibiliName: String { t("Bilibili", "哔哩哔哩") }
+    public static var douyinName: String { t("Douyin", "抖音") }
+    public static var xiaohongshuName: String { t("Xiaohongshu", "小红书") }
+    public static var ytdlpMissingHint: String {
+        t(
+            "The built-in video component couldn't start. Reinstall or update the app, then try again.",
+            "内置视频组件未能启动。请重新安装或更新软件后再试。"
+        )
+    }
+    public static func ytdlpPickerSummary(host: String, count: Int) -> String {
+        let h = host.isEmpty ? "—" : host
+        return t(
+            "From \(h) · \(count) quality options",
+            "来自 \(h) · \(count) 档清晰度"
+        )
+    }
+    public static func ytdlpPickerSummary(host: String, count: Int, durationText: String?) -> String {
+        let h = host.isEmpty ? "—" : host
+        if let durationText, !durationText.isEmpty {
+            return t(
+                "From \(h) · \(durationText) · \(count) quality options",
+                "来自 \(h) · \(durationText) · \(count) 档清晰度"
+            )
+        }
+        return ytdlpPickerSummary(host: host, count: count)
+    }
+    public static func ytdlpDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return t("\(h)h \(m)m", "\(h) 小时 \(m) 分")
+        }
+        if m > 0 {
+            return t("\(m) min", "约 \(m) 分钟")
+        }
+        return t("\(s)s", "约 \(s) 秒")
+    }
+    /// Plain-language quality subtitle — not codec jargon.
+    public static func ytdlpQualityDetail(height: Int, container: String) -> String {
+        let kind: String
+        switch height {
+        case 1440...:
+            kind = t("Very sharp · great for big screens", "画质很清晰 · 适合大屏")
+        case 1080...:
+            kind = t("Sharp · good for computer & TV", "画质清晰 · 适合电脑和电视")
+        case 720...:
+            kind = t("Balanced quality and size", "画质与体积较均衡")
+        case 480...:
+            kind = t("Smaller file · fine on phones", "更省空间 · 适合手机观看")
+        case 1...:
+            kind = t("Smallest file · quick to save", "体积最小 · 适合快速保存")
+        default:
+            kind = t("Best available quality", "可用的最佳画质")
+        }
+        return "\(kind) · \(container)"
+    }
+    public static var ytdlpWorking: String {
+        t("Preparing video options…", "正在准备视频选项…")
+    }
+    public static var mediaAccessTitle: String {
+        t("Continue from your browser", "从浏览器继续")
+    }
+    public static var mediaAccessBody: String {
+        t(
+            "This page only shares the video with a browser that can already open it. Choose that browser and NDM will continue here.",
+            "这个页面只允许已经能打开它的浏览器读取视频。选择对应浏览器后，NDM 会在这里继续。"
+        )
+    }
+    public static var mediaAccessHint: String {
+        t(
+            "Open the page in that browser once before continuing. NDM never asks for your account password.",
+            "继续前请先在该浏览器中打开一次页面。NDM 不会要求你的账号密码。"
+        )
+    }
+    public static var mediaAccessUseBrowser: String {
+        t("Continue", "继续")
+    }
+    public static var mediaAccessChooseFile: String {
+        t("Choose Access File…", "选择网站访问文件…")
+    }
+    public static var mediaAccessFileTitle: String {
+        t("Choose a website access file", "选择网站访问文件")
+    }
+    public static var mediaAccessImport: String {
+        t("Use File", "使用文件")
+    }
+    public static var mediaRecognitionFailed: String {
+        t("This video isn't ready to download", "暂时无法准备这个视频")
+    }
+    public static var mediaRecognitionFailedBody: String {
+        t(
+            "The page may be private, unavailable in your region, or not supported yet. Open it in a browser to confirm it still plays, then try again.",
+            "这个页面可能是私密内容、受地区限制，或暂未适配。请先在浏览器中确认它仍能播放，然后重试。"
+        )
+    }
+    public static var ytdlpDownloading: String {
+        t("Downloading video and audio…", "正在下载视频和音频…")
+    }
+    public static var ytdlpPreparingDownload: String {
+        t(
+            "Connecting to the video source… Some sites need a little longer before the first byte.",
+            "正在连接视频源… 部分网站在开始传输前需要多一点时间。"
+        )
+    }
+    public static var ytdlpPreparingShort: String {
+        t("Getting the download address…", "正在获取下载地址…")
+    }
+    public static var ytdlpFinalizing: String {
+        t("Preparing the finished file…", "正在整理最终文件…")
+    }
+    public static var ytdlpFinalizingShort: String {
+        t("Finishing the file…", "正在整理文件…")
+    }
+    public static var ytdlpMerging: String {
+        t("Download finished — combining video and audio…", "下载已完成，正在合并视频和音频…")
+    }
+    public static var ytdlpMergingShort: String {
+        t("Combining video and audio…", "正在合并音视频…")
+    }
+    public static var ytdlpPreparingSubtitles: String {
+        t("Preparing subtitles for the finished video…", "正在为成品视频整理字幕…")
+    }
+    public static var ytdlpPreparingSubtitlesShort: String {
+        t("Preparing subtitles…", "正在整理字幕…")
+    }
+    public static var ytdlpFileFormat: String { t("File format", "文件格式") }
+    public static var ytdlpCompatibleMP4: String {
+        t("Universal MP4 (Recommended)", "通用 MP4（推荐）")
+    }
+    public static var ytdlpCompactMKV: String {
+        t("Smaller file (MKV)", "更小体积（MKV）")
+    }
+    public static var ytdlpFormatHint: String {
+        t(
+            "MP4 works almost everywhere. Smaller file prefers newer compression and may need IINA or VLC.",
+            "MP4 几乎随处可播；更小体积会优先新压缩格式，部分文件可能需要 IINA 或 VLC。"
+        )
+    }
+    public static var ytdlpDownloadSubtitles: String {
+        t("Download subtitle file", "同时下载字幕文件")
+    }
+    public static var ytdlpNoSubtitlesFound: String {
+        t("No subtitles found for this video", "这个视频没有检测到字幕")
+    }
+    public static var ytdlpSubtitleHint: String {
+        t("Saved beside the video as an SRT file; manual captions are preferred.", "字幕会以 SRT 文件保存在视频旁边，并优先使用人工字幕。")
+    }
+    public static var ytdlpAutoSubtitleSuffix: String { t(" · Auto", " · 自动生成") }
+    public static var ytdlpNoFormats: String {
+        t(
+            "Couldn't find playable formats for this page.",
+            "无法从这个页面解析出可播放的清晰度。"
+        )
     }
 
     public static func removeConfirm(_ name: String) -> String {
@@ -198,7 +545,14 @@ public enum L10n: Sendable {
     public static var tabConnections: String { t("Connections", "连接") }
     public static var url: String { t("URL", "链接") }
     public static var size: String { t("Size", "大小") }
+    public static func estimatedSize(_ bytes: Int64) -> String {
+        t(
+            "Estimated \(TaskPresentationFormatting.byteCount(bytes))",
+            "预计 \(TaskPresentationFormatting.byteCount(bytes))"
+        )
+    }
     public static var source: String { t("Source", "来源") }
+    public static var location: String { t("Location", "位置") }
     public static var progress: String { t("Progress", "进度") }
     public static var downloaded: String { t("Downloaded", "已下载") }
     public static var speed: String { t("Speed", "速度") }
@@ -231,53 +585,43 @@ public enum L10n: Sendable {
     public static var clipboardWatchTitle: String {
         t("Offer to download links from the clipboard", "自动发现剪贴板中的下载链接")
     }
-
-    // MARK: - Speed race
-
-    public static var raceWindowTitle: String { t("Speed Race", "速度对决") }
-    public static var raceHeadline: String { t("Same file. Same network.", "同一个文件，同一条网络。") }
-    public static var raceSubline: String {
+    public static func clipboardOffer(
+        source: SharedLinkResolution.Source,
+        wasExtractedFromText: Bool
+    ) -> String {
+        if source == .web {
+            return t("Download clipboard link", "下载剪贴板链接")
+        }
+        let sourceName: String
+        switch source {
+        case .youtube: sourceName = "YouTube"
+        case .bilibili: sourceName = t("Bilibili", "B 站")
+        case .douyin: sourceName = t("Douyin", "抖音")
+        case .xiaohongshu: sourceName = t("Xiaohongshu", "小红书")
+        case .tiktok: sourceName = "TikTok"
+        case .web: sourceName = ""
+        }
+        return wasExtractedFromText
+            ? t("Download \(sourceName) share", "下载\(sourceName)分享")
+            : t("Download \(sourceName) link", "下载\(sourceName)链接")
+    }
+    public static var clipboardOfferTooltip: String {
         t(
-            "Left lane downloads like a browser — one connection. Right lane is us.",
-            "左边按浏览器的方式下载——单连接。右边是我们。"
+            "Review the recognized link before downloading",
+            "先查看识别结果，再开始下载"
         )
     }
-    public static var raceLaneBrowser: String { t("Browser (1 connection)", "浏览器方式 · 单连接") }
-    public static var raceLaneOurs: String { t("This app (smart multi-connection)", "本应用 · 多连接加速") }
-    public static var raceStart: String { t("Start the race", "开始对决") }
-    public static var raceAgain: String { t("Race again", "再来一局") }
-    public static var raceRunning: String { t("Racing…", "对决中…") }
-    public static var raceWaiting: String { t("Ready", "就绪") }
-    public static var raceFinished: String { t("Finished", "已完成") }
-    public static func raceStillAt(_ percent: String) -> String {
-        t("still at \(percent)", "还在 \(percent)")
-    }
-    public static func raceVerdictFaster(_ ratio: String, seconds: String) -> String {
-        t(
-            "Done in \(seconds) — ×\(ratio) faster than the browser lane. That's your daily downloads from now on.",
-            "用时 \(seconds)，比浏览器方式快 ×\(ratio)。以后你的每一次下载都是这个速度。"
-        )
-    }
-    public static var raceVerdictHonest: String {
-        t(
-            "This server already saturates a single connection — so we stay at one and don't pretend. On throttled servers (most big-file hosts), the right lane wins big.",
-            "这台服务器单连接已经跑满——我们不装快，自动停在最合适的连接数。遇到限速服务器（大文件站点的常态）时，右边会赢得很夸张。"
-        )
-    }
-    public static var raceFailed: String {
-        t("Network hiccup — try again in a moment.", "网络不给力——稍后再试一次。")
-    }
-    public static var raceMenuTitle: String { t("Speed Race (Demo)…", "速度对决（演示）…") }
-    public static var onboardingRaceButton: String { t("Watch the race", "看一场对决") }
 
     // MARK: - Pro / License
 
     public static var proWindowTitle: String { t("Upgrade", "升级") }
-    public static var proHeadline: String { t("Unlock Pro", "解锁 Pro") }
+    public static var proHeadline: String {
+        t("Faster. Cleaner. Ready to share.", "更快、更省心，下完就能用")
+    }
     public static var proSubline: String {
         t(
-            "One-time purchase · up to 3 Macs in your household · one year of updates",
-            "一次买断 · 家庭内最多三台 Mac · 含一年功能更新"
+            "One-time purchase · up to 3 Macs · a year of updates · 30-day refund",
+            "一次买断 · 家庭最多三台 Mac · 含一年更新 · 30 天退款"
         )
     }
     public static var proFreeName: String { t("Free", "免费版") }
@@ -294,8 +638,8 @@ public enum L10n: Sendable {
     public static var proProTagline: String { t("Launch price", "限时首发价 · 原价 ¥128") }
     public static var proProFeatures: String {
         t(
-            "Up to 32 connections + smart tuning\nBatch downloads · site rules (coming)\nSmart Finalize: naming / covers / compress\nDownload diagnostics reports\nMenu bar panel · Shortcuts / Raycast\nPriority support",
-            "最高 32 连接 + 智能升降\n批量下载 · 站点规则（陆续上线）\nSmart Finalize：命名 / 封面 / 压缩\n下载诊断报告\n菜单栏面板 · Shortcuts / Raycast\n优先支持"
+            "Up to 32 connections + smart tuning\nSmart Finalize: MP4 · naming · covers · compress\nPlain-language download diagnostics\nPlaylist & collection downloads · site rules coming\nMenu bar · Shortcuts / Raycast\nPriority support",
+            "最高 32 连接 + 智能升降\nSmart Finalize：MP4 · 命名 · 封面 · 压缩\n人话下载诊断\n播放列表与合集下载 · 站点规则陆续上线\n菜单栏 · Shortcuts / Raycast\n优先支持"
         )
     }
     public static var proCTA: String { t("Upgrade to Pro", "升级到 Pro") }
@@ -326,35 +670,188 @@ public enum L10n: Sendable {
             "免费版已并行 4 条连接，明显快于浏览器。Pro 可提升到 32 条并配合智能升降。"
         )
     }
+    public static var proContextEyebrow: String {
+        t("A Pro moment", "这一次，Pro 能替你做什么")
+    }
+    public static func proContextTitle(_ feature: ProFeature?) -> String {
+        switch feature {
+        case .connections(let requested):
+            let count = min(requested, LicenseStore.proMaxConnections)
+            return t(
+                "Use \(count) connections for this download",
+                "让这次下载使用 \(count) 条连接"
+            )
+        case .ultraHD(let height):
+            let quality = height >= 4320 ? "8K" : "4K"
+            return t("Keep this video in \(quality)", "保留这段视频的 \(quality) 清晰度")
+        case .collection(let itemCount):
+            return t(
+                "Bring home all \(itemCount) videos",
+                "一次收下这 \(itemCount) 个视频"
+            )
+        case .subtitles:
+            return t(
+                "Deliver the subtitles with the video",
+                "让字幕和视频一起交付"
+            )
+        case nil:
+            return t(
+                "Turn complex downloads into ready-to-use files",
+                "把复杂下载，直接变成能用的成果"
+            )
+        }
+    }
+    public static func proContextBody(_ feature: ProFeature?) -> String {
+        switch feature {
+        case .connections:
+            return t(
+                "On servers that throttle each connection, Pro opens more useful lanes and keeps rebalancing the slow tail automatically.",
+                "遇到单连接限速的服务器，Pro 会打开更多有效通道，并在末尾自动重新分配慢分段。"
+            )
+        case .ultraHD:
+            return t(
+                "Download the original high-resolution streams, merge audio and video, and hand you one file that is ready to play.",
+                "保留原始高画质，自动合并音频与视频，最后只交给你一个可以直接播放的文件。"
+            )
+        case .collection:
+            return t(
+                "The app keeps the original order, downloads each item quietly, and resumes the collection after a restart.",
+                "按原顺序安静排队，单项失败不拖累整组，软件重启后也会继续这个合集。"
+            )
+        case .subtitles:
+            return t(
+                "Subtitles are renamed beside the video using player-friendly language suffixes, so they are recognized automatically.",
+                "字幕会与视频同名并使用播放器可识别的语言后缀，放在一起就能自动载入。"
+            )
+        case nil:
+            return t(
+                "Pro removes the repetitive work around speed, high-quality media, collections, subtitles, naming, and final delivery.",
+                "Pro 负责速度、高画质、合集、字幕、命名和整理里那些最费时间的重复工作。"
+            )
+        }
+    }
+    public static func proAlsoUnlocks(_ features: [ProFeature]) -> String? {
+        guard features.count > 1 else { return nil }
+        let labels = features.dropFirst().map { feature -> String in
+            switch feature {
+            case .connections: return t("32 connections", "32 连接")
+            case .ultraHD(let height): return height >= 4320 ? "8K" : "4K"
+            case .collection: return t("whole collection", "整合集")
+            case .subtitles: return t("subtitles", "同名字幕")
+            }
+        }
+        let summary = labels.joined(separator: " · ")
+        return t(
+            "Also included now: \(summary)",
+            "这次还会同时解锁：\(summary)"
+        )
+    }
+    public static var proBenefitsTitle: String { t("Everything Pro keeps quiet", "其余复杂工作，也由 Pro 安静处理") }
+    public static var proBenefitSpeedTitle: String { t("Up to 32 smart connections", "最高 32 条智能连接") }
+    public static var proBenefitSpeedBody: String {
+        t("Scale up when it helps; rebalance the slow tail before it stalls.", "有收益才升档，末尾慢分段自动重分配。")
+    }
+    public static var proBenefitDeliveryTitle: String { t("Smart Finalize", "Smart Finalize 智能交付") }
+    public static var proBenefitDeliveryBody: String {
+        t("Playable containers, clean names, covers, and subtitles as one result.", "可播放容器、干净命名、封面和字幕合成一个成果。")
+    }
+    public static var proBenefitMediaTitle: String { t("4K, collections, and batch work", "4K、合集与批量任务") }
+    public static var proBenefitMediaBody: String {
+        t("Keep high quality and let long queues finish without babysitting.", "保留高画质，长队列也不需要守着。")
+    }
+    public static var proPurchaseCTA: String { t("Unlock Pro — one-time purchase", "一次买断，解锁 Pro") }
+    public static var proPurchaseUnavailableCTA: String { t("Storefront coming soon", "购买通道即将开放") }
+    public static var proPurchaseUnavailableBody: String {
+        t(
+            "This build does not have a checkout address yet. If you already have a license, activate it below.",
+            "这个构建还没有配置购买地址；如果你已经有许可证，可以在下方直接激活。"
+        )
+    }
 
     // MARK: - Onboarding
 
     public static var onboardingWindowTitle: String { t("Welcome", "欢迎") }
     public static var onboardingStep1Title: String {
-        t("Give browser downloads the fast lane", "让浏览器的下载，走快车道")
+        t("Turn any download clue into a usable file", "把任何下载线索，变成可用文件")
     }
     public static var onboardingStep1Body: String {
         t(
-            "Install the browser extension and every download link is handled here — multi-connection speed, resume, videos out as MP4.",
-            "安装浏览器扩展后，点击任何下载链接都会交给这里处理——多连接加速、断点续传、视频直出 MP4。"
+            "Paste a direct link, a video page, or the whole share message. NDM understands it and quietly prepares the result.",
+            "直链、视频页面，或者整段分享口令，直接粘贴进来。NDM 会自己读懂，再安静地把结果准备好。"
         )
     }
-    public static var onboardingStep2Title: String { t("Try a real download", "试一个真实下载") }
+    public static var onboardingSources: String {
+        t(
+            "DIRECT LINKS · YOUTUBE · BILIBILI · DOUYIN · XIAOHONGSHU · PLAYLISTS",
+            "直链 · YouTube · B站 · 抖音 · 小红书 · 播放列表"
+        )
+    }
+    public static var onboardingUnderstandsTitle: String {
+        t("Paste it exactly as you received it", "收到什么，就粘贴什么")
+    }
+    public static var onboardingUnderstandsBody: String {
+        t("No picking a URL out of a share message.", "不用再从分享口令里手动挑链接。")
+    }
+    public static var onboardingDeliversTitle: String {
+        t("The finished result stays together", "拿到的是整理好的结果")
+    }
+    public static var onboardingDeliversBody: String {
+        t("Video, subtitles, cover and metadata remain one item.", "视频、字幕、封面和信息不会散成一地。")
+    }
+    public static var onboardingStep2Title: String {
+        t("Paste first. Choose after it understands.", "先粘贴，读懂以后再选择")
+    }
     public static var onboardingStep2Body: String {
         t(
-            "Watch the connections fan out on a 100 MB test file. This is the speed your browser leaves on the table.",
-            "用一个 100 MB 测试文件看看多连接如何展开——这就是浏览器白白放掉的速度。"
+            "The source appears immediately; title, cover, quality and subtitles fill in without blocking you.",
+            "来源会立刻出现；标题、封面、画质和字幕随后补齐，不会让你对着空白等待。"
         )
     }
-    public static var onboardingTestButton: String {
-        t("Download 100 MB test file", "下载 100 MB 测试文件")
+    public static var onboardingExampleShareText: String {
+        t(
+            "This made me laugh — try it: https://www.youtube.com/watch?v=M262vpHkRbk",
+            "这个视频太有意思了，复制打开看看：https://www.youtube.com/watch?v=M262vpHkRbk"
+        )
     }
-    public static var onboardingStep3Title: String { t("You're set", "一切就绪") }
+    public static var onboardingExampleFound: String {
+        t("YouTube video recognized", "已识别为 YouTube 视频")
+    }
+    public static var onboardingExampleOutcome: String {
+        t("Quality, format and subtitles remain your choice", "画质、格式和字幕仍然由你选择")
+    }
+    public static var onboardingTryExample: String {
+        t("Try this example", "用这个示例试试")
+    }
+    public static var onboardingUseOwnLink: String {
+        t("Use my own link…", "用我自己的链接…")
+    }
+    public static var onboardingNotNow: String {
+        t("Not now", "暂时不试")
+    }
+    public static var onboardingStep3Title: String { t("Ready from the first click", "装好就能用") }
     public static var onboardingStep3Body: String {
         t(
-            "Downloads land in the main window. A few things worth remembering:",
-            "下载任务都会出现在主窗口。几个值得记住的入口："
+            "The core experience is already inside the app. Browser connection is an optional enhancement, not a requirement.",
+            "核心能力已经随 App 一起准备好。连接浏览器只是可选增强，不是使用门槛。"
         )
+    }
+    public static var onboardingBuiltInTitle: String {
+        t("No extra components", "无需额外组件")
+    }
+    public static var onboardingBuiltInBody: String {
+        t("Install one app and start downloading.", "安装这一个 App，就可以开始下载。")
+    }
+    public static var onboardingPrivateTitle: String {
+        t("Local and private by default", "默认在本机完成")
+    }
+    public static var onboardingPrivateBody: String {
+        t("No account required; links and files stay on this Mac.", "无需账号；链接和文件留在这台 Mac。")
+    }
+    public static var onboardingBrowserOptionalTitle: String {
+        t("Browser connection, when you want it", "需要时再连接浏览器")
+    }
+    public static var onboardingBrowserOptionalBody: String {
+        t("Add one-click capture later from Settings.", "之后可以在设置里加入一键接管。")
     }
     public static var onboardingShortcuts: String {
         t(
@@ -362,9 +859,12 @@ public enum L10n: Sendable {
             "⌘N  从链接新建下载\n⌘⇧P  全部暂停\n把链接拖进主窗口即可开始下载"
         )
     }
-    public static var onboardingContinue: String { t("Continue", "继续") }
-    public static var onboardingSkip: String { t("Skip for now", "暂时跳过") }
-    public static var onboardingDone: String { t("Start using", "开始使用") }
+    public static var onboardingContinue: String { t("See how it works", "看看它怎么工作") }
+    public static var onboardingSkip: String { t("Open Download Inbox", "直接进入下载收件箱") }
+    public static var onboardingDone: String { t("Open Download Inbox", "打开下载收件箱") }
+    public static var onboardingConnectBrowser: String {
+        t("Connect a browser (optional)", "连接浏览器（可选）")
+    }
     public static var onboardingSafariSoon: String { t("Safari — coming soon", "Safari · 即将支持") }
 
     // MARK: - Quality picker
@@ -372,26 +872,24 @@ public enum L10n: Sendable {
     public static var videoFound: String { t("Video found", "发现视频") }
     public static var chooseQuality: String { t("Choose quality", "选择清晰度") }
     public static func qualityStreamsSummary(host: String, found: Int, kept: Int) -> String {
+        _ = found // raw stream count kept for callers; UI speaks in "quality options".
         if host.isEmpty {
             return t(
-                "Detected \(found) media streams, merged into \(kept) quality levels",
-                "检测到 \(found) 条媒体流，已合并为 \(kept) 档清晰度"
+                "\(kept) quality options ready · we'll deliver a playable MP4",
+                "已整理为 \(kept) 档清晰度 · 下完直接是能播的 MP4"
             )
         }
         return t(
-            "From \(host) · detected \(found) media streams, merged into \(kept) quality levels",
-            "来自 \(host) · 检测到 \(found) 条媒体流，已合并为 \(kept) 档清晰度"
+            "From \(host) · \(kept) quality options · playable MP4 when done",
+            "来自 \(host) · \(kept) 档清晰度 · 下完就是能播的 MP4"
         )
     }
     public static var recommended: String { t("Recommended", "推荐") }
-    public static var qualityOutputNote: String {
-        t(
-            "Output: MP4 (lossless remux) · named after the page title",
-            "输出：MP4（无损转封装）· 文件名取自页面标题"
-        )
-    }
     public static func downloadQuality(_ label: String) -> String {
         t("Download \(label) MP4", "下载 \(label) MP4")
+    }
+    public static func downloadQuality(_ label: String, container: String) -> String {
+        t("Download \(label) · \(container)", "下载 \(label) · \(container)")
     }
 
     // MARK: - Completion / Wait / Browsers / Properties
@@ -402,6 +900,7 @@ public enum L10n: Sendable {
     public static var play: String { t("Play", "播放") }
 
     // Smart Finalize — what happened after the bytes landed.
+    public static var finalizeSectionTitle: String { t("Smart Finalize", "Smart Finalize") }
     public static var finalizeMergedSegments: String {
         t("All stream segments merged into one file", "已合并全部流分段")
     }
@@ -412,10 +911,106 @@ public enum L10n: Sendable {
         t("Repackaged as MP4 — lossless, plays anywhere", "已无损转封装为 MP4，随处可播、可直接分享")
     }
     public static var finalizeKeptTS: String {
-        t("Saved as TS — install ffmpeg to get automatic MP4", "已保存为 TS——安装 ffmpeg 后可自动转 MP4")
+        t("Original stream kept safely — the finishing component is temporarily unavailable", "已安全保留原始流文件——成品整理组件暂时不可用")
     }
     public static var finalizeAudioSidecar: String {
-        t("Audio saved alongside — install ffmpeg to merge automatically", "音轨已存为同名文件——安装 ffmpeg 后可自动合并")
+        t("Audio kept safely alongside the video — finishing is temporarily unavailable", "音轨已安全保存在视频旁边——成品整理暂时不可用")
+    }
+    public static func finalizeNamed(_ name: String) -> String {
+        t("Named from the page: \(name)", "已按页面标题命名：\(name)")
+    }
+    public static var finalizeCoverReady: String {
+        t("Preview thumbnail ready", "已生成预览封面")
+    }
+    public static var finalizePlayableMedia: String {
+        t("Playable media file prepared", "已准备好可直接播放的媒体文件")
+    }
+    public static var finalizeSubtitleReady: String {
+        t("Subtitle named to match the video", "字幕已与视频同名，播放器可自动识别")
+    }
+    public static var finalizeSharePresets: String {
+        t("Export for WeChat / Telegram", "导出适合微信 / Telegram 的体积")
+    }
+    public static var completionFilesTitle: String {
+        t("Files in this result", "这个成果包含的文件")
+    }
+    public static func completionFileCount(_ count: Int) -> String {
+        t("\(count) files kept together", "\(count) 个文件已归为一个成果")
+    }
+    public static func completionSubtitleCount(_ count: Int) -> String {
+        t("\(count) subtitle\(count == 1 ? "" : "s") ready", "\(count) 个字幕已配好")
+    }
+    public static var completionMainFile: String { t("Main file", "主文件") }
+    public static var completionSubtitleReady: String {
+        t("Subtitle · player-ready name", "字幕 · 已按播放器规则命名")
+    }
+    public static var completionCover: String { t("Cover image", "封面图片") }
+    public static var completionAudio: String { t("Audio track", "音轨") }
+    public static var completionMetadata: String { t("Media information", "媒体信息") }
+    public static var completionShowFiles: String { t("Show files", "展开文件") }
+    public static var completionHideFiles: String { t("Hide files", "收起文件") }
+    public static var shareWeChat: String { t("WeChat size", "微信友好") }
+    public static var shareTelegram: String { t("Telegram size", "Telegram 友好") }
+    public static var shareExporting: String { t("Compressing…", "正在压缩…") }
+    public static var shareDone: String { t("Export ready", "导出完成") }
+    public static var shareNeedsFFmpeg: String {
+        t("This export format isn't available in the current app build.", "当前软件版本暂不支持这种导出格式。")
+    }
+    public static var deliverySectionTitle: String {
+        t("Make another version", "制作另一个版本")
+    }
+    public static var deliveryOriginalProtected: String {
+        t("Original always kept", "原文件始终保留")
+    }
+    public static var deliveryOriginalShort: String { t("Original", "原画") }
+    public static var deliveryMobileShort: String { t("Mobile", "手机") }
+    public static var deliveryAudioShort: String { t("Audio", "音频") }
+    public static var deliveryWeChatShort: String { t("WeChat", "微信") }
+    public static var deliveryOriginalDescription: String {
+        t("Keep the downloaded quality and every original track.", "保留下载时的画质、容器和全部原始音轨。")
+    }
+    public static var deliveryMobileDescription: String {
+        t("A 1080p H.264 MP4 that opens reliably on iPhone and common apps.", "生成最高 1080p 的 H.264 MP4，在 iPhone 和常用 App 中更稳妥。")
+    }
+    public static var deliveryAudioDescription: String {
+        t("Keep the main audio as a compact, widely supported M4A file.", "只保留主音轨，生成体积更小、兼容性好的 M4A。")
+    }
+    public static var deliveryWeChatDescription: String {
+        t("Create a smaller 720p copy sized for everyday chat sharing.", "按视频时长生成更小的 720p 副本，适合日常聊天发送。")
+    }
+    public static var deliveryCurrentFile: String {
+        t("This is the completed file above.", "就是上方已经完成的主文件。")
+    }
+    public static var deliveryCreatesCopy: String {
+        t("Creates a new file without changing the original.", "会创建新文件，不会修改原文件。")
+    }
+    public static var deliveryCreateCopy: String { t("Create copy", "创建副本") }
+    public static func deliveryCreating(_ title: String) -> String {
+        t("Creating \(title.lowercased()) version…", "正在创建\(title)版…")
+    }
+    public static func deliveryReady(_ size: String, subtitleCount: Int) -> String {
+        let subtitle = subtitleCount > 0
+            ? t(
+                " · \(subtitleCount) subtitle\(subtitleCount == 1 ? "" : "s") included",
+                " · 已带上 \(subtitleCount) 个同名字幕"
+            )
+            : ""
+        return t("Ready · \(size)", "已创建 · \(size)") + subtitle
+    }
+    public static var deliveryFailed: String {
+        t("Couldn't create this version. The original is safe; try again.", "未能创建这个版本，原文件不受影响，请重试。")
+    }
+    public static var advancedVideo: String {
+        t("Advanced video page detected", "检测到可解析的视频页面")
+    }
+    public static var advancedVideoBody: String {
+        t(
+            "We'll fetch a clean MP4 — no commands to learn.",
+            "将自动解析并下载可播放的 MP4，无需命令行。"
+        )
+    }
+    public static var ytdlpMissing: String {
+        t("The built-in video component is unavailable. Reinstall or update the app.", "内置视频组件不可用，请重新安装或更新软件。")
     }
     public static var confirmDownload: String { t("Confirm Download", "确认下载") }
     public static var downloadFromBrowser: String { t("Download from browser", "来自浏览器的下载") }
@@ -492,14 +1087,18 @@ public enum L10n: Sendable {
         t("Max connections per download (1–32)", "每个任务最大连接数（1–32）")
     }
     public static var smartConnectionsTitle: String {
-        t("Smart connections (start low, raise while it helps)", "智能连接数（从低起步，有收益才增加）")
+        t(
+            "Smart connections (automatically test up to the selected limit)",
+            "智能连接（自动测试至所选上限）"
+        )
     }
     public static var smartConnectionsFootnote: String {
         t(
-            "Large downloads probe the server and settle on the fastest honest count — the progress window explains each step. Setting a count manually in the progress window overrides this per task.",
-            "大文件会自动试探服务器并停在真实最快的连接数——进度窗口会解释每一步。在进度窗口手动设置连接数即对该任务停用。"
+            "Large resumable downloads start at 2 and try 4, 8, 16, then 32 only while each step improves measured throughput by at least 25%. This can make the first few seconds slower. Turn it off to attempt the selected connection count immediately; a server may still queue, throttle, ignore, or reject excess Range requests.",
+            "支持续传的大文件会从 2 条开始，再按 4、8、16、32 逐级实测；每次至少提升 25% 才继续，因此开头几秒可能更慢。关闭后会立即尝试所选连接数；服务器仍可能对过多的 Range 请求排队、限速、忽略或拒绝。"
         )
     }
+    public static var whySoFastPrefix: String { t("Why so fast: ", "为什么这么快：") }
     public static var globalSpeedCaption: String {
         t("Global speed limit (bytes/s, 0 = unlimited)", "全局限速（字节/秒，0 = 不限制）")
     }
@@ -563,7 +1162,11 @@ public enum L10n: Sendable {
     public static var quitNDM: String { t("Quit NDM", "退出 NDM") }
     public static var fileMenu: String { t("File", "文件") }
     public static var editMenu: String { t("Edit", "编辑") }
+    public static var viewMenu: String { t("View", "显示") }
     public static var windowMenu: String { t("Window", "窗口") }
+    public static var zoomIn: String { t("Zoom In", "放大") }
+    public static var zoomOut: String { t("Zoom Out", "缩小") }
+    public static var actualSize: String { t("Actual Size", "实际大小") }
     public static var cut: String { t("Cut", "剪切") }
     public static var copy: String { t("Copy", "拷贝") }
     public static var paste: String { t("Paste", "粘贴") }

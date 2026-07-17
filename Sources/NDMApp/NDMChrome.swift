@@ -8,19 +8,33 @@ enum NDMChrome {
     /// Window + titlebar + sidebar share one fill so traffic-lights corner doesn’t seam.
     static var sidebarFill: NSColor {
         dynamic(
-            light: srgb(0.910, 0.922, 0.941), // #E8EBF0
+            light: srgb(0.945, 0.953, 0.969), // #F1F3F7
             dark: srgb(0.086, 0.094, 0.110)   // #16181C
         )
     }
 
-    /// Alias — must match sidebarFill (transparent titlebar reveals this under the lights).
-    static var windowFill: NSColor { sidebarFill }
+    /// Titlebar and tool strip are subtly brighter than the navigation rail.
+    static var toolbarSurface: NSColor {
+        dynamic(
+            light: srgb(0.977, 0.982, 0.992), // #F9FAFD
+            dark: srgb(0.105, 0.112, 0.128)   // #1B1D21
+        )
+    }
+
+    static var windowFill: NSColor { toolbarSurface }
 
     /// List / inspector only — slightly lifted so the main column reads as content.
     static var contentSurface: NSColor {
         dynamic(
-            light: srgb(0.965, 0.969, 0.980), // #F6F7FA
+            light: srgb(0.982, 0.985, 0.992), // #FAFBFD
             dark: srgb(0.118, 0.125, 0.141)   // #1E2024
+        )
+    }
+
+    static var searchSurface: NSColor {
+        dynamic(
+            light: NSColor.white.withAlphaComponent(0.86),
+            dark: NSColor.white.withAlphaComponent(0.07)
         )
     }
 
@@ -46,10 +60,78 @@ enum NDMChrome {
         )
     }
 
+    /// List / option track (Design Suite `--track`).
+    static var track: NSColor {
+        dynamic(
+            light: NSColor.black.withAlphaComponent(0.07),
+            dark: NSColor.white.withAlphaComponent(0.09)
+        )
+    }
+
+    /// Selected task row wash (Design Suite `--row-active`).
+    static var rowActive: NSColor {
+        accent.withAlphaComponent(0.10)
+    }
+
+    static var okSoft: NSColor {
+        NSColor.systemGreen.withAlphaComponent(0.12)
+    }
+
+    static var dangerSoft: NSColor {
+        NSColor.systemRed.withAlphaComponent(0.10)
+    }
+
     /// Paint opaque window chrome so wallpaper tint can’t warm the UI.
     static func applyWindowChrome(_ window: NSWindow) {
         window.backgroundColor = windowFill
         window.isOpaque = true
+    }
+
+    /// Sheets / pickers — near-white paper (Design Suite `--surface`), not sidebar wash.
+    static var sheetSurface: NSColor {
+        dynamic(
+            light: srgb(0.988, 0.990, 0.994), // #FCFCFD
+            dark: srgb(0.141, 0.149, 0.165)   // #24262A
+        )
+    }
+
+    static func applySheetChrome(_ window: NSWindow) {
+        window.backgroundColor = sheetSurface
+        window.isOpaque = true
+    }
+
+    /// Design Suite `.btn.main` — one confident accent action.
+    static func styleMainButton(_ button: NSButton) {
+        button.bezelStyle = .rounded
+        button.setButtonType(.momentaryPushIn)
+        button.controlSize = .regular
+        button.isBordered = true
+        button.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        if #available(macOS 11.0, *) {
+            button.bezelColor = accent
+        }
+    }
+
+    /// Design Suite `.btn.ghost` — quiet secondary.
+    static func styleGhostButton(_ button: NSButton) {
+        button.bezelStyle = .rounded
+        button.setButtonType(.momentaryPushIn)
+        button.controlSize = .regular
+        button.isBordered = true
+        button.font = .systemFont(ofSize: 12.5, weight: .medium)
+    }
+
+    /// Design Suite `.btn.danger` — soft red, not screaming.
+    static func styleDangerButton(_ button: NSButton) {
+        button.bezelStyle = .rounded
+        button.setButtonType(.momentaryPushIn)
+        button.controlSize = .regular
+        button.isBordered = true
+        button.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        button.contentTintColor = .systemRed
+        if #available(macOS 11.0, *) {
+            button.bezelColor = dangerSoft
+        }
     }
 
     static func symbol(
@@ -85,8 +167,12 @@ enum NDMChrome {
         case .audio: return "music.note"
         case .document: return "doc.text"
         case .compressed: return "archivebox"
-        case .application: return "app"
+        // This bucket mostly contains installers and app packages. A package
+        // glyph is clearer than either the generic rounded `app` tile or `⌘`,
+        // which reads as a keyboard command / terminal tool.
+        case .application: return "shippingbox"
         case .image: return "photo"
+        case .other: return "ellipsis.circle"
         }
     }
 
@@ -173,5 +259,76 @@ final class CardStackView: NSStackView {
         layer?.borderColor = cardBorderColor?.cgColor
         layer?.borderWidth = cardBorderColor == nil ? 0 : 1
         layer?.cornerRadius = cornerRadius
+    }
+}
+
+/// Quiet Finder 4px accent progress — replaces chunky system NSProgressIndicator bars.
+final class ThinProgressView: NSView {
+    private let trackLayer = CALayer()
+    private let fillLayer = CALayer()
+
+    var progress: Double = 0 {
+        didSet {
+            let clamped = min(1, max(0, progress))
+            if clamped != progress { progress = clamped; return }
+            updateFill(animated: window != nil)
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.addSublayer(trackLayer)
+        layer?.addSublayer(fillLayer)
+        fillLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        refreshColors()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        trackLayer.frame = bounds
+        trackLayer.cornerRadius = bounds.height / 2
+        fillLayer.bounds = bounds
+        fillLayer.position = CGPoint(x: bounds.minX, y: bounds.midY)
+        fillLayer.cornerRadius = bounds.height / 2
+        fillLayer.transform = CATransform3DMakeScale(CGFloat(progress), 1, 1)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshColors()
+    }
+
+    private func refreshColors() {
+        trackLayer.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+        fillLayer.backgroundColor = NDMChrome.accent.cgColor
+    }
+
+    private func updateFill(animated: Bool) {
+        guard bounds.width > 0 else { needsLayout = true; return }
+        let target = CGFloat(progress)
+        let current = (fillLayer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)
+            .map(CGFloat.init(truncating:))
+            ?? (fillLayer.value(forKeyPath: "transform.scale.x") as? NSNumber)
+                .map(CGFloat.init(truncating:))
+            ?? 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillLayer.transform = CATransform3DMakeScale(target, 1, 1)
+        CATransaction.commit()
+        guard animated, abs(target - current) > 0.001 else { return }
+        let animation = CABasicAnimation(keyPath: "transform.scale.x")
+        animation.fromValue = current
+        animation.toValue = target
+        animation.duration = target >= current ? 0.24 : 0.12
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fillLayer.add(animation, forKey: "progress")
     }
 }

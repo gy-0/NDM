@@ -5,15 +5,21 @@ import Network
 final class LocalRangeServer: @unchecked Sendable {
     private let payload: Data
     private let responseDelay: TimeInterval
+    private let rangeResponseDelay: @Sendable (Int) -> TimeInterval
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "ndm.test.httpserver")
     private let recordLock = NSLock()
     private var _recordedRanges: [String] = []
     private(set) var port: UInt16 = 0
 
-    init(payload: Data, responseDelay: TimeInterval = 0) {
+    init(
+        payload: Data,
+        responseDelay: TimeInterval = 0,
+        rangeResponseDelay: @escaping @Sendable (Int) -> TimeInterval = { _ in 0 }
+    ) {
         self.payload = payload
         self.responseDelay = responseDelay
+        self.rangeResponseDelay = rangeResponseDelay
     }
 
     var recordedRanges: [String] {
@@ -67,12 +73,25 @@ final class LocalRangeServer: @unchecked Sendable {
                     connection.cancel()
                 })
             }
-            if self.responseDelay > 0 {
-                self.queue.asyncAfter(deadline: .now() + self.responseDelay, execute: send)
+            let start = self.rangeStart(in: req)
+            let delay = self.responseDelay + (start.map(self.rangeResponseDelay) ?? 0)
+            if delay > 0 {
+                self.queue.asyncAfter(deadline: .now() + delay, execute: send)
             } else {
                 send()
             }
         }
+    }
+
+    private func rangeStart(in request: String) -> Int? {
+        guard let line = request.components(separatedBy: "\r\n")
+            .first(where: { $0.lowercased().hasPrefix("range:") }) else {
+            return nil
+        }
+        let spec = line.split(separator: ":", maxSplits: 1).last?
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "bytes=", with: "") ?? ""
+        return Int(spec.split(separator: "-", maxSplits: 1).first ?? "")
     }
 
     private func buildResponse(for request: String) -> Data {

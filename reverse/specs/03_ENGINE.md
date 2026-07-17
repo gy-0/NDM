@@ -136,15 +136,18 @@ Range: bytes={start}-{end?}
 
 ## 动态分段算法（行为级，非源码级）
 
-已观察行为：
+已观察行为（任务 3996 的长下载尾部进一步闭环）：
 
 1. 先单连接拉头部与前半  
 2. 当可 Range 且文件够大时，把**剩余未完成区间**切给新连接  
-3. 段之间可 **merge**（`Merged To Segment`）  
-4. 段可 **rollback** 到另一 socket（`Segment Rolled Back To Socket`）  
-5. 完成段若有错误可忽略（`Segment is Completed but some error occurred.We ignore the error`）
+3. `MaxAllowedConnection = 32` 后，原版会尽量复用刚空闲的 socket，而不是把“32”当作总段数上限  
+4. 下载进入后段时，日志仍会在 `Segment Completed` 之后创建第 **33 / 34 / 35** 个临时段，并从仍很长的未完成区间内部发出新 Range  
+5. 新 socket 抢尾失败、服务端拒绝或边界追上时，临时段会 **rollback + merge**（`Segment Rolled Back To Socket` / `Merged To Segment`）  
+6. 完成段若有错误可忽略（`Segment is Completed but some error occurred.We ignore the error`）
 
-**精确切分阈值/触发阈值**（例如何时开新 socket、最小段长）→ 见 `10_GAPS.md`，需对照更多 LogFile 或动态调试。
+因此原版的“32 连接”语义是：在剩余数据足够时，**尽量维持接近 32 个活跃下载者**；不是开局静态切 32 段后让并发数一路自然掉到 1。任务 3996 的脱敏证据见 `reverse/fixtures/segments/3996_dynamic_tail_excerpt.txt`。
+
+**精确最小段长/服务端退避阈值**仍待动态调试；但“空闲 socket 持续抢未完成尾部”已经由完整时间线钉死。
 
 ## 规范样例：任务 4125（HTTPS，fixture 冻结）
 

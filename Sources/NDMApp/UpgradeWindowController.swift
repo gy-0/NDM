@@ -1,44 +1,59 @@
 import AppKit
 import NDMCore
 
-/// Free → Pro sheet (design suite §07): two honest columns, one accent CTA,
-/// license entry for people who already bought. Shown only when a gate is hit
-/// or from the menu — never as a launch interstitial.
+/// Contextual Free → Pro sheet. It appears only after a person asks for a Pro
+/// outcome (or explicitly opens it from the menu), and leads with that outcome
+/// instead of a dense, generic feature comparison.
 @MainActor
 final class UpgradeWindowController: NSWindowController {
-    /// Purchase page — placeholder until the storefront is live.
-    static let purchaseURL = URL(string: "https://ndm.example.com/pro")!
-
     private static var active: UpgradeWindowController?
+
+    private let features: [ProFeature]
+    private let purchaseURL: URL?
     var onActivated: (() -> Void)?
 
-    static func present(onActivated: (() -> Void)? = nil) {
+    private var primaryFeature: ProFeature? { features.first }
+
+    static func present(
+        features: [ProFeature] = [],
+        parentWindow: NSWindow? = nil,
+        onActivated: (() -> Void)? = nil
+    ) {
         if let existing = active {
+            existing.onActivated = onActivated
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let wc = UpgradeWindowController()
+
+        let wc = UpgradeWindowController(features: features)
         wc.onActivated = onActivated
         active = wc
-        wc.showWindow(nil)
-        wc.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        guard let window = wc.window else { return }
+        if let parentWindow {
+            parentWindow.beginSheet(window)
+        } else {
+            wc.showWindow(nil)
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
-    init() {
+    init(features: [ProFeature] = []) {
+        self.features = features
+        self.purchaseURL = PurchaseConfiguration.purchaseURL()
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 430),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: true
         )
         window.title = L10n.proWindowTitle
-        NDMChrome.applyWindowChrome(window)
+        window.isReleasedWhenClosed = false
+        NDMChrome.applySheetChrome(window)
         super.init(window: window)
         buildUI()
-        window.center()
-        window.isReleasedWhenClosed = false
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: window,
@@ -51,106 +66,231 @@ final class UpgradeWindowController: NSWindowController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func makePlanCard(
-        name: String,
-        price: String,
-        tagline: String,
-        features: String,
-        highlighted: Bool
-    ) -> NSView {
-        let nameLabel = NSTextField(labelWithString: name)
-        nameLabel.font = .systemFont(ofSize: 13, weight: .bold)
-        let priceLabel = NSTextField(labelWithString: price)
-        priceLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .bold)
-        let taglineLabel = NSTextField(labelWithString: tagline)
-        taglineLabel.font = .systemFont(ofSize: 10)
-        taglineLabel.textColor = .secondaryLabelColor
-        let featuresLabel = NSTextField(wrappingLabelWithString: features)
-        featuresLabel.font = .systemFont(ofSize: 11.5)
-        featuresLabel.textColor = .labelColor
-
-        let stack = CardStackView(views: [nameLabel, priceLabel, taglineLabel, featuresLabel])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        stack.setCustomSpacing(12, after: taglineLabel)
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
-        stack.cornerRadius = 11
-        stack.cardBorderColor = highlighted
-            ? NDMChrome.accent.withAlphaComponent(0.65)
-            : NDMChrome.hairline
-        return stack
-    }
-
     private func buildUI() {
         guard let content = window?.contentView else { return }
 
-        let headline = NSTextField(labelWithString: L10n.proHeadline)
-        headline.font = .systemFont(ofSize: 19, weight: .bold)
-        headline.alignment = .center
-        let subline = NSTextField(labelWithString: L10n.proSubline)
-        subline.font = .systemFont(ofSize: 11.5)
-        subline.textColor = .secondaryLabelColor
-        subline.alignment = .center
+        let contextCard = makeContextCard()
+        let benefits = makeBenefitsCard()
 
-        let freeCard = makePlanCard(
-            name: L10n.proFreeName,
-            price: L10n.proFreePrice,
-            tagline: L10n.proFreeTagline,
-            features: L10n.proFreeFeatures,
-            highlighted: false
-        )
-        let proCard = makePlanCard(
-            name: L10n.proProName,
-            price: L10n.proProPrice,
-            tagline: L10n.proProTagline,
-            features: L10n.proProFeatures,
-            highlighted: true
-        )
-        let plans = NSStackView(views: [freeCard, proCard])
-        plans.orientation = .horizontal
-        plans.alignment = .top
-        plans.spacing = 12
-        plans.distribution = .fillEqually
-
-        let cta = NSButton(title: "\(L10n.proCTA) — \(L10n.proProPrice)", target: self, action: #selector(purchaseClicked))
-        cta.bezelStyle = .rounded
-        cta.controlSize = .large
-        cta.keyEquivalent = "\r"
-        if #available(macOS 11.0, *) {
-            cta.bezelColor = NDMChrome.accent
+        let ctaTitle: String
+        if purchaseURL == nil {
+            ctaTitle = L10n.proPurchaseUnavailableCTA
+        } else {
+            ctaTitle = "\(L10n.proPurchaseCTA) · \(L10n.proProPrice)"
         }
+        let cta = NSButton(title: ctaTitle, target: self, action: #selector(purchaseClicked))
+        NDMChrome.styleMainButton(cta)
+        cta.controlSize = .large
+        cta.keyEquivalent = purchaseURL == nil ? "" : "\r"
+        cta.isEnabled = purchaseURL != nil
 
-        let enterLicense = NSButton(title: L10n.proEnterLicense, target: self, action: #selector(enterLicenseClicked))
+        let purchaseNote = NSTextField(
+            wrappingLabelWithString: purchaseURL == nil
+                ? L10n.proPurchaseUnavailableBody
+                : L10n.proSubline
+        )
+        purchaseNote.font = .systemFont(ofSize: 10.5)
+        purchaseNote.textColor = .secondaryLabelColor
+        purchaseNote.alignment = .center
+        purchaseNote.maximumNumberOfLines = 2
+
+        let enterLicense = NSButton(
+            title: L10n.proEnterLicense,
+            target: self,
+            action: #selector(enterLicenseClicked)
+        )
         enterLicense.isBordered = false
-        enterLicense.font = .systemFont(ofSize: 12)
+        enterLicense.font = .systemFont(ofSize: 12, weight: .medium)
         enterLicense.contentTintColor = NDMChrome.accent
 
-        let fine = NSTextField(labelWithString: L10n.proFine)
-        fine.font = .systemFont(ofSize: 10.5)
-        fine.textColor = .tertiaryLabelColor
-        fine.alignment = .center
+        let footer = NSStackView(views: [enterLicense, NSView(), makeFinePrint()])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 10
 
-        let stack = NSStackView(views: [headline, subline, plans, cta, enterLicense, fine])
+        let stack = NSStackView(views: [contextCard, benefits, cta, purchaseNote, footer])
         stack.orientation = .vertical
-        stack.alignment = .centerX
+        stack.alignment = .leading
         stack.spacing = 10
-        stack.setCustomSpacing(18, after: subline)
-        stack.setCustomSpacing(18, after: plans)
+        stack.setCustomSpacing(14, after: contextCard)
+        stack.setCustomSpacing(16, after: benefits)
+        stack.setCustomSpacing(5, after: cta)
+        stack.setCustomSpacing(8, after: purchaseNote)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
-            plans.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            cta.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -120),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
+            contextCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            benefits.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            benefits.heightAnchor.constraint(equalToConstant: 144),
+            cta.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            cta.heightAnchor.constraint(equalToConstant: 38),
+            purchaseNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            footer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
 
+    private func makeContextCard() -> NSView {
+        let icon = NSImageView(image: NDMChrome.symbol(
+            symbolName(for: primaryFeature),
+            pointSize: 22,
+            weight: .semibold
+        ) ?? NSImage())
+        icon.contentTintColor = NDMChrome.accent
+        icon.imageScaling = .scaleProportionallyDown
+
+        let iconWell = ChromeBox(
+            fill: NDMChrome.accent.withAlphaComponent(0.10),
+            cornerRadius: 14
+        )
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        iconWell.addSubview(icon)
+        NSLayoutConstraint.activate([
+            iconWell.widthAnchor.constraint(equalToConstant: 48),
+            iconWell.heightAnchor.constraint(equalToConstant: 48),
+            icon.centerXAnchor.constraint(equalTo: iconWell.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: iconWell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 25),
+            icon.heightAnchor.constraint(equalToConstant: 25),
+        ])
+
+        let eyebrow = NSTextField(labelWithString: L10n.proContextEyebrow)
+        eyebrow.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        eyebrow.textColor = NDMChrome.accent
+
+        let title = NSTextField(wrappingLabelWithString: L10n.proContextTitle(primaryFeature))
+        title.font = .systemFont(ofSize: 20, weight: .bold)
+        title.textColor = .labelColor
+        title.maximumNumberOfLines = 2
+
+        let body = NSTextField(wrappingLabelWithString: L10n.proContextBody(primaryFeature))
+        body.font = .systemFont(ofSize: 12.5)
+        body.textColor = .secondaryLabelColor
+        body.maximumNumberOfLines = 3
+
+        var textViews: [NSView] = [eyebrow, title, body]
+        if let extra = L10n.proAlsoUnlocks(features) {
+            let extraLabel = NSTextField(labelWithString: extra)
+            extraLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
+            extraLabel.textColor = NDMChrome.accent
+            textViews.append(extraLabel)
+        }
+        let text = NSStackView(views: textViews)
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 4
+        text.setCustomSpacing(6, after: title)
+
+        let row = NSStackView(views: [iconWell, text])
+        row.orientation = .horizontal
+        row.alignment = .top
+        row.spacing = 14
+        row.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 18)
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let card = ChromeBox(
+            fill: NDMChrome.accent.withAlphaComponent(0.055),
+            borderColor: NDMChrome.accent.withAlphaComponent(0.22),
+            cornerRadius: 14,
+            borderWidth: 1
+        )
+        card.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: card.topAnchor),
+            row.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            row.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            text.widthAnchor.constraint(equalTo: row.widthAnchor, constant: -78),
+        ])
+        return card
+    }
+
+    private func makeBenefitsCard() -> NSView {
+        let heading = NSTextField(labelWithString: L10n.proBenefitsTitle)
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+
+        let columns = NSStackView(views: [
+            makeBenefit(
+                symbol: "bolt.fill",
+                title: L10n.proBenefitSpeedTitle,
+                body: L10n.proBenefitSpeedBody
+            ),
+            makeBenefit(
+                symbol: "wand.and.stars",
+                title: L10n.proBenefitDeliveryTitle,
+                body: L10n.proBenefitDeliveryBody
+            ),
+            makeBenefit(
+                symbol: "square.stack.3d.up.fill",
+                title: L10n.proBenefitMediaTitle,
+                body: L10n.proBenefitMediaBody
+            ),
+        ])
+        columns.orientation = .horizontal
+        columns.alignment = .top
+        columns.spacing = 12
+        columns.distribution = .fillEqually
+
+        let stack = CardStackView(views: [heading, columns])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 15, right: 16)
+        stack.cornerRadius = 13
+        stack.fill = NDMChrome.dockFill
+        stack.cardBorderColor = NDMChrome.hairline
+        columns.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+        return stack
+    }
+
+    private func makeBenefit(symbol: String, title: String, body: String) -> NSView {
+        let icon = NSImageView(image: NDMChrome.symbol(symbol, pointSize: 14, weight: .semibold) ?? NSImage())
+        icon.contentTintColor = NDMChrome.accent
+        icon.imageScaling = .scaleProportionallyDown
+
+        let titleLabel = NSTextField(wrappingLabelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        titleLabel.maximumNumberOfLines = 2
+
+        let bodyLabel = NSTextField(wrappingLabelWithString: body)
+        bodyLabel.font = .systemFont(ofSize: 10.5)
+        bodyLabel.textColor = .secondaryLabelColor
+        bodyLabel.maximumNumberOfLines = 3
+
+        let stack = NSStackView(views: [icon, titleLabel, bodyLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
+        ])
+        return stack
+    }
+
+    private func makeFinePrint() -> NSTextField {
+        let fine = NSTextField(labelWithString: L10n.proFine)
+        fine.font = .systemFont(ofSize: 10.5)
+        fine.textColor = .tertiaryLabelColor
+        return fine
+    }
+
+    private func symbolName(for feature: ProFeature?) -> String {
+        switch feature {
+        case .connections: return "arrow.triangle.branch"
+        case .ultraHD: return "4k.tv.fill"
+        case .collection: return "rectangle.stack.fill"
+        case .subtitles: return "captions.bubble.fill"
+        case nil: return "sparkles"
+        }
+    }
+
     @objc private func purchaseClicked() {
-        NSWorkspace.shared.open(Self.purchaseURL)
+        guard let purchaseURL else { return }
+        NSWorkspace.shared.open(purchaseURL)
     }
 
     @objc private func enterLicenseClicked() {
@@ -171,14 +311,26 @@ final class UpgradeWindowController: NSWindowController {
             let license = try LicenseStore.activate(field.stringValue)
             confirmation.messageText = L10n.proActivated(license.email)
             confirmation.runModal()
-            onActivated?()
-            window?.close()
+            let continuation = onActivated
+            dismiss()
+            continuation?()
         } catch LicenseError.expired {
             confirmation.messageText = L10n.proExpiredKey
             confirmation.runModal()
         } catch {
             confirmation.messageText = L10n.proInvalidKey
             confirmation.runModal()
+        }
+    }
+
+    private func dismiss() {
+        guard let window else { return }
+        if let parent = window.sheetParent {
+            parent.endSheet(window)
+            window.orderOut(nil)
+            Self.active = nil
+        } else {
+            window.close()
         }
     }
 }

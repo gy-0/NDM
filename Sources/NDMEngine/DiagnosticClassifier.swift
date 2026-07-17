@@ -35,6 +35,8 @@ public extension DownloadDiagnostic {
             return .generic(detail: "Invalid HTTP response")
         case .mergeFailed(let message):
             return .mergeFailed(detail: message)
+        case .insufficientStorage:
+            return .diskFull
         case .cancelled, .paused:
             return .generic(detail: engine.errorDescription ?? "stopped")
         }

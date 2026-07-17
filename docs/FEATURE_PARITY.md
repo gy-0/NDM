@@ -13,7 +13,7 @@
 | A05 | 崩溃后续传 | [x] | 加载 `segments.bin` + 部分段 |
 | A06 | 运行中改连接数 | [x] | Apply 会取消当前 Range 轮次、等待 FileHandle 收口、按真实落盘进度重切未完成区间并以新并发数发起请求；`testApplyConnectionsReplansActiveRangeTransfers` 验证真实 Range 数增加、最终字节一致与 DB 保留新连接数。 |
 | A07 | 运行中限速 | [x] | 全局+每任务 bytes/s |
-| A08 | 过期链接 Renew | [x] | 进度窗 Renew URL |
+| A08 | Link Rescue 过期授权恢复 | [x] | 有来源页时打开浏览器继续；同页新捕获的 URL / Cookie / UA 自动认领原失败任务，保留任务 ID、文件名与 `seg.xN`；双轨媒体要求新视频/音频成对刷新；无来源页仍可手动 Renew URL |
 | A09 | 多任务队列（同时/逐个） | [x] | `downloadAllAtOnce` |
 | A10 | 最大连接数全局设置 | [x] | Settings |
 | A11 | POST / 自定义 Header | [x] | |
@@ -41,6 +41,10 @@
 | C02 | 下载全部 .ts 并合并 | [x] AES-128 + 分段断点续传 |
 | C03 | 音视频分轨 → MKV 合并 | [x] `MKVMergeEngine`（双引擎 + ffmpeg/`c` copy；无 ffmpeg 时旁路落盘） |
 | C04 | 浏览器探测到的多清晰度列表 | [-] UI 在 BetterNDM；宿主收最终 URL/`urla` |
+| C05 | 播放列表 / 课程 / 合集批量下载 | [x] Collection Lens 识别合集元数据；当前/整合集范围；独立任务顺序排队、失败隔离与重启续队 |
+| C06 | 站点级画质 / 容器 / 字幕偏好记忆 | [x] 本机仅保存规范化站点与交付选择；精确档位可用时静默恢复，缺失时回退推荐画质并关闭不可用字幕；不保存 URL、标题、Cookie 或内容 ID |
+| C07 | 在线视频连续进度与真实后处理阶段 | [x] 字节计数与整体旅程分离；下载占 0–96%，真实 postprocessor 事件推进合并、字幕与最终整理，成功退出才到 100%；列表、详情、双进度条与 Dock 读取同一单调 fraction |
+| C08 | Ready Choice 同站点安全一键下载 | [x] 只复用精确存在的上次画质/容器/字幕，并要求单视频、非重复任务和 Space Confidence=comfortable；否则保留完整画质与空间确认；主操作旁仅增加一个扁平“选项…”入口 |
 
 ## D. 任务管理与存储
 
@@ -54,12 +58,13 @@
 | D06 | 任务属性面板 | [x] |
 | D07 | 默认下载目录 | [x] |
 | D08 | 导入/兼容既有实现 DB（可选） | [x] `LegacyDBImporter` + 设置入口 |
+| D09 | 下载前磁盘空间把握与峰值保护 | [x] 视频单项/合集按画质估算最终体积与合并空间；普通分段文件在真实大小探测后、传输前检查临时分段+成品峰值；识别断点续传、已有目标文件与跨磁盘场景 |
 
 ## E. UI / UX（Mac）
 
 | ID | 功能 | 状态 |
 |----|------|------|
-| E01 | 主窗口任务表 | [x] 现代主窗：`NSToolbar` + 侧栏 + 任务列表 + 可折叠 inspector；行内真实总进度/速度/ETA/状态；双击与右键语义；可测试 `TaskPresentation` |
+| E01 | 主窗口任务表 | [x] 第三版 Quiet Finder 主窗：62pt 自定义工具带 + 215–268pt 侧栏 + 任务列表 + 可折叠 inspector；行内真实总进度/速度/ETA/状态；双击与右键语义；可测试 `TaskPresentation` |
 | E02 | 新建 URL 窗口 | [x] Toolbar New / Alert |
 | E03 | 下载进度窗口（总进度+逐连接进度） | [x] 每条 Range 连接独立显示真实 `completed / length`、百分比、字节区间与状态；连接列表可滚动；支持运行中改连接数 / Renew；inspector 摘要复用同一 `SegmentState` |
 | E04 | 设置窗口 | [x] General / Browser / Network / Advanced 分页；代理与导入既有实现 DB |
@@ -70,6 +75,7 @@
 | E09 | Drag & Drop 链接/文件 | [x] URL/文本拖入主列表区，带 hover 高亮 |
 | E10 | 浏览器引导窗口 | [x] `BrowsersWindowController` |
 | E11 | About | [x] |
+| E12 | Magic Inbox 剪贴板分享入口 | [x] 软件激活时只检查新 `changeCount` 的本地文本；抖音/小红书/B 站/YouTube/TikTok 口令显示来源明确的扁平工具带操作；重复任务和无关文本不打扰，点击后进入同一 Link Lens 确认链 |
 
 ## F. 浏览器扩展
 
@@ -89,6 +95,7 @@
 | G03 | 集成测试（本地 HTTP 服务器） | [x] 多连接+运行中 2→4 热重规划+续传+HLS+FTP+NTLM+Bridge |
 | G04 | 行为与协议说明 | [x] 见 `BridgeProtocol.swift` / 本表；研究档案不在本干净树 |
 | G05 | 独立 Bundle ID（不覆盖既有实现） | [x] `dev.ndm.open` |
+| G06 | 视频工具链零配置发行门禁 | [x] 官方 yt-dlp/Deno + 签名源码构建 FFmpeg；嵌套签名、许可证、哈希/架构清单、无外部 dylib、空 PATH 自检与真实 YouTube 下载测试 |
 
 ## 里程碑
 
@@ -105,13 +112,14 @@
 - `DownloadEngine`：单连接引导后扩展多 Range；运行中改连接数会取消旧轮次再重规划。
 - 分段 ID 在重规划时保持稳定，避免 `segments.bin` 与磁盘 `seg.xN` 错位。
 - 合并使用流式复制；进度回调降频且单调。
-- 主窗：`TaskPresentation` + Toolbar + 三栏 `NSSplitViewController`。
+- 主窗：`TaskPresentation` + 自定义扁平工具带 + 三栏 `NSSplitViewController`。
 
 ## 已知缺口
 
-- 无 ffmpeg 时音轨旁路为 `.audio.*` 文件（HLS/双轨均已在有 ffmpeg 时默认 MP4）。
+- 当前验证成品为 Apple Silicon 架构；Intel / Universal 发行物仍需在 x86_64 构建机上生成对应 App、Deno 与 FFmpeg 后合并验证。
+- 本地打包使用 ad-hoc 签名完成结构验证；正式分发仍需 Developer ID 签名与 Apple 公证凭据。
 - BetterNDM 实机 Chrome 联调按 `docs/BETTERNDM_SMOKE.md` 手工走。
 - 菜单栏长时稳定性需在真实交互下继续观察。
-- 升级页购买链接为占位（`UpgradeWindowController.purchaseURL`）。
+- 真实购买地址与更新通道仍需上线；未配置购买地址时产品不会打开假链接。
 - Onboarding 第 2 步测试文件指向 thinkbroadband 公共文件，正式版应换自有 CDN。
 - 新 UI（诊断卡 / smartline / 清晰度 Sheet / 完成卡 / 菜单栏面板 / Onboarding / Pro 页）已过编译与逻辑测试，视觉走查需真机人工过一遍。

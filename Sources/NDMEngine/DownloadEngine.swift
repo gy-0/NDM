@@ -12,6 +12,8 @@ public actor DownloadEngine {
     private let request: DownloadRequest
     private let taskID: Int64
     private let workDirectory: URL
+    private let capacityProvider: @Sendable (URL) -> Int64?
+    private let sameVolumeProvider: @Sendable (URL, URL) -> Bool
     private var session: URLSession
     private let token = CancelToken()
     private var logHandle: FileHandle?
@@ -61,11 +63,19 @@ public actor DownloadEngine {
         socksProxy: SocksProxySettings? = nil,
         globalBandwidthLimit: Int64 = 0,
         autoTuneConnections: Bool = false,
-        tuneConfig: AutoTuneConfig = .default
+        tuneConfig: AutoTuneConfig = .default,
+        capacityProvider: @escaping @Sendable (URL) -> Int64? = {
+            VolumeCapacity.availableBytes(at: $0)
+        },
+        sameVolumeProvider: @escaping @Sendable (URL, URL) -> Bool = {
+            VolumeCapacity.areOnSameVolume($0, $1)
+        }
     ) {
         self.taskID = taskID
         self.request = request
         self.workDirectory = workDirectory
+        self.capacityProvider = capacityProvider
+        self.sameVolumeProvider = sameVolumeProvider
         self.httpProxyCredentials = httpProxy
         self.autoTune = autoTuneConnections
         self.tuneConfig = tuneConfig
@@ -165,6 +175,7 @@ public actor DownloadEngine {
             at: request.destinationDirectory,
             withIntermediateDirectories: true
         )
+        try validateStorage(totalBytes: total, finalURL: finalURL)
 
         setState(.downloading)
 
@@ -273,6 +284,66 @@ public actor DownloadEngine {
     }
 
     public func currentProgress() -> DownloadProgress { progress }
+
+    private func validateStorage(totalBytes: Int64, finalURL: URL) throws {
+        guard totalBytes > 0 else { return }
+        let existingWork = existingResumableBytes(totalBytes: totalBytes)
+        let existingDestination = Self.fileSize(at: finalURL)
+        let sharesVolume = sameVolumeProvider(workDirectory, request.destinationDirectory)
+        let budget = DirectDownloadStorageBudget(
+            totalBytes: totalBytes,
+            existingWorkBytes: existingWork,
+            existingDestinationBytes: existingDestination,
+            sharesVolume: sharesVolume
+        )
+
+        if let required = budget.sharedVolumeBytesRequired {
+            guard let available = capacityProvider(workDirectory) else { return }
+            if required > available {
+                throw EngineError.insufficientStorage(
+                    requiredBytes: required,
+                    availableBytes: available
+                )
+            }
+            return
+        }
+
+        if let available = capacityProvider(workDirectory),
+           budget.workBytesRequired > available {
+            throw EngineError.insufficientStorage(
+                requiredBytes: budget.workBytesRequired,
+                availableBytes: available
+            )
+        }
+        if let available = capacityProvider(request.destinationDirectory),
+           budget.destinationBytesRequired > available {
+            throw EngineError.insufficientStorage(
+                requiredBytes: budget.destinationBytesRequired,
+                availableBytes: available
+            )
+        }
+    }
+
+    private func existingResumableBytes(totalBytes: Int64) -> Int64 {
+        guard let records = (try? SegmentFileFormat.loadSegmentsBin(from: workDirectory)) ?? nil,
+              !records.isEmpty else { return 0 }
+        let sorted = records.sorted { $0.start < $1.start }
+        let contiguous = sorted.first?.start == 0 && zip(sorted, sorted.dropFirst()).allSatisfy {
+            $0.end + 1 == $1.start
+        }
+        guard contiguous, sorted.last.map({ $0.end + 1 }) == totalBytes else { return 0 }
+        return sorted.reduce(Int64(0)) { partial, segment in
+            let bytes = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+            let (sum, overflow) = partial.addingReportingOverflow(bytes)
+            return overflow ? Int64.max : sum
+        }
+    }
+
+    private static func fileSize(at url: URL) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return 0 }
+        return max(0, size.int64Value)
+    }
 
     // MARK: - Segments plan / resume
 
@@ -574,6 +645,7 @@ public actor DownloadEngine {
         do {
             try await withThrowingTaskGroup(of: Int16.self) { group in
                 var next = 0
+                var active = 0
                 func enqueue(_ segment: SegmentRecord) {
                     group.addTask {
                         do {
@@ -588,12 +660,24 @@ public actor DownloadEngine {
                 while next < limit {
                     enqueue(pending[next])
                     next += 1
+                    active += 1
                 }
                 while let segmentID = try await group.next() {
+                    active -= 1
                     markSegmentFinished(segmentID)
                     if next < pending.count {
                         enqueue(pending[next])
                         next += 1
+                        active += 1
+                    } else if shouldRebalanceTail(
+                        segments,
+                        activeConnections: active,
+                        targetConnections: maxConcurrent
+                    ) {
+                        log("TailBalance: \(active) active of \(maxConcurrent); preserving prefixes and splitting unfinished ranges.")
+                        planToken.cancel()
+                        group.cancelAll()
+                        throw ReplanSignal.requested
                     }
                 }
             }
@@ -602,6 +686,22 @@ public actor DownloadEngine {
             throw error
         }
         recountProgress()
+    }
+
+    private func shouldRebalanceTail(
+        _ segments: [SegmentRecord],
+        activeConnections: Int,
+        targetConnections: Int
+    ) -> Bool {
+        let remaining = segments.map { segment in
+            let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+            return max(0, segment.length - have)
+        }
+        return SegmentFileFormat.shouldRebalanceTail(
+            targetConnections: targetConnections,
+            activeConnections: activeConnections,
+            remainingBytesBySegment: remaining
+        )
     }
 
     private func markSegmentFinished(_ segmentID: Int16) {
@@ -901,6 +1001,7 @@ public enum EngineError: Error, LocalizedError {
     case paused
     case notResumable
     case mergeFailed(String)
+    case insufficientStorage(requiredBytes: Int64, availableBytes: Int64)
     case authRequired(status: Int, challenge: String?)
 
     public var errorDescription: String? {
@@ -911,6 +1012,11 @@ public enum EngineError: Error, LocalizedError {
         case .paused: return "Download paused"
         case .notResumable: return "Server does not support resume"
         case .mergeFailed(let m): return m
+        case .insufficientStorage(let required, let available):
+            return L10n.storageGuardError(
+                requiredBytes: required,
+                availableBytes: available
+            )
         case .authRequired(let s, _): return "Authentication required (HTTP \(s))"
         }
     }

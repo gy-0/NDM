@@ -4,7 +4,7 @@ import NDMEngine
 import NDMBridge
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     private var statusItem: NSStatusItem?
     private var statusSummaryItem: NSMenuItem?
@@ -13,7 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusPauseAllItem: NSMenuItem?
     private var manager: DownloadManager?
     private var bridge: BrowserBridge?
-    private var settings = SettingsStore.load()
+    private var settings: AppSettings = {
+        var value = SettingsStore.load()
+        QAPreviewOverrides.apply(to: &value)
+        return value
+    }()
     private var waitWindow: WaitWindowController?
     private var browsersWindow: BrowsersWindowController?
     private var settingsWindow: SettingsWindowController?
@@ -21,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var onboardingWindow: OnboardingWindowController?
     private var terminationCheckInFlight = false
     private var statusPollTask: Task<Void, Never>?
+    private var lastPasteboardChangeCount = -1
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         L10n.apply(settings.languageMode)
@@ -37,9 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         do {
-            let support = DownloadStore.defaultSupportDirectory
+            let support = QAPreviewOverrides.supportDirectory
+                ?? DownloadStore.defaultSupportDirectory
             let store = try DownloadStore(directory: support)
-            settings.bridgePort = BridgeConstants.port
+            try QAPreviewOverrides.seedPreviewTasks(in: store)
+            settings.bridgePort = QAPreviewOverrides.bridgePort
+                ?? BridgeConstants.port
             let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
             self.manager = manager
 
@@ -83,10 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { [weak self, manager, bridge] in
                     await manager.setSettingsChangedHandler { [weak self] next in
                         Task { @MainActor in
-                            self?.settings = next
-                            AppearanceApplicator.apply(next.appearanceMode)
-                            L10n.apply(next.languageMode)
-                            for msg in BridgeConstants.showPanelMessages(enabled: next.showBrowserMediaPanel) {
+                            var effective = next
+                            QAPreviewOverrides.apply(to: &effective)
+                            self?.settings = effective
+                            AppearanceApplicator.apply(effective.appearanceMode)
+                            L10n.apply(effective.languageMode)
+                            self?.refreshClipboardOfferFromPasteboard()
+                            for msg in BridgeConstants.showPanelMessages(enabled: effective.showBrowserMediaPanel) {
                                 self?.bridge?.sendToAllClients(msg)
                             }
                         }
@@ -100,9 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { [weak self, manager] in
                     await manager.setSettingsChangedHandler { [weak self] next in
                         Task { @MainActor in
-                            self?.settings = next
-                            AppearanceApplicator.apply(next.appearanceMode)
-                            L10n.apply(next.languageMode)
+                            var effective = next
+                            QAPreviewOverrides.apply(to: &effective)
+                            self?.settings = effective
+                            AppearanceApplicator.apply(effective.appearanceMode)
+                            L10n.apply(effective.languageMode)
+                            self?.refreshClipboardOfferFromPasteboard()
                         }
                     }
                 }
@@ -111,14 +125,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let window = MainWindowController(manager: manager)
             window.showWindow(nil)
             mainWindow = window
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshClipboardOfferFromPasteboard()
+                }
+            }
+            refreshClipboardOfferFromPasteboard()
+            Task { await manager.resumeQueuedCollectionIfIdle() }
 
             setupMainMenu()
-            setupStatusItem()
-            startStatusPolling()
             NSApp.activate(ignoringOtherApps: true)
 
-            if settings.needsOnboarding {
+            // Dev/screenshot escape hatch — Design Suite comparison needs a clean main window.
+            if ProcessInfo.processInfo.environment["NDM_SKIP_ONBOARDING"] == "1" {
+                settings.onboardingCompleted = true
+                if !QAPreviewOverrides.isEnabled {
+                    SettingsStore.save(settings)
+                }
+            }
+            if settings.needsOnboarding || QAPreviewOverrides.showOnboarding {
                 presentOnboarding()
+            }
+            if QAPreviewOverrides.showUpgrade {
+                DispatchQueue.main.async {
+                    UpgradeWindowController.present(features: QAPreviewOverrides.upgradeFeatures)
+                }
+            }
+            if QAPreviewOverrides.showCompletion,
+               let task = try? store.allDownloads().first(where: {
+                   $0.pageURL?.contains("bilibili.com/video/BV1Preview") == true
+               }) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentCompletion(for: task)
+                }
+            }
+
+            // Defer status item past the first event-loop turn. Creating
+            // NSStatusItem synchronously during didFinishLaunching races
+            // MenuBarClientCore's executor checks on macOS 26/27 (0x7c8).
+            DispatchQueue.main.async { [weak self] in
+                self?.setupStatusItem()
+                self?.startStatusPolling()
             }
 
             Task { [weak self, manager] in
@@ -168,6 +219,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bridge?.stop()
     }
 
+    /// Reads only the current pasteboard text, only after activation/settings
+    /// changes, and only once per changeCount. Nothing is uploaded or retained.
+    private func refreshClipboardOfferFromPasteboard() {
+        guard settings.clipboardWatchEnabled else {
+            // Re-enabling should reconsider the current clipboard immediately.
+            lastPasteboardChangeCount = -1
+            mainWindow?.clearClipboardOffer()
+            return
+        }
+        if let qaText = QAPreviewOverrides.clipboardText {
+            _ = mainWindow?.offerClipboardText(qaText)
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount != lastPasteboardChangeCount else { return }
+        lastPasteboardChangeCount = pasteboard.changeCount
+        guard let raw = pasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            mainWindow?.clearClipboardOffer()
+            return
+        }
+        _ = mainWindow?.offerClipboardText(raw)
+    }
+
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
@@ -204,8 +280,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(fileMenu, L10n.propertiesEllipsis, #selector(menuProperties), "i", [.command, .option], symbol: "info.circle")
         add(fileMenu, L10n.copyURL, #selector(menuCopyURL), "c", [.command, .shift], symbol: "doc.on.doc")
         fileMenu.addItem(.separator())
-        add(fileMenu, L10n.raceMenuTitle, #selector(showSpeedRace), "", symbol: "flag.checkered")
-        fileMenu.addItem(.separator())
         add(fileMenu, L10n.removeEllipsis, #selector(menuDelete), String(UnicodeScalar(8)!), symbol: "trash")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -227,10 +301,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: L10n.viewMenu)
+        let zoomIn = NSMenuItem(title: L10n.zoomIn, action: #selector(zoomInInterface), keyEquivalent: "+")
+        zoomIn.target = self
+        zoomIn.ndmSymbol("plus.magnifyingglass")
+        let zoomOut = NSMenuItem(title: L10n.zoomOut, action: #selector(zoomOutInterface), keyEquivalent: "-")
+        zoomOut.target = self
+        zoomOut.ndmSymbol("minus.magnifyingglass")
+        let actual = NSMenuItem(title: L10n.actualSize, action: #selector(resetInterfaceScale), keyEquivalent: "0")
+        actual.target = self
+        actual.ndmSymbol("1.magnifyingglass")
+        viewMenu.addItem(zoomIn)
+        viewMenu.addItem(zoomOut)
+        viewMenu.addItem(actual)
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: L10n.windowMenu)
-        let showMain = NSMenuItem(title: L10n.showMainWindow, action: #selector(showMain), keyEquivalent: "0")
-        showMain.keyEquivalentModifierMask = [.command]
+        // ⌘0 is Actual Size (View); show main window without stealing that chord.
+        let showMain = NSMenuItem(title: L10n.showMainWindow, action: #selector(showMain), keyEquivalent: "")
         showMain.target = self
         showMain.ndmSymbol("macwindow")
         windowMenu.addItem(showMain)
@@ -317,11 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 onDropURL?(first.absoluteString)
                 return true
             }
-            if let text = pasteboard.string(forType: .string)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               text.contains("://"),
-               let first = text.components(separatedBy: .whitespacesAndNewlines).first {
-                onDropURL?(first)
+            if let text = pasteboard.string(forType: .string),
+               let resolution = SharedLinkResolver.resolve(text) {
+                onDropURL?(resolution.urlString)
                 return true
             }
             return false
@@ -331,7 +420,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func rebuildStatusItemMenu() {
         guard let item = statusItem else { return }
         let menu = NSMenu()
-        menu.delegate = self
+        // Do not set `menu.delegate` to this `@MainActor` object (or any MainActor
+        // closure). MenuBarClientCore on macOS 26/27 can trap in
+        // SerialExecutor.isMainExecutor (0x7c8) when entering that thunk.
+        // Status polling keeps the menu title/rows fresh instead.
         let summary = NSMenuItem(title: L10n.idle, action: nil, keyEquivalent: "")
         summary.isEnabled = false
         menu.addItem(summary)
@@ -410,19 +502,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mainWindow?.pauseAllActive()
     }
 
-    @objc private func showSpeedRace() {
-        SpeedRaceWindowController.present()
-    }
-
     @objc private func showUpgrade() {
         UpgradeWindowController.present { [weak self] in
             self?.rebuildStatusItemMenu()
-        }
-    }
-
-    nonisolated func menuWillOpen(_ menu: NSMenu) {
-        Task { @MainActor in
-            self.refreshStatusItem()
         }
     }
 
@@ -523,6 +605,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func zoomInInterface() {
+        InterfaceScale.zoomIn()
+    }
+
+    @objc private func zoomOutInterface() {
+        InterfaceScale.zoomOut()
+    }
+
+    @objc private func resetInterfaceScale() {
+        InterfaceScale.reset()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(zoomInInterface):
+            return InterfaceScale.canZoomIn
+        case #selector(zoomOutInterface):
+            return InterfaceScale.canZoomOut
+        case #selector(resetInterfaceScale):
+            return !InterfaceScale.isDefault
+        case #selector(menuDelete):
+            return !isEditingText && NSApp.keyWindow?.sheetParent == nil
+        default:
+            return true
+        }
+    }
+
+    /// Text editing and attached sheets own ⌘Delete. The File-menu shortcut
+    /// must never reach the selected download behind the active field editor.
+    private var isEditingText: Bool {
+        guard let window = NSApp.keyWindow else { return false }
+        if window.sheetParent != nil { return true }
+        return window.firstResponder is NSTextView
+            || window.firstResponder is NSTextField
+    }
+
     @objc private func showMain() {
         mainWindow?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -533,8 +651,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         wc.onInstallExtension = { [weak self] in
             self?.showBrowsers()
         }
-        wc.onStartTestDownload = { [weak self] url in
-            self?.mainWindow?.addAndStart(urlString: url)
+        wc.onTryLink = { [weak self] text in
+            guard let self else { return }
+            self.mainWindow?.showWindow(nil)
+            self.mainWindow?.promptNewURLWithPrefill(text)
+            NSApp.activate(ignoringOtherApps: true)
         }
         wc.onFinished = { [weak self] in
             guard let self else { return }
@@ -573,7 +694,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() {
         mainWindow?.showWindow(nil)
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             guard let manager else { return }
             let settings = await manager.currentSettings()
             if let existing = settingsWindow {
@@ -582,6 +704,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             let wc = SettingsWindowController(manager: manager, settings: settings)
             settingsWindow = wc
+            wc.onWindowClose = { [weak self, weak wc] in
+                guard let self else { return }
+                if self.settingsWindow === wc { self.settingsWindow = nil }
+            }
             wc.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -589,7 +715,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func menuStart() { mainWindow?.menuStartSelected() }
     @objc private func menuPause() { mainWindow?.menuPauseSelected() }
-    @objc private func menuDelete() { mainWindow?.menuDeleteSelected() }
+    @objc private func menuDelete() {
+        guard !isEditingText else { return }
+        mainWindow?.menuDeleteSelected()
+    }
     @objc private func menuProgress() { mainWindow?.menuShowProgressSelected() }
     @objc private func menuProperties() { mainWindow?.menuShowPropertiesSelected() }
     @objc private func menuCopyURL() { mainWindow?.menuCopyURLSelected() }

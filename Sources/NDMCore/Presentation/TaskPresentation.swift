@@ -14,6 +14,7 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
     case compressed
     case application
     case image
+    case other
 
     public var title: String {
         switch self {
@@ -29,6 +30,7 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
         case .compressed: return L10n.compressed
         case .application: return L10n.appCategory
         case .image: return L10n.image
+        case .other: return L10n.other
         }
     }
 
@@ -43,7 +45,7 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
 
     public var isCategory: Bool {
         switch self {
-        case .video, .audio, .document, .compressed, .application, .image:
+        case .video, .audio, .document, .compressed, .application, .image, .other:
             return true
         default:
             return false
@@ -76,6 +78,8 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
             return task.category == .application
         case .image:
             return task.category == .image
+        case .other:
+            return task.category == .misc
         }
     }
 
@@ -110,6 +114,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var etaText: String
     public var connectionsText: String
     public var urlText: String
+    /// Local destination used only for native preview generation in the UI.
+    public var localFileURL: URL?
     public var errorText: String?
     /// Parsed human diagnostic when the stored error is structured (`#diag:`);
     /// nil for legacy plain-text errors and non-error states.
@@ -126,9 +132,15 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var isComplete: Bool
     public var primaryAction: TaskPrimaryAction
     public var segmentStates: [SegmentState]
+    /// Design Suite badge, e.g. "HLS → MP4". Nil when not applicable.
+    public var mediaBadge: String?
+    /// True while downloading — list trailing leads with bold speed.
+    public var isDownloading: Bool
+    public var isFailed: Bool
+    public var isQueued: Bool
 
     /// Completed downloads don't need a progress bar in list / inspector.
-    public var showsProgressBar: Bool { !isComplete }
+    public var showsProgressBar: Bool { isDownloading || isQueued }
 
     public init(
         taskID: Int64,
@@ -143,6 +155,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         etaText: String,
         connectionsText: String,
         urlText: String,
+        localFileURL: URL? = nil,
         errorText: String?,
         diagnostic: DownloadDiagnostic? = nil,
         tuningNote: String? = nil,
@@ -155,7 +168,11 @@ public struct TaskRowPresentation: Equatable, Sendable {
         canShowProgress: Bool,
         isComplete: Bool,
         primaryAction: TaskPrimaryAction,
-        segmentStates: [SegmentState]
+        segmentStates: [SegmentState],
+        mediaBadge: String? = nil,
+        isDownloading: Bool = false,
+        isFailed: Bool = false,
+        isQueued: Bool = false
     ) {
         self.taskID = taskID
         self.filename = filename
@@ -169,6 +186,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.etaText = etaText
         self.connectionsText = connectionsText
         self.urlText = urlText
+        self.localFileURL = localFileURL
         self.errorText = errorText
         self.diagnostic = diagnostic
         self.tuningNote = tuningNote
@@ -182,6 +200,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.isComplete = isComplete
         self.primaryAction = primaryAction
         self.segmentStates = segmentStates
+        self.mediaBadge = mediaBadge
+        self.isDownloading = isDownloading
+        self.isFailed = isFailed
+        self.isQueued = isQueued
     }
 
     public static func make(task: DownloadTask, progress: DownloadProgress?) -> TaskRowPresentation {
@@ -192,7 +214,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
         // stall the main thread. Open/Reveal verify existence at action time.
         let hasDestination = task.destinationFileURL != nil
 
-        let totalBytes = max(task.fileSize, progress?.totalBytes ?? 0)
+        let isYtDlp = task.linkType.lowercased() == "ytdlp"
+        let totalBytes = isYtDlp && (progress?.totalBytes ?? 0) > 0
+            ? (progress?.totalBytes ?? 0)
+            : max(task.fileSize, progress?.totalBytes ?? 0)
         let completedBytes: Int64
         let fraction: Double
         let speed: Double
@@ -232,11 +257,19 @@ public struct TaskRowPresentation: Equatable, Sendable {
             || task.status == .error
             || task.status == .waiting
         let canPause = task.status == .downloading || task.status == .waiting
+        // Incomplete / error / complete all expose Retry — completed re-runs the
+        // download (overwrite). Paused / waiting keep using Start / Resume.
         let canRetry = task.status == .error
+            || task.status == .incomplete
+            || task.status == .complete
         let canRenew = task.status == .error || task.status == .paused || task.status == .incomplete
+            || task.status == .complete
         let canOpen = task.status == .complete && hasDestination
         let canShowInFinder = task.status == .complete && hasDestination
-        let canShowProgress = task.status != .complete
+        // The same window becomes the completed result page after a task
+        // finishes, so users must be able to reopen it later for subtitles and
+        // Delivery Recipes — not only while bytes are moving.
+        let canShowProgress = true
 
         let primary: TaskPrimaryAction
         switch task.status {
@@ -248,11 +281,55 @@ public struct TaskRowPresentation: Equatable, Sendable {
             primary = .start
         }
 
+        let ext = (task.filename as NSString).pathExtension.lowercased()
+        let isHLS = ["hls", "m3u8"].contains(task.linkType.lowercased())
+        let mediaBadge: String? = (task.status == .complete && isHLS && ext == "mp4")
+            ? L10n.hlsToMp4Badge
+            : nil
+
+        // Design Suite subtitles — every line answers "how's it going".
+        // Completed rows: UI already prefixes "Completed ·", so detail must NOT repeat it.
         let statusDetail: String
         if let errorText, !errorText.isEmpty {
             statusDetail = errorText
+        } else if task.status == .complete {
+            if mediaBadge != nil {
+                statusDetail = L10n.completedReadyToShare
+            } else if !host.isEmpty {
+                statusDetail = host
+            } else {
+                statusDetail = ""
+            }
+        } else if task.status == .waiting {
+            let hostBit = host.isEmpty ? "" : "\(host) · "
+            statusDetail = "\(hostBit)\(L10n.queuedWillStart)"
+        } else if task.status == .downloading {
+            var parts: [String] = []
+            if !host.isEmpty { parts.append(host) }
+            if progress?.phase == .preparing {
+                parts.append(L10n.ytdlpPreparingShort)
+            } else if progress?.phase == .merging {
+                parts.append(L10n.ytdlpMergingShort)
+            } else if progress?.phase == .subtitles {
+                parts.append(L10n.ytdlpPreparingSubtitlesShort)
+            } else if progress?.phase == .finalizing {
+                parts.append(L10n.ytdlpFinalizingShort)
+            } else if isYtDlp {
+                parts.append(TaskPresentationFormatting.byteCount(completedBytes))
+                if task.fileSize > 0 { parts.append(L10n.estimatedSize(task.fileSize)) }
+            } else {
+                parts.append(TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes))
+            }
+            if task.connections > 1 {
+                parts.append(L10n.connectionsCount(task.connections))
+            }
+            let etaText = TaskPresentationFormatting.eta(eta, status: task.status)
+            if etaText != L10n.emDash && etaText != "—" {
+                parts.append("≈ \(etaText)")
+            }
+            statusDetail = parts.joined(separator: " · ")
         } else if !host.isEmpty {
-            statusDetail = host
+            statusDetail = "\(statusTitle) · \(host)"
         } else {
             statusDetail = statusTitle
         }
@@ -260,6 +337,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         let sizeText: String
         if task.status == .complete, totalBytes > 0 {
             sizeText = TaskPresentationFormatting.byteCount(totalBytes)
+        } else if isYtDlp, task.fileSize > 0 {
+            sizeText = L10n.estimatedSize(task.fileSize)
         } else {
             sizeText = TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes)
         }
@@ -277,6 +356,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
             etaText: TaskPresentationFormatting.eta(eta, status: task.status),
             connectionsText: "\(task.connections)",
             urlText: task.url,
+            localFileURL: task.destinationFileURL,
             errorText: errorText,
             diagnostic: diagnostic,
             tuningNote: task.status == .downloading ? progress?.tuning?.inspectorNote : nil,
@@ -289,9 +369,11 @@ public struct TaskRowPresentation: Equatable, Sendable {
             canShowProgress: canShowProgress,
             isComplete: task.status == .complete,
             primaryAction: primary,
-            // Per-connection detail belongs in the progress window; avoid
-            // copying/sorting segment arrays on every main-list refresh.
-            segmentStates: []
+            segmentStates: [],
+            mediaBadge: mediaBadge,
+            isDownloading: task.status == .downloading,
+            isFailed: task.status == .error,
+            isQueued: task.status == .waiting
         )
     }
 }

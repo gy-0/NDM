@@ -162,10 +162,7 @@ public actor MKVMergeEngine {
     }
 
     private static func findFFmpeg() -> String? {
-        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
-        }
-        return nil
+        FFmpegTool.find()
     }
 
     private static func runFFmpegMux(ffmpeg: String, video: URL, audio: URL, output: URL) async throws {

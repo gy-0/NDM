@@ -1,0 +1,15 @@
+# Sanitized excerpt from the original app's task 3996 LogFile.txt.
+# The signed source URL and request headers are intentionally omitted.
+
+INFO   2026-05-12 21:46:39   New Socket(s) Created. MaxAllowedConnection = 32 And ActiveSockets = 32
+
+INFO   2026-05-12 21:53:18   Segment Completed For  Socket ( 31 ) SegmentNo = 6 FileNumber= 6
+INFO   2026-05-12 21:53:18   Segment Completed For  Socket ( 1 ) SegmentNo = 0 FileNumber= 0
+DEBUG  2026-05-12 21:53:18   SegmentManager Created a New Segment and now has 33 Segments.
+INFO   2026-05-12 21:53:18   Sending Http-GET  for Socket ( 30 )  Range = 2324264264-3554312078
+DEBUG  2026-05-12 21:53:19   Segment Rolled Back To Socket ( 15 ). Segment 32 Merged To Segment 4
+INFO   2026-05-12 21:53:19   Segment Completed For  Socket ( 20 ) SegmentNo = 12 FileNumber= 12
+DEBUG  2026-05-12 21:53:19   SegmentManager Created a New Segment and now has 33 Segments.
+INFO   2026-05-12 21:53:19   Sending Http-GET  for Socket ( 31 )  Range = 2324370760-3554312078
+DEBUG  2026-05-12 21:53:19   SegmentManager Created a New Segment and now has 34 Segments.
+INFO   2026-05-12 21:53:19   Sending Http-GET  for Socket ( 1 )  Range = 1102841703-3554312078

@@ -19,18 +19,32 @@ final class TaskPropertiesWindowController: NSWindowController {
     init(manager: DownloadManager, task: DownloadTask) {
         self.manager = manager
         self.task = task
-        let window = NSWindow(
+        // Use NSPanel + generic title. A filename title / representedURL makes
+        // AppKit route showWindow through QLSeamlessDocumentOpener, which crashes
+        // on recent macOS (NSRemoteView / SafariPlatformSupport assertion).
+        let window = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),
             styleMask: [.titled, .closable],
             backing: .buffered,
-            defer: true
+            defer: false
         )
-        window.title = task.filename.isEmpty ? L10n.properties : task.filename
+        window.title = L10n.properties
+        window.representedURL = nil
+        window.isFloatingPanel = false
+        window.becomesKeyOnlyIfNeeded = false
+        window.isReleasedWhenClosed = false
         NDMChrome.applyWindowChrome(window)
         super.init(window: window)
         buildUI()
         load()
         window.center()
+    }
+
+    /// Safer than `showWindow:` — avoids QuickLook seamless document opener.
+    func present() {
+        guard let window else { return }
+        window.representedURL = nil
+        window.makeKeyAndOrderFront(nil)
     }
 
     @available(*, unavailable)

@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import NDMCore
+import NDMEngine
 import QuickLookThumbnailing
 
 /// Non-modal completion panel — used only when no progress window is open.
@@ -8,13 +9,30 @@ import QuickLookThumbnailing
 final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private let task: DownloadTask
     private let onDismiss: () -> Void
+    private let completionStack: CompletionStack?
+    private let collapsedWindowHeight: CGFloat
+    private let completionStackView = CompletionStackView()
+    private let deliveryRecipesView = DeliveryRecipesView()
+    private let fileSharePresenter = FileSharePresenter()
+    private var completionExpansionAddedHeight: CGFloat = 0
     private weak var metaLabel: NSTextField?
 
     init(task: DownloadTask, onDismiss: @escaping () -> Void = {}) {
         self.task = task
         self.onDismiss = onDismiss
+        self.completionStack = SmartFinalize.completionStack(primary: task.destinationFileURL)
+        let hasSidecars = !(self.completionStack?.sidecars.isEmpty ?? true)
+        let hasRecipes = SmartFinalize.supportsDeliveryRecipes(input: task.destinationFileURL)
+        self.collapsedWindowHeight = hasRecipes
+            ? (hasSidecars ? 480 : 440)
+            : (hasSidecars ? 400 : 340)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: 440,
+                height: collapsedWindowHeight
+            ),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: true
@@ -22,6 +40,9 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         window.title = L10n.downloadComplete
         NDMChrome.applyWindowChrome(window)
         super.init(window: window)
+        completionStackView.onExpansionChanged = { [weak self] expanded in
+            self?.resizeForCompletionStack(expanded: expanded)
+        }
         buildUI()
         window.center()
         window.delegate = self
@@ -30,38 +51,68 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    private func resizeForCompletionStack(expanded: Bool) {
+        guard let window else { return }
+        var frame = window.frame
+        let oldTop = frame.maxY
+        if expanded {
+            let requested = completionStackView.expansionHeight
+            let maximum = window.screen?.visibleFrame.height ?? (frame.height + requested)
+            let added = min(requested, max(0, maximum - 24 - frame.height))
+            completionExpansionAddedHeight = added
+            frame.size.height += added
+        } else {
+            frame.size.height = max(collapsedWindowHeight, frame.height - completionExpansionAddedHeight)
+            completionExpansionAddedHeight = 0
+        }
+        frame.origin.y = oldTop - frame.height
+        window.setFrame(frame, display: true, animate: true)
+    }
+
     /// Smart Finalize summary derived from what the engine actually produced.
     /// Returns nil for plain downloads — the card stays quiet for those.
     private func finalizeSteps() -> [String]? {
         let ext = (task.filename as NSString).pathExtension.lowercased()
+        var steps: [String] = []
         switch task.linkType.lowercased() {
         case "hls", "m3u8":
-            return [
+            steps = [
                 L10n.finalizeMergedSegments,
                 ext == "mp4" ? L10n.finalizeRemuxedMP4 : L10n.finalizeKeptTS,
             ]
         case "mkv", "mkva", "mkvv":
-            var steps = [L10n.finalizeMergedTracks]
+            steps = [L10n.finalizeMergedTracks]
             if ext == "mp4" {
                 steps.append(L10n.finalizeRemuxedMP4)
+            } else {
+                steps.append(L10n.finalizeAudioSidecar)
             }
-            return steps
+        case "ytdlp":
+            steps = [L10n.finalizePlayableMedia]
         default:
-            return nil
+            guard task.category == .video || task.category == .audio else { return nil }
+            steps = [L10n.finalizePlayableMedia]
         }
+        if SmartFinalize.filenameReflectsPageTitle(task.filename, pageTitle: task.pageTitle) {
+            let actualStem = (task.filename as NSString).deletingPathExtension
+            steps.append(L10n.finalizeNamed(actualStem))
+        }
+        if completionStack?.artifacts.contains(where: { $0.kind == .subtitle }) == true {
+            steps.append(L10n.finalizeSubtitleReady)
+        }
+        steps.append(L10n.finalizeCoverReady)
+        return steps
     }
 
-    private func makeStepRow(_ text: String) -> NSView {
+    private func makeStepRow(_ text: String, pending: Bool = false) -> NSView {
         let check = NSImageView()
-        check.image = NSImage(
-            systemSymbolName: "checkmark.circle.fill",
-            accessibilityDescription: nil
-        )
-        check.contentTintColor = .systemGreen
+        let symbol = pending ? "circle.dashed" : "checkmark.circle.fill"
+        check.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        check.contentTintColor = pending ? .tertiaryLabelColor : .systemGreen
         check.translatesAutoresizingMaskIntoConstraints = false
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 12)
-        label.textColor = .labelColor
+        label.textColor = pending ? .secondaryLabelColor : .labelColor
         let row = NSStackView(views: [check, label])
         row.orientation = .horizontal
         row.alignment = .firstBaseline
@@ -118,16 +169,31 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             target: self,
             action: #selector(openClicked)
         )
-        open.bezelStyle = .rounded
+        NDMChrome.styleMainButton(open)
         open.keyEquivalent = "\r"
         open.controlSize = .large
+        open.image = NDMChrome.symbol(isMedia ? "play.fill" : "arrow.up.forward.app.fill", pointSize: 11)
+        open.imagePosition = .imageLeading
 
         let reveal = NSButton(title: L10n.showInFinder, target: self, action: #selector(revealClicked))
-        reveal.bezelStyle = .rounded
+        NDMChrome.styleGhostButton(reveal)
         reveal.controlSize = .large
+        reveal.image = NDMChrome.symbol("folder", pointSize: 11)
+        reveal.imagePosition = .imageLeading
+
+        let share = NSButton(title: "", target: self, action: #selector(shareClicked))
+        share.isBordered = false
+        share.bezelStyle = .inline
+        share.controlSize = .large
+        share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 12, weight: .medium)
+        share.imagePosition = .imageOnly
+        share.toolTip = L10n.share
+        share.setAccessibilityLabel(L10n.share)
 
         let close = NSButton(title: L10n.close, target: self, action: #selector(closeClicked))
-        close.bezelStyle = .rounded
+        close.isBordered = false
+        close.font = .systemFont(ofSize: 12.5, weight: .medium)
+        close.contentTintColor = .secondaryLabelColor
         close.keyEquivalent = "\u{1b}"
         close.controlSize = .large
 
@@ -136,11 +202,22 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         } ?? false
         open.isEnabled = fileExists
         reveal.isEnabled = fileExists
+        share.isEnabled = fileExists
 
-        let actions = NSStackView(views: [open, reveal, close])
+        let actions = NSStackView(views: [open, reveal, NSView(), share, close])
         actions.orientation = .horizontal
         actions.spacing = 10
-        actions.distribution = .fillEqually
+        actions.alignment = .centerY
+        NSLayoutConstraint.activate([
+            open.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            reveal.widthAnchor.constraint(greaterThanOrEqualToConstant: 135),
+            share.widthAnchor.constraint(equalToConstant: 32),
+            close.widthAnchor.constraint(greaterThanOrEqualToConstant: 46),
+            open.heightAnchor.constraint(equalToConstant: 34),
+            reveal.heightAnchor.constraint(equalToConstant: 34),
+            share.heightAnchor.constraint(equalToConstant: 34),
+            close.heightAnchor.constraint(equalToConstant: 34),
+        ])
 
         let headerRow = NSStackView(views: [thumb, name])
         headerRow.orientation = .horizontal
@@ -150,11 +227,15 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         var arranged: [NSView] = [title, headerRow]
         var stepsBoxRef: NSView?
         if let steps {
-            let stepRows = steps.map(makeStepRow)
-            let stepsStack = NSStackView(views: stepRows)
+            let section = NSTextField(labelWithString: L10n.finalizeSectionTitle)
+            section.font = .systemFont(ofSize: 10, weight: .semibold)
+            section.textColor = .tertiaryLabelColor
+            let stepRows: [NSView] = steps.map { makeStepRow($0) }
+            let stepsStack = NSStackView(views: [section] + stepRows)
             stepsStack.orientation = .vertical
             stepsStack.alignment = .leading
             stepsStack.spacing = 6
+            stepsStack.setCustomSpacing(8, after: section)
             stepsStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
             stepsStack.translatesAutoresizingMaskIntoConstraints = false
             let stepsBox = ChromeBox(
@@ -174,6 +255,17 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             arranged.append(stepsBox)
             stepsBoxRef = stepsBox
         }
+
+        completionStackView.apply(completionStack)
+        if !(completionStack?.sidecars.isEmpty ?? true) {
+            arranged.append(completionStackView)
+        }
+
+        deliveryRecipesView.apply(input: task.destinationFileURL)
+        if !deliveryRecipesView.isHidden {
+            arranged.append(deliveryRecipesView)
+        }
+
         arranged.append(contentsOf: [meta, actions])
 
         let stack = NSStackView(views: arranged)
@@ -193,6 +285,12 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         ])
         if let stepsBoxRef {
             stepsBoxRef.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        if !completionStackView.isHidden {
+            completionStackView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        if !deliveryRecipesView.isHidden {
+            deliveryRecipesView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
     }
 
@@ -254,6 +352,10 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     @objc private func revealClicked() {
         guard let url = task.destinationFileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    @objc private func shareClicked(_ sender: NSButton) {
+        _ = fileSharePresenter.present(fileURL: task.destinationFileURL, from: sender)
     }
 
     @objc private func closeClicked() {

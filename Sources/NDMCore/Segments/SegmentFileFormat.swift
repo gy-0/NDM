@@ -77,6 +77,40 @@ public enum SegmentFileFormat {
     /// Minimum remaining bytes worth spinning a new connection (behavioural stand-in for G01).
     public static let minSegmentBytes: Int64 = 256 * 1024
 
+    /// Decide whether a static Range round has entered its straggler tail.
+    ///
+    /// The original engine keeps recycling idle sockets into unfinished ranges.
+    /// URLSession cannot safely shorten an in-flight response, so the clean-room
+    /// engine rebalances in bounded rounds instead: once a quarter of the worker
+    /// pool has gone idle, cancel the remaining requests, preserve every written
+    /// prefix, split the holes again, and refill the pool. The byte guards avoid
+    /// spending more time reconnecting than downloading near the true end.
+    public static func shouldRebalanceTail(
+        targetConnections: Int,
+        activeConnections: Int,
+        remainingBytesBySegment: [Int64]
+    ) -> Bool {
+        let target = max(1, min(targetConnections, 32))
+        guard target > 1,
+              activeConnections > 0,
+              activeConnections < target else {
+            return false
+        }
+
+        let positive = remainingBytesBySegment.filter { $0 > 0 }
+        guard !positive.isEmpty else { return false }
+
+        // A 32-worker round rebalances at 24 active workers. Smaller pools use
+        // the same ratio, with at least one live worker left to steal from.
+        let idleThreshold = max(1, target * 3 / 4)
+        guard activeConnections <= idleThreshold else { return false }
+
+        let totalRemaining = positive.reduce(Int64(0), +)
+        let largestRemaining = positive.max() ?? 0
+        return totalRemaining >= minSegmentBytes * Int64(target)
+            && largestRemaining >= minSegmentBytes * 2
+    }
+
     /// Split total file size into `connections` contiguous inclusive ranges (original starts with 1 then grows).
     public static func planEqualSegments(totalBytes: Int64, connections: Int) -> [SegmentRecord] {
         guard totalBytes > 0 else { return [] }

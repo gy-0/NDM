@@ -13,7 +13,7 @@
 
 | ID | 缺口 | 建议方法 |
 |----|------|----------|
-| G01 | 动态分段：何时开新连接、最小段长、合并策略 | 对照多份 `LogFile.txt` 时间线；或 lldb 断点 SegmentManager |
+| G01 | 动态分段的精确最小段长与退避阈值 | **调度形态已关闭**：空闲 socket 会持续拆取未完成尾部，段数可超过 32，并在失败时 rollback + merge；仅常量阈值仍待 lldb |
 | G02 | ~~`segments.bin` state 枚举~~ | **已关闭**：第二字段是 `segmentId`（`seg.xN`），不是状态 |
 | G03 | WebSocket **服务端**与 BetterNDM 联调（握手 + `waiting`/`nowaiting`） | 用 BetterNDM 连原版/我们的实现各一次 |
 | G04 | ~~AES256 密钥与 `encryptString`~~ | **已关闭（r2）**：密钥 `SG2921` 零填充 32B，AES-256-CBC，IV=0，PKCS7，Base64 → 见 `13_CRYPTO_AES.md` |

@@ -2,6 +2,31 @@ import XCTest
 @testable import NDMCore
 
 final class SegmentDynamicPlanTests: XCTestCase {
+    func testTailRebalanceWaitsForMeaningfulWorkerDeficitAndBytes() {
+        let oneMiB = Int64(1024 * 1024)
+
+        XCTAssertFalse(SegmentFileFormat.shouldRebalanceTail(
+            targetConnections: 32,
+            activeConnections: 31,
+            remainingBytesBySegment: Array(repeating: oneMiB, count: 31)
+        ))
+        XCTAssertTrue(SegmentFileFormat.shouldRebalanceTail(
+            targetConnections: 32,
+            activeConnections: 24,
+            remainingBytesBySegment: Array(repeating: oneMiB, count: 24)
+        ))
+        XCTAssertFalse(SegmentFileFormat.shouldRebalanceTail(
+            targetConnections: 32,
+            activeConnections: 24,
+            remainingBytesBySegment: Array(repeating: 128 * 1024, count: 24)
+        ))
+        XCTAssertFalse(SegmentFileFormat.shouldRebalanceTail(
+            targetConnections: 1,
+            activeConnections: 0,
+            remainingBytesBySegment: [oneMiB]
+        ))
+    }
+
     func test4125ObservedPrefixProducesExactFixtureBoundary() {
         let total: Int64 = 18_207_337
         let segs = SegmentFileFormat.planDynamicInitial(

@@ -15,6 +15,12 @@ final class DiagnosticClassifierTests: XCTestCase {
             DownloadDiagnostic.classify(EngineError.mergeFailed("boom")),
             .mergeFailed(detail: "boom")
         )
+        XCTAssertEqual(
+            DownloadDiagnostic.classify(
+                EngineError.insufficientStorage(requiredBytes: 2_000, availableBytes: 1_000)
+            ),
+            .diskFull
+        )
     }
 
     func testFTPErrorClassification() {

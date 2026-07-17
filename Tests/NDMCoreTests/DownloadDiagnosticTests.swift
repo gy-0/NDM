@@ -127,6 +127,31 @@ final class DownloadDiagnosticTests: XCTestCase {
         XCTAssertTrue(row.canRenew)
     }
 
+    func testBrowserRescueURLOnlyAppearsForRecoverableDirectFailures() {
+        var task = DownloadTask(
+            url: "https://cdn.example.com/file.zip?expired",
+            linkType: "normal",
+            status: .error,
+            pageURL: "https://example.com/download/42",
+            errorText: DownloadDiagnostic.linkExpired(status: 403).storageString
+        )
+        XCTAssertEqual(task.browserRescueURL?.absoluteString, "https://example.com/download/42")
+
+        task.errorText = DownloadDiagnostic.signInRequired(status: 401).storageString
+        XCTAssertNotNil(task.browserRescueURL)
+
+        task.errorText = DownloadDiagnostic.diskFull.storageString
+        XCTAssertNil(task.browserRescueURL)
+
+        task.errorText = DownloadDiagnostic.linkExpired(status: 403).storageString
+        task.linkType = "ytdlp"
+        XCTAssertNil(task.browserRescueURL)
+
+        task.linkType = "normal"
+        task.status = .complete
+        XCTAssertNil(task.browserRescueURL)
+    }
+
     func testPresentationPassesThroughLegacyError() {
         let task = DownloadTask(url: "https://a/x", status: .error, errorText: "410 Gone")
         let row = TaskRowPresentation.make(task: task, progress: nil)

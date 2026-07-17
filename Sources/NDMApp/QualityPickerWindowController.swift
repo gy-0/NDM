@@ -151,10 +151,6 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
             optionsStack.addArrangedSubview(row)
         }
 
-        let note = NSTextField(wrappingLabelWithString: L10n.qualityOutputNote)
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = .secondaryLabelColor
-
         let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .large
@@ -172,12 +168,13 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
         actions.orientation = .horizontal
         actions.spacing = 10
 
-        let stack = NSStackView(views: [titleLabel, subLabel, optionsStack, note, actions])
+        let stack = NSStackView(views: [titleLabel, subLabel, optionsStack, actions])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.setCustomSpacing(6, after: titleLabel)
         stack.setCustomSpacing(16, after: subLabel)
+        stack.setCustomSpacing(14, after: optionsStack)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -188,7 +185,6 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
             titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             optionsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            note.widthAnchor.constraint(equalTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         applySelection(0)
@@ -205,6 +201,7 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
 
         let button = NSButton(radioButtonWithTitle: "", target: self, action: #selector(optionClicked(_:)))
         button.tag = index
+        button.imagePosition = .imageLeft
         let text = NSMutableAttributedString(
             string: title,
             attributes: [
@@ -222,13 +219,26 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
             ))
         }
         button.attributedTitle = text
+        // Quiet Finder qopt: soft surface, accent ring when selected (applied in applySelection).
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 9
+        button.layer?.borderWidth = 1
         return button
     }
 
     private func applySelection(_ index: Int) {
         selectedIndex = index
         for button in optionButtons {
-            button.state = button.tag == index ? .on : .off
+            let on = button.tag == index
+            button.state = on ? .on : .off
+            button.layer?.backgroundColor = (on
+                ? NDMChrome.accent.withAlphaComponent(0.10)
+                : NDMChrome.dockFill
+            ).cgColor
+            button.layer?.borderColor = (on
+                ? NDMChrome.accent.withAlphaComponent(0.55)
+                : NDMChrome.hairline
+            ).cgColor
         }
         downloadButton.title = L10n.downloadQuality(options[index].label)
     }

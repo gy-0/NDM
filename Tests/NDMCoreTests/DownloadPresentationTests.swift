@@ -61,9 +61,12 @@ final class DownloadPresentationTests: XCTestCase {
 
     func testSidebarFilterMatchesCategoriesAndRetryFlags() {
         let video = DownloadTask(url: "https://a/v.mp4", filename: "v.mp4", category: .video, status: .complete)
+        let uncategorized = DownloadTask(url: "https://a/file", filename: "file", category: .misc, status: .complete)
         let failed = DownloadTask(url: "https://a/x", status: .error, errorText: "410 Gone")
         XCTAssertTrue(SidebarFilter.video.matches(video))
         XCTAssertFalse(SidebarFilter.document.matches(video))
+        XCTAssertTrue(SidebarFilter.other.matches(uncategorized))
+        XCTAssertFalse(SidebarFilter.other.matches(video))
         XCTAssertEqual(SidebarFilter.video.section, "Type")
         XCTAssertEqual(SidebarFilter.all.section, "Status")
 
@@ -71,6 +74,18 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertTrue(row.canRetry)
         XCTAssertTrue(row.canRenew)
         XCTAssertEqual(row.statusTitle, "Failed")
+
+        let done = TaskRowPresentation.make(task: video, progress: nil)
+        XCTAssertTrue(done.canRetry)
+        XCTAssertFalse(done.canOpen) // no folderPath → Open stays off; Retry still on
+        let doneWithPath = DownloadTask(
+            url: "https://a/v.mp4",
+            filename: "v.mp4",
+            category: .video,
+            status: .complete,
+            folderPath: "/tmp"
+        )
+        XCTAssertTrue(TaskRowPresentation.make(task: doneWithPath, progress: nil).canOpen)
     }
 
     func testTaskRowPresentationFormatsLiveProgress() {
@@ -100,6 +115,34 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertNotEqual(row.etaText, "—")
     }
 
+    func testMediaJourneyKeepsTruthfulBytesAndOneSemanticProgress() {
+        defer { L10n.apply(.system) }
+        L10n.apply(.english)
+        let task = DownloadTask(
+            url: "https://www.youtube.com/watch?v=example",
+            filename: "film.mp4",
+            linkType: "ytdlp",
+            fileSize: 1_000,
+            status: .downloading
+        )
+        let progress = DownloadProgress(
+            taskID: 2,
+            totalBytes: 1_000,
+            completedBytes: 1_000,
+            bytesPerSecond: 0,
+            status: .downloading,
+            phase: .merging,
+            journeyFraction: 0.972
+        )
+
+        XCTAssertNil(progress.remainingTime)
+        let row = TaskRowPresentation.make(task: task, progress: progress)
+        XCTAssertEqual(row.progressFraction, 0.972, accuracy: 0.000_001)
+        XCTAssertEqual(row.progressText, "97%")
+        XCTAssertTrue(row.statusDetail.contains(L10n.ytdlpMergingShort))
+        XCTAssertEqual(progress.completedBytes, progress.totalBytes)
+    }
+
     func testTaskRowPresentationCompletedPrimaryActionIsOpenWhenDestinationKnown() {
         // Presentation must not probe the filesystem; destination path is enough.
         let task = DownloadTask(
@@ -113,6 +156,7 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertEqual(row.primaryAction, .open)
         XCTAssertTrue(row.canOpen)
         XCTAssertTrue(row.canShowInFinder)
+        XCTAssertTrue(row.canShowProgress, "completed result pages must remain reopenable")
         XCTAssertTrue(row.isComplete)
         XCTAssertFalse(row.showsProgressBar)
         XCTAssertEqual(row.progressText, "Completed")
