@@ -1,6 +1,21 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Cover readability overlay for Quiet Finder rows.
+///
+/// Default is the flatter kill-ai-slop treatment. Flip to `.legacyMultiStop`
+/// (or revert the dedicated “row scrim” commit) if the new look is worse.
+enum QuietFinderRowScrimStyle {
+    case flat
+    case legacyMultiStop
+}
+
+enum QuietFinderRowScrim {
+    /// Flip to `.legacyMultiStop` to A/B the old multi-stop veil (or revert the
+    /// following “flatten row scrim” commit). Default stays legacy until that commit.
+    static var style: QuietFinderRowScrimStyle = .legacyMultiStop
+}
+
 /// Rounded accent selection — Quiet Finder list / sidebar (Design Suite `.row.on` / `.nav.on`).
 ///
 /// With `selectionHighlightStyle = .none`, AppKit often flips `isSelected` without
@@ -57,9 +72,6 @@ final class QuietFinderRowView: NSTableRowView {
         if let cover = coverImage, artworkStyle == .fullBleed {
             NSGraphicsContext.saveGraphicsState()
             path.addClip()
-            // Keep the photography, then reserve a predictable neutral reading
-            // lane for metadata. This is the same scrim/material pattern used by
-            // media cards: label colors stay system-consistent in every row.
             let drawRect = Self.aspectFillRect(for: cover.size, in: inset)
             cover.draw(
                 in: drawRect,
@@ -69,13 +81,22 @@ final class QuietFinderRowView: NSTableRowView {
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high]
             )
-            let readingLane = NSGradient(
-                colorsAndLocations:
-                    (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.94 : 0.97), 0.0),
-                    (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.87 : 0.92), 0.58),
-                    (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.68 : 0.76), 1.0)
-            )
-            readingLane?.draw(in: path, angle: 0)
+            switch QuietFinderRowScrim.style {
+            case .flat:
+                // One flat reading wash — text stays readable without a multi-stop veil.
+                NDMChrome.contentSurface
+                    .withAlphaComponent(paintsSelected ? 0.88 : 0.92)
+                    .setFill()
+                path.fill()
+            case .legacyMultiStop:
+                let readingLane = NSGradient(
+                    colorsAndLocations:
+                        (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.94 : 0.97), 0.0),
+                        (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.87 : 0.92), 0.58),
+                        (NDMChrome.contentSurface.withAlphaComponent(paintsSelected ? 0.68 : 0.76), 1.0)
+                )
+                readingLane?.draw(in: path, angle: 0)
+            }
             if paintsSelected {
                 NDMChrome.accent.withAlphaComponent(0.22).setStroke()
                 path.lineWidth = 1.5
@@ -100,9 +121,7 @@ final class QuietFinderRowView: NSTableRowView {
                 path.fill()
             }
 
-            // A real Quick Look preview or native file icon becomes atmosphere,
-            // not a literal second thumbnail. It is intentionally oversized,
-            // softly clipped by the row, and kept away from the filename column.
+            // Oversized trailing preview — kept soft and away from the filename.
             let artWidth = min(max(inset.width * 0.36, 110), 210)
             let artBounds = NSRect(
                 x: inset.maxX - artWidth + 14,
@@ -120,14 +139,27 @@ final class QuietFinderRowView: NSTableRowView {
                 hints: [.interpolation: NSImageInterpolation.high]
             )
 
-            // Fade the preview before it reaches the primary text block.
-            let readabilityFade = NSGradient(
-                colorsAndLocations:
-                    (NDMChrome.contentSurface, 0.0),
-                    (NDMChrome.contentSurface.withAlphaComponent(0.76), 0.42),
-                    (NSColor.clear, 1.0)
-            )
-            readabilityFade?.draw(in: inset, angle: 0)
+            switch QuietFinderRowScrim.style {
+            case .flat:
+                // Hard stop on the left reading lane; no gradient fade.
+                let laneWidth = max(inset.width * 0.58, 180)
+                let lane = NSRect(
+                    x: inset.minX,
+                    y: inset.minY,
+                    width: min(laneWidth, inset.width),
+                    height: inset.height
+                )
+                NDMChrome.contentSurface.setFill()
+                lane.fill()
+            case .legacyMultiStop:
+                let readabilityFade = NSGradient(
+                    colorsAndLocations:
+                        (NDMChrome.contentSurface, 0.0),
+                        (NDMChrome.contentSurface.withAlphaComponent(0.76), 0.42),
+                        (NSColor.clear, 1.0)
+                )
+                readabilityFade?.draw(in: inset, angle: 0)
+            }
 
             if paintsSelected {
                 NDMChrome.accent.withAlphaComponent(0.18).setStroke()
@@ -270,7 +302,7 @@ final class FileGlyphView: NSView {
         plate.cornerRadius = 9 * scale
     }
 
-    func apply(filename: String, cover: NSImage?, categoryWash: NSColor?) {
+    func apply(filename: String, cover: NSImage?) {
         if let cover {
             imageView.image = cover
             imageView.isHidden = false
@@ -283,72 +315,46 @@ final class FileGlyphView: NSView {
         symbolView.isHidden = false
         plate.isHidden = false
         let style = Self.style(for: filename)
-        plate.fill = (categoryWash ?? NDMChrome.track).withAlphaComponent(0.55)
+        plate.fill = NDMChrome.track.withAlphaComponent(0.55)
         plate.borderColor = NDMChrome.hairline
         symbolView.image = NDMChrome.symbol(style.symbol, pointSize: 15, weight: .semibold)
-        symbolView.contentTintColor = style.tint
+        // One accent for media; everything else stays secondary — no rainbow plates.
+        symbolView.contentTintColor = style.usesAccent ? NDMChrome.accent : .secondaryLabelColor
     }
 
     private struct Style {
         var symbol: String
-        var tint: NSColor
+        var usesAccent: Bool
     }
 
     private static func style(for filename: String) -> Style {
         let ext = (filename as NSString).pathExtension.lowercased()
         if ["mp4", "mkv", "mov", "m4v", "webm", "avi", "ts"].contains(ext) {
-            return Style(symbol: "film", tint: NDMChrome.accent)
+            return Style(symbol: "film", usesAccent: true)
         }
         if ["mp3", "m4a", "flac", "wav", "aac", "ogg"].contains(ext) {
-            return Style(symbol: "waveform", tint: .systemPink)
+            return Style(symbol: "waveform", usesAccent: false)
         }
         if ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains(ext) {
-            return Style(symbol: "photo", tint: .systemTeal)
+            return Style(symbol: "photo", usesAccent: false)
         }
         if ["zip", "rar", "7z", "gz", "tar"].contains(ext) {
-            return Style(symbol: "archivebox", tint: .systemOrange)
+            return Style(symbol: "archivebox", usesAccent: false)
         }
         if ["dmg", "iso"].contains(ext) {
-            return Style(symbol: "externaldrive.fill", tint: .systemIndigo)
+            return Style(symbol: "externaldrive.fill", usesAccent: false)
         }
         if ["pdf", "doc", "docx", "txt", "rtf", "md"].contains(ext) {
-            return Style(symbol: "doc.text", tint: .systemBlue)
+            return Style(symbol: "doc.text", usesAccent: false)
         }
         if ["pkg", "app", "exe", "msi", "apk"].contains(ext) {
-            return Style(symbol: "shippingbox.fill", tint: .systemPurple)
+            return Style(symbol: "shippingbox.fill", usesAccent: false)
         }
-        if let type = UTType(filenameExtension: ext) {
-            _ = type
-        }
-        return Style(symbol: "arrow.down.doc", tint: .secondaryLabelColor)
+        return Style(symbol: "arrow.down.doc", usesAccent: false)
     }
 }
 
-@MainActor
+/// Former per-extension rainbow row wash — kept as a no-op so older call sites compile.
 enum FileCategoryWash {
-    static func color(forFilename filename: String) -> NSColor? {
-        let ext = (filename as NSString).pathExtension.lowercased()
-        if ["mp4", "mkv", "mov", "m4v", "webm", "avi", "ts"].contains(ext) {
-            return NDMChrome.accent
-        }
-        if ["mp3", "m4a", "flac", "wav", "aac", "ogg"].contains(ext) {
-            return .systemPink
-        }
-        if ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains(ext) {
-            return .systemTeal
-        }
-        if ["zip", "rar", "7z", "gz", "tar"].contains(ext) {
-            return .systemOrange
-        }
-        if ["dmg", "iso"].contains(ext) {
-            return .systemIndigo
-        }
-        if ["pkg", "app", "exe", "msi", "apk"].contains(ext) {
-            return .systemPurple
-        }
-        if ["pdf", "doc", "docx", "txt", "rtf", "md"].contains(ext) {
-            return .systemBlue
-        }
-        return nil
-    }
+    static func color(forFilename _: String) -> NSColor? { nil }
 }
