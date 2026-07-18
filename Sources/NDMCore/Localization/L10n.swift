@@ -63,6 +63,7 @@ public enum L10n: Sendable {
     public static var close: String { t("Close", "关闭") }
     public static var save: String { t("Save", "保存") }
     public static var open: String { t("Open", "打开") }
+    public static var quickLook: String { t("Quick Look", "快速查看") }
     public static var start: String { t("Start", "开始") }
     public static var pause: String { t("Pause", "暂停") }
     public static var resume: String { t("Resume", "继续") }
@@ -284,8 +285,8 @@ public enum L10n: Sendable {
     }
     public static var ytdlpCollectionQueueHint: String {
         t(
-            "Collection items are added as separate downloads and run quietly in order.",
-            "合集内容会作为独立任务加入，并按顺序安静下载。"
+            "Collection items are added as separate downloads and run in order.",
+            "合集内容会作为独立任务加入，并按顺序下载。"
         )
     }
     public static func downloadCollection(_ count: Int, quality: String) -> String {
@@ -414,6 +415,42 @@ public enum L10n: Sendable {
     public static var ytdlpWorking: String {
         t("Preparing video options…", "正在准备视频选项…")
     }
+    public static var mediaPreparationTitle: String {
+        t("Preparing your video", "正在准备视频")
+    }
+    public static var mediaPreparationResolvingTitle: String {
+        t("Understanding link", "正在识别链接")
+    }
+    public static var mediaPreparationResolvingBody: String {
+        t(
+            "Following the shared link to its original page.",
+            "正在从分享链接找到对应的原始页面。"
+        )
+    }
+    public static var mediaPreparationReadingTitle: String {
+        t("Reading media", "正在读取媒体")
+    }
+    public static var mediaPreparationReadingBody: String {
+        t(
+            "Checking the title, available quality, format, and subtitles.",
+            "正在检查标题、可用画质、格式与字幕。"
+        )
+    }
+    public static var mediaPreparationOptionsTitle: String {
+        t("Preparing choices", "正在准备选项")
+    }
+    public static var mediaPreparationOptionsBody: String {
+        t(
+            "Turning the available streams into clear download choices.",
+            "正在把可用媒体整理成清晰的下载选项。"
+        )
+    }
+    public static var mediaPreparationNote: String {
+        t(
+            "Some sites take a little longer to respond.",
+            "部分网站需要更长时间才能响应。"
+        )
+    }
     public static var mediaAccessTitle: String {
         t("Continue from your browser", "从浏览器继续")
     }
@@ -425,8 +462,65 @@ public enum L10n: Sendable {
     }
     public static var mediaAccessHint: String {
         t(
-            "Open the page in that browser once before continuing. NDM never asks for your account password.",
-            "继续前请先在该浏览器中打开一次页面。NDM 不会要求你的账号密码。"
+            "NDM uses only this site's existing browser access. Your password is never requested.",
+            "NDM 只使用这个网站已有的浏览器访问状态，绝不会要求你的账号密码。"
+        )
+    }
+    public static var mediaAccessBrowserLabel: String {
+        t("Browser", "浏览器")
+    }
+    public static var mediaAccessOpenStep: String {
+        t("Open the original page", "打开原始页面")
+    }
+    public static var mediaAccessOpenStepBody: String {
+        t(
+            "Sign in only if the site asks, then confirm the video plays.",
+            "仅在网站要求时登录，并确认视频能够正常播放。"
+        )
+    }
+    public static var mediaAccessReturnStep: String {
+        t("Return to NDM", "返回 NDM")
+    }
+    public static var mediaAccessReturnStepBody: String {
+        t(
+            "Continue here and NDM will prepare the video with that access.",
+            "回到这里继续，NDM 会使用这次访问状态准备视频。"
+        )
+    }
+    public static func mediaAccessOpenInBrowser(_ browser: String) -> String {
+        t("Open in \(browser)", "在 \(browser) 中打开")
+    }
+    public static var mediaAccessAlreadyOpen: String {
+        t("Already open — Continue", "已经打开，继续")
+    }
+    public static var mediaAccessOpenAgain: String {
+        t("Open again", "再次打开")
+    }
+    public static func mediaAccessContinueWith(_ browser: String) -> String {
+        t("Continue with \(browser)", "使用 \(browser) 继续")
+    }
+    public static func mediaAccessWaitingForReturn(_ browser: String) -> String {
+        t(
+            "When the video plays in \(browser), return to NDM.",
+            "视频在 \(browser) 中能够播放后，请返回 NDM。"
+        )
+    }
+    public static func mediaAccessReturnedHint(_ browser: String) -> String {
+        t(
+            "Welcome back — ready to continue from \(browser).",
+            "欢迎回来，已准备好从 \(browser) 继续。"
+        )
+    }
+    public static var mediaAccessRetryHint: String {
+        t(
+            "That browser couldn't provide usable access. Confirm the page plays there, or choose another browser.",
+            "刚才的浏览器未能提供可用访问状态。请确认页面能够播放，或换一个浏览器。"
+        )
+    }
+    public static var mediaAccessOpenFailed: String {
+        t(
+            "NDM couldn't open that browser. Choose another one or open the page yourself.",
+            "NDM 未能打开这个浏览器。请选择其他浏览器，或自行打开该页面。"
         )
     }
     public static var mediaAccessUseBrowser: String {
@@ -599,6 +693,14 @@ public enum L10n: Sendable {
         case .douyin: sourceName = t("Douyin", "抖音")
         case .xiaohongshu: sourceName = t("Xiaohongshu", "小红书")
         case .tiktok: sourceName = "TikTok"
+        case .kuaishou: sourceName = t("Kuaishou", "快手")
+        case .weibo: sourceName = t("Weibo", "微博")
+        case .instagram: sourceName = "Instagram"
+        case .x: sourceName = "X"
+        case .facebook: sourceName = "Facebook"
+        case .vimeo: sourceName = "Vimeo"
+        case .twitch: sourceName = "Twitch"
+        case .dailymotion: sourceName = "Dailymotion"
         case .web: sourceName = ""
         }
         return wasExtractedFromText
@@ -616,7 +718,7 @@ public enum L10n: Sendable {
 
     public static var proWindowTitle: String { t("Upgrade", "升级") }
     public static var proHeadline: String {
-        t("Faster. Cleaner. Ready to share.", "更快、更省心，下完就能用")
+        t("More connections, cleaner finished files", "更多连接，更干净的成品文件")
     }
     public static var proSubline: String {
         t(
@@ -626,7 +728,7 @@ public enum L10n: Sendable {
     }
     public static var proFreeName: String { t("Free", "免费版") }
     public static var proFreePrice: String { t("¥0", "¥0") }
-    public static var proFreeTagline: String { t("Free forever · genuinely usable", "永久免费 · 真正可用") }
+    public static var proFreeTagline: String { t("Free · up to 4 connections", "免费 · 最高 4 连接") }
     public static var proFreeFeatures: String {
         t(
             "Multi-connection downloads (up to 4)\nResume · crash recovery\nBrowser takeover · queue · speed limit\nVideo sniffing + MP4 output",
@@ -715,8 +817,8 @@ public enum L10n: Sendable {
             )
         case .collection:
             return t(
-                "The app keeps the original order, downloads each item quietly, and resumes the collection after a restart.",
-                "按原顺序安静排队，单项失败不拖累整组，软件重启后也会继续这个合集。"
+                "Keeps the original order, continues after a restart, and one failed item does not stop the rest.",
+                "按原顺序排队；单项失败不拖累整组；重启后继续。"
             )
         case .subtitles:
             return t(
@@ -746,7 +848,7 @@ public enum L10n: Sendable {
             "这次还会同时解锁：\(summary)"
         )
     }
-    public static var proBenefitsTitle: String { t("Everything Pro keeps quiet", "其余复杂工作，也由 Pro 安静处理") }
+    public static var proBenefitsTitle: String { t("What Pro adds", "Pro 额外提供") }
     public static var proBenefitSpeedTitle: String { t("Up to 32 smart connections", "最高 32 条智能连接") }
     public static var proBenefitSpeedBody: String {
         t("Scale up when it helps; rebalance the slow tail before it stalls.", "有收益才升档，末尾慢分段自动重分配。")
@@ -757,7 +859,7 @@ public enum L10n: Sendable {
     }
     public static var proBenefitMediaTitle: String { t("4K, collections, and batch work", "4K、合集与批量任务") }
     public static var proBenefitMediaBody: String {
-        t("Keep high quality and let long queues finish without babysitting.", "保留高画质，长队列也不需要守着。")
+        t("Keep high quality; long queues keep running after a restart.", "保留高画质；长队列重启后继续跑。")
     }
     public static var proPurchaseCTA: String { t("Unlock Pro — one-time purchase", "一次买断，解锁 Pro") }
     public static var proPurchaseUnavailableCTA: String { t("Storefront coming soon", "购买通道即将开放") }
@@ -772,12 +874,12 @@ public enum L10n: Sendable {
 
     public static var onboardingWindowTitle: String { t("Welcome", "欢迎") }
     public static var onboardingStep1Title: String {
-        t("Turn any download clue into a usable file", "把任何下载线索，变成可用文件")
+        t("Paste a link or share text", "粘贴链接或分享口令")
     }
     public static var onboardingStep1Body: String {
         t(
-            "Paste a direct link, a video page, or the whole share message. NDM understands it and quietly prepares the result.",
-            "直链、视频页面，或者整段分享口令，直接粘贴进来。NDM 会自己读懂，再安静地把结果准备好。"
+            "Direct links, video pages, or a full share message. NDM resolves the source and prepares the download.",
+            "直链、视频页面，或整段分享口令。NDM 解析来源并准备下载。"
         )
     }
     public static var onboardingSources: String {
@@ -965,6 +1067,11 @@ public enum L10n: Sendable {
     public static var deliveryOriginalShort: String { t("Original", "原画") }
     public static var deliveryMobileShort: String { t("Mobile", "手机") }
     public static var deliveryAudioShort: String { t("Audio", "音频") }
+    public static var extractAudio: String { t("Extract Audio", "提取音频") }
+    public static var extractingAudio: String { t("Extracting Audio…", "正在提取音频…") }
+    public static var showAudioInFinder: String { t("Show Audio in Finder", "在访达中显示音频") }
+    public static var extractAudioAgain: String { t("Extract Audio Again", "再次提取音频") }
+    public static var audioExtractionReady: String { t("Audio copy ready", "音频副本已就绪") }
     public static var deliveryWeChatShort: String { t("WeChat", "微信") }
     public static var deliveryOriginalDescription: String {
         t("Keep the downloaded quality and every original track.", "保留下载时的画质、容器和全部原始音轨。")

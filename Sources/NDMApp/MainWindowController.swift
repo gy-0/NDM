@@ -1,11 +1,20 @@
 import AppKit
+import QuickLookUI
 import UniformTypeIdentifiers
 import NDMCore
 import NDMEngine
 
 @MainActor
-final class MainWindowController: NSWindowController, NSToolbarDelegate {
+private final class MediaPreparationCancellation {
+    private(set) var isCancelled = false
+    func cancel() { isCancelled = true }
+}
+
+@MainActor
+final class MainWindowController: NSWindowController, NSToolbarDelegate,
+    @preconcurrency QLPreviewPanelDataSource, @preconcurrency QLPreviewPanelDelegate {
     private let manager: DownloadManager
+    private let siteCompatibilityUpdater: SiteCompatibilityUpdater?
 
     private var allTasks: [DownloadTask] = []
     private var progressByID: [Int64: DownloadProgress] = [:]
@@ -25,6 +34,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private var propsWindow: TaskPropertiesWindowController?
     private var browsersWindow: BrowsersWindowController?
     private var refreshTask: Task<Void, Never>?
+    private var previewedFileURL: URL?
 
     private var startToolbarItem: NSToolbarItem?
     private var pauseToolbarItem: NSToolbarItem?
@@ -32,21 +42,47 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let contentToolbar = DesignSuiteToolbarView()
     private var clipboardOffer: SharedLinkResolution?
 
-    init(manager: DownloadManager) {
+    init(
+        manager: DownloadManager,
+        siteCompatibilityUpdater: SiteCompatibilityUpdater? = nil
+    ) {
         self.manager = manager
+        self.siteCompatibilityUpdater = siteCompatibilityUpdater
         let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1512, height: 982)
-        let initialSize = QAPreviewOverrides.windowSize ?? NSSize(
-            width: min(1440, max(1080, visible.width - 32)),
-            height: min(920, max(700, visible.height - 32))
+        // AppKit measures windows in logical points, not Retina backing pixels.
+        // 1440 × 960 keeps all three columns comfortably above their minimum
+        // thickness (sidebar 215 + list 420 + inspector 360 = 995pt) on a
+        // 1728 × 1117-class desktop while still leaving room for the window
+        // boundary. The floor below matches `minSize` so the launch frame is
+        // never smaller than what the sidebar needs to render fully.
+        let preferredFrameSize = QAPreviewOverrides.windowSize
+            ?? NSSize(width: 1440, height: 960)
+        let initialFrameSize = NSSize(
+            width: min(preferredFrameSize.width, max(1060, visible.width - 32)),
+            height: min(preferredFrameSize.height, max(680, visible.height - 32))
+        )
+        let styleMask: NSWindow.StyleMask = [
+            .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
+        ]
+        let initialFrame = NSRect(origin: .zero, size: initialFrameSize)
+        let initialContentRect = NSWindow.contentRect(
+            forFrameRect: initialFrame,
+            styleMask: styleMask
         )
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: initialSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            contentRect: initialContentRect,
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
+        // Keep the requested number as the outer window size. Passing it
+        // directly as `contentRect` makes the actual window taller than asked.
+        window.setFrame(initialFrame, display: false)
         window.title = L10n.appName
-        window.minSize = NSSize(width: 960, height: 620)
+        // Must stay >= the sum of the split view's minimum thicknesses
+        // (215 + 420 + 360 = 995pt, plus divider hairlines) so the sidebar
+        // can never be squeezed to the point of clipping its content.
+        window.minSize = NSSize(width: 1060, height: 680)
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         NDMChrome.applyWindowChrome(window)
@@ -56,6 +92,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         // not as lonely icon-only NSToolbar items.
         installChromeRoot()
         configureSplit()
+        // `contentViewController` assignment above resizes the window to the
+        // Auto Layout content's *fitting* size (effectively its minimum,
+        // since nothing pins an ideal width/height) — which silently collapses
+        // the window to `minSize` before the split view even has its items.
+        // Reassert the intended launch frame now that chrome + split items
+        // exist, so the sidebar/list/inspector actually get their fair share
+        // instead of opening crushed to their floor. Re-center too, since
+        // restoring `initialFrame`'s zero origin would otherwise undo the
+        // earlier `center()` and pin the window to the bottom-left corner.
+        window.setFrame(initialFrame, display: false)
+        window.center()
         // Design Suite has no icon NSToolbar — only the in-content tool strip.
         window.toolbar = nil
         wireCallbacks()
@@ -200,7 +247,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         splitController.addSplitViewItem(sidebarItem)
         splitController.addSplitViewItem(listItem)
         splitController.addSplitViewItem(inspectorItem)
-        splitController.splitView.autosaveName = "NDM.MainSplit.v7"
+        // Bumped so a previously-narrowed sidebar divider (saved before the
+        // launch window was made larger) doesn't reappear crushed.
+        splitController.splitView.autosaveName = "NDM.MainSplit.v8"
     }
 
     private func configureToolbar() {
@@ -342,6 +391,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: - Data
 
     func reload() async {
+#if DEBUG
+        let signpostID = NDMPerformance.begin("StructuralReload")
+        defer { NDMPerformance.end("StructuralReload", id: signpostID) }
+#endif
         do {
             allTasks = try await manager.listTasks()
             if let clipboardOffer,
@@ -366,19 +419,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 }
             }
             progressByID = nextProgress
-            for task in allTasks {
-                let isVideo = task.category == .video
-                    || ["mp4", "mkv", "mov", "m4v", "webm"].contains(
-                        (task.filename as NSString).pathExtension.lowercased()
-                    )
-                if isVideo || task.status == .complete {
-                    CoverArtCache.shared.ensureCover(
-                        taskID: task.id,
-                        remoteURL: nil,
-                        localFile: task.destinationFileURL
-                    )
-                }
-            }
             sidebarController.update(counts: SidebarFilter.counts(in: allTasks), selected: selectedFilter)
             rebuildDisplayedRows(preserveSelection: true)
         } catch {
@@ -387,6 +427,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     private func rebuildDisplayedRows(preserveSelection: Bool) {
+#if DEBUG
+        let signpostID = NDMPerformance.begin("PresentationRebuild")
+        defer { NDMPerformance.end("PresentationRebuild", id: signpostID) }
+#endif
         let filtered = TaskPresentationFormatting.filteredTasks(
             allTasks,
             filter: selectedFilter,
@@ -517,6 +561,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc func menuStartSelected() { startSelected() }
     @objc func menuPauseSelected() { pauseSelected() }
+    @objc func menuFocusSearch() {
+        window?.makeKeyAndOrderFront(nil)
+        _ = contentToolbar.focusSearch()
+    }
     @objc func menuDeleteSelected() {
         guard let id = selectedTaskID else { return }
         deleteTask(id)
@@ -528,6 +576,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     @objc func menuShowPropertiesSelected() {
         guard let id = selectedTaskID else { return }
         showProperties(for: id)
+    }
+    @objc func menuQuickLookSelected() {
+        guard let id = selectedTaskID else { return }
+        toggleQuickLook(for: id)
     }
     @objc func menuCopyURLSelected() {
         guard let id = selectedTaskID,
@@ -544,6 +596,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     private func updateInspector() {
         inspectorController.update(row: selectedRow())
+        syncQuickLookWithSelectionIfVisible()
         if let inspectorItem = splitController.splitViewItems.last {
             let shouldCollapse = selectedTaskID == nil && displayedRows.isEmpty
             if inspectorItem.isCollapsed != shouldCollapse {
@@ -552,16 +605,44 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
     }
 
+    private func refreshLiveProgress() async {
+#if DEBUG
+        let signpostID = NDMPerformance.begin("LiveProgressRefresh")
+        defer { NDMPerformance.end("LiveProgressRefresh", id: signpostID) }
+#endif
+        let activeTasks = allTasks.filter {
+            $0.status == .downloading || $0.status == .waiting
+        }
+        guard !activeTasks.isEmpty else { return }
+
+        var nextProgress = progressByID
+        var needsStructuralReload = false
+        for task in activeTasks {
+            guard let progress = await manager.progress(taskID: task.id) else {
+                // A disappearing engine commonly means completion/error. Read the
+                // persisted snapshot once rather than rebuilding every tick.
+                needsStructuralReload = true
+                continue
+            }
+            nextProgress[task.id] = progress
+            if progress.status != task.status {
+                needsStructuralReload = true
+            }
+        }
+        if needsStructuralReload {
+            await reload()
+            return
+        }
+        guard nextProgress != progressByID else { return }
+        progressByID = nextProgress
+        rebuildDisplayedRows(preserveSelection: true)
+    }
+
     private func startAutoRefresh() {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {
-                let hasActive = self.allTasks.contains {
-                    $0.status == .downloading || $0.status == .waiting
-                }
-                if hasActive {
-                    await self.reload()
-                }
+                await self.refreshLiveProgress()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -625,7 +706,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private func openClipboardOffer() {
         guard let offer = clipboardOffer else { return }
         clearClipboardOffer()
-        presentNewDownload(initialURL: offer.urlString)
+        presentNewDownload(initialURL: offer.inputText)
     }
 
     private func focusExistingTask(_ taskID: Int64) {
@@ -671,7 +752,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     @objc private func openSettings() {
         Task {
             let settings = await manager.currentSettings()
-            let wc = SettingsWindowController(manager: manager, settings: settings)
+            let wc = SettingsWindowController(
+                manager: manager,
+                settings: settings,
+                siteCompatibilityUpdater: siteCompatibilityUpdater
+            )
             settingsWindow = wc
             wc.showWindow(nil)
         }
@@ -717,36 +802,64 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         readyChoice: NewDownloadWindowController.ReadyChoice? = nil
     ) {
         let parent = window
+        let cancellation = MediaPreparationCancellation()
         Task {
             var preparedResult = preflight
             var effectiveURL = preflight?.mediaURL ?? urlString
             var working: WorkingPanelController?
-            if preflight == nil,
-               ShortLinkExpander.shouldExpand(urlString),
-               !MediaLinkClassifier.looksLikeMediaPage(urlString) {
-                working = WorkingPanelController.show(L10n.shareLinkResolving, on: parent)
+            defer { working?.dismiss() }
+
+            if MediaPreparationPlan.shouldResolveSharedLink(
+                urlString,
+                hasPreparedMetadata: preflight != nil
+            ) {
+                working = WorkingPanelController.schedule(
+                    stage: .resolvingLink,
+                    on: parent,
+                    onCancel: { cancellation.cancel() }
+                )
                 let expanded = await ShortLinkExpander.expand(urlString)
+                guard !cancellation.isCancelled else { return }
                 effectiveURL = expanded.resolvedURL
             }
 
             var urlToAdd = effectiveURL
             var ltype = "normal"
             // Manually pasted master playlists get the same quality picker
-            // as browser captures; probe failures fall back to the plain path.
-            if effectiveURL.lowercased().contains(".m3u8"),
-               let probe = await HLSMasterProbe.probe(urlString: effectiveURL) {
-                working?.dismiss()
-                working = nil
-                switch await QualityPickerWindowController.choose(probe: probe, title: "") {
-                case .cancel:
-                    return
-                case .download(let option):
-                    if let resolved = HLSPlaylist.resolveURL(option.variant.uri, against: probe.masterURL) {
-                        urlToAdd = resolved.absoluteString
-                        ltype = "hls"
+            // as browser captures; a failed HLS probe falls back to media
+            // recognition (or the plain path), never to a raw page download.
+            var handledAsHLS = false
+            if effectiveURL.lowercased().contains(".m3u8") {
+                if let working {
+                    working.update(stage: .readingMedia)
+                } else {
+                    working = WorkingPanelController.schedule(
+                        stage: .readingMedia,
+                        on: parent,
+                        onCancel: { cancellation.cancel() }
+                    )
+                }
+                let hlsProbe = await HLSMasterProbe.probe(urlString: effectiveURL)
+                guard !cancellation.isCancelled else { return }
+                if let hlsProbe {
+                    working?.dismiss()
+                    working = nil
+                    handledAsHLS = true
+                    switch await QualityPickerWindowController.choose(probe: hlsProbe, title: "") {
+                    case .cancel:
+                        return
+                    case .download(let option):
+                        if let resolved = HLSPlaylist.resolveURL(
+                            option.variant.uri,
+                            against: hlsProbe.masterURL
+                        ) {
+                            urlToAdd = resolved.absoluteString
+                            ltype = "hls"
+                        }
                     }
                 }
-            } else if MediaLinkClassifier.looksLikeMediaPage(effectiveURL) {
+            }
+            if !handledAsHLS, MediaLinkClassifier.looksLikeMediaPage(effectiveURL) {
                 guard YtDlpTool.isAvailable else {
                     working?.dismiss()
                     showAlert(message: L10n.advancedVideo, detail: L10n.ytdlpMissingHint)
@@ -758,9 +871,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 var resolvedProbe: YtDlpProbe? = preflight?.probe
                 while resolvedProbe == nil {
                     if let working {
-                        working.update(message: L10n.ytdlpWorking)
+                        working.update(stage: .readingMedia)
                     } else {
-                        working = WorkingPanelController.show(L10n.ytdlpWorking, on: parent)
+                        working = WorkingPanelController.schedule(
+                            stage: .readingMedia,
+                            on: parent,
+                            onCancel: { cancellation.cancel() }
+                        )
                     }
                     do {
                         if cookieSource == nil {
@@ -774,12 +891,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                                 cookieSource: cookieSource
                             )
                         }
+                        guard !cancellation.isCancelled else { return }
+                        working?.update(stage: .preparingOptions)
                         working?.dismiss()
                         working = nil
                     } catch {
+                        guard !cancellation.isCancelled else { return }
                         working?.dismiss()
                         working = nil
-                        guard cookieSource == nil, YtDlpTool.requiresCookies(error: error) else {
+                        guard YtDlpTool.accessIssue(error: error) != nil else {
                             NSLog("Media recognition failed for %@: %@", effectiveURL, error.localizedDescription)
                             showAlert(
                                 message: L10n.mediaRecognitionFailed,
@@ -787,9 +907,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                             )
                             return
                         }
-                        guard let selected = await MediaAccessPrompt.choose(parentWindow: parent) else {
+                        let previousSource = cookieSource
+                        guard let selected = await MediaAccessPrompt.choose(
+                            pageURL: effectiveURL,
+                            parentWindow: parent,
+                            previousSource: previousSource,
+                            retrying: previousSource != nil
+                        ) else {
                             return
                         }
+                        guard !cancellation.isCancelled else { return }
                         cookieSource = selected
                     }
                 }
@@ -867,6 +994,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 }
             }
             working?.dismiss()
+            guard !cancellation.isCancelled else { return }
             do {
                 let task = try await manager.addURL(urlToAdd, ltype: ltype)
                 selectedTaskID = task.id
@@ -1001,6 +1129,83 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         NSWorkspace.shared.open(url)
     }
 
+    private func existingFileURL(for id: Int64) -> URL? {
+        guard let task = allTasks.first(where: { $0.id == id }),
+              let url = task.destinationFileURL,
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private func toggleQuickLook(for id: Int64) {
+        guard let url = existingFileURL(for: id) else {
+            if let missing = allTasks.first(where: { $0.id == id })?.destinationFileURL {
+                showAlert(message: L10n.fileNotFound, detail: missing.path)
+            }
+            return
+        }
+        guard let panel = QLPreviewPanel.shared() else { return }
+        if panel.isVisible, previewedFileURL == url {
+            panel.orderOut(nil)
+            return
+        }
+        previewedFileURL = url
+        panel.updateController()
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func syncQuickLookWithSelectionIfVisible() {
+        guard QLPreviewPanel.sharedPreviewPanelExists(),
+              let panel = QLPreviewPanel.shared(),
+              panel.isVisible else { return }
+        guard let id = selectedTaskID,
+              let url = existingFileURL(for: id) else {
+            previewedFileURL = nil
+            panel.orderOut(nil)
+            return
+        }
+        guard previewedFileURL != url else { return }
+        previewedFileURL = url
+        panel.reloadData()
+    }
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        previewedFileURL != nil
+    }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = self
+        panel.delegate = self
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        panel.delegate = nil
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewedFileURL == nil ? 0 : 1
+    }
+
+    func previewPanel(
+        _ panel: QLPreviewPanel!,
+        previewItemAt index: Int
+    ) -> (any QLPreviewItem)! {
+        previewedFileURL as NSURL?
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
+        guard event.type == .keyDown else { return false }
+        switch event.keyCode {
+        case 123, 126: // Left / Up
+            return listController.selectAdjacentRow(offset: -1)
+        case 124, 125: // Right / Down
+            return listController.selectAdjacentRow(offset: 1)
+        default:
+            return false
+        }
+    }
+
     private func revealTaskFile(_ id: Int64) {
         guard let task = allTasks.first(where: { $0.id == id }),
               let url = task.destinationFileURL else { return }
@@ -1063,6 +1268,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         updateInspector()
         updateToolbarEnablement()
         switch action {
+        case .quickLook:
+            toggleQuickLook(for: taskID)
         case .open:
             openTaskFile(taskID)
         case .reveal:
@@ -1153,6 +1360,7 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         view = ChromeBox(fill: NDMChrome.sidebarFill)
         // Plain (not sourceList) so Quiet Finder accent pills aren't fought by system chrome.
         tableView.style = .plain
+        tableView.floatsGroupRows = false
         tableView.headerView = nil
         tableView.rowHeight = 36
         tableView.allowsEmptySelection = false
@@ -1214,19 +1422,32 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
     }
 
     func update(counts: [SidebarFilter: Int], selected: SidebarFilter) {
-        let countsChanged = self.counts != counts
-        let selectionChanged = self.selected != selected
+        let previousCounts = self.counts
+        let previousSelected = self.selected
+        guard previousCounts != counts || previousSelected != selected else { return }
+
         self.counts = counts
         self.selected = selected
-        if tableView.numberOfRows != rows.count {
+        guard tableView.numberOfRows == rows.count else {
             tableView.reloadData()
-        } else if countsChanged || selectionChanged {
-            // In-place refresh — full reloadData steals the blue pill mid-click.
-            let all = IndexSet(integersIn: 0..<rows.count)
-            tableView.reloadData(forRowIndexes: all, columnIndexes: IndexSet(integer: 0))
-            syncSelectionAppearance()
-        } else {
-            syncSelectionAppearance()
+            applyTableSelection(to: selected)
+            return
+        }
+
+        var changedRows = IndexSet()
+        for (index, row) in rows.enumerated() {
+            guard case .filter(let filter) = row else { continue }
+            if previousCounts[filter] != counts[filter]
+                || filter == previousSelected
+                || filter == selected {
+                changedRows.insert(index)
+            }
+        }
+        if !changedRows.isEmpty {
+            tableView.reloadData(
+                forRowIndexes: changedRows,
+                columnIndexes: IndexSet(integer: 0)
+            )
         }
         applyTableSelection(to: selected)
     }
@@ -1244,8 +1465,14 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
     }
 
     private func syncSelectionAppearance() {
-        for row in 0..<rows.count {
-            guard let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
+        let visibleRows = tableView.rows(in: tableView.visibleRect)
+        guard visibleRows.location != NSNotFound else { return }
+        for row in visibleRows.location..<NSMaxRange(visibleRows) {
+            guard row < rows.count,
+                  let rowView = tableView.rowView(
+                    atRow: row,
+                    makeIfNecessary: false
+                  ) as? QuietFinderRowView else {
                 continue
             }
             if case .filter(let filter) = rows[row] {
@@ -1316,13 +1543,20 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
             syncSelectionAppearance()
             return
         }
+        let previousSelected = selected
         selected = filter
-        syncSelectionAppearance()
-        // Refresh cell ink (white on blue) for old + new rows.
-        if tableView.numberOfRows == rows.count {
-            tableView.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: IndexSet(integer: 0))
-            syncSelectionAppearance()
+        var changedRows = IndexSet()
+        if let oldIndex = rows.firstIndex(of: .filter(previousSelected)) {
+            changedRows.insert(oldIndex)
         }
+        changedRows.insert(row)
+        if tableView.numberOfRows == rows.count {
+            tableView.reloadData(
+                forRowIndexes: changedRows,
+                columnIndexes: IndexSet(integer: 0)
+            )
+        }
+        syncSelectionAppearance()
         onSelectFilter?(filter)
     }
 }
@@ -1388,7 +1622,21 @@ private final class SidebarFilterCellView: NSTableCellView {
 // MARK: - Task list
 
 enum TaskListContextAction {
-    case open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, delete
+    case quickLook, open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, delete
+}
+
+private final class TaskListTableView: NSTableView {
+    var onQuickLook: (() -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        let disallowedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
+        if event.charactersIgnoringModifiers == " ",
+           event.modifierFlags.intersection(disallowedModifiers).isEmpty,
+           onQuickLook?() == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 @MainActor
@@ -1399,7 +1647,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     var onDropURL: ((String) -> Void)?
     var onEmptyNewDownload: (() -> Void)?
 
-    private let tableView = NSTableView()
+    private let tableView = TaskListTableView()
     private let scrollView = NSScrollView()
     private let emptyLabel = NSTextField(labelWithString: "")
     private let emptySubtitleLabel = NSTextField(labelWithString: "")
@@ -1436,6 +1684,11 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         tableView.delegate = self
         tableView.doubleAction = #selector(doubleClicked)
         tableView.target = self
+        tableView.onQuickLook = { [weak self] in
+            guard let self, let taskID = self.selectedTaskID else { return false }
+            self.onContextAction?(.quickLook, taskID)
+            return true
+        }
         tableView.menu = makeContextMenu()
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("task"))
         tableView.addTableColumn(col)
@@ -1555,7 +1808,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptySubtitle: String,
         emptyShowsActions: Bool = false
     ) {
-        let previousIDs = self.rows.map(\.taskID)
+#if DEBUG
+        let signpostID = NDMPerformance.begin("TaskListUpdate")
+        defer { NDMPerformance.end("TaskListUpdate", id: signpostID) }
+#endif
+        let previousRows = self.rows
+        let previousIDs = previousRows.map(\.taskID)
         let nextIDs = rows.map(\.taskID)
         self.rows = rows
         self.selectedTaskID = selectedTaskID
@@ -1569,10 +1827,23 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             tableView.reloadData()
             tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
         } else if !rows.isEmpty {
-            // Same identity order — refresh cells without nuking selection.
-            let all = IndexSet(integersIn: 0..<rows.count)
-            tableView.reloadData(forRowIndexes: all, columnIndexes: IndexSet(integer: 0))
-            tableView.noteHeightOfRows(withIndexesChanged: all)
+            var changedRows = IndexSet()
+            var heightChangedRows = IndexSet()
+            for index in rows.indices where previousRows[index] != rows[index] {
+                changedRows.insert(index)
+                if previousRows[index].showsProgressBar != rows[index].showsProgressBar {
+                    heightChangedRows.insert(index)
+                }
+            }
+            if !changedRows.isEmpty {
+                tableView.reloadData(
+                    forRowIndexes: changedRows,
+                    columnIndexes: IndexSet(integer: 0)
+                )
+            }
+            if !heightChangedRows.isEmpty {
+                tableView.noteHeightOfRows(withIndexesChanged: heightChangedRows)
+            }
         }
 
         applyTableSelection(to: selectedTaskID)
@@ -1582,6 +1853,26 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         applyTableSelection(to: taskID)
         guard let index = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
         tableView.scrollRowToVisible(index)
+    }
+
+    func selectAdjacentRow(offset: Int) -> Bool {
+        guard !rows.isEmpty else { return false }
+        let current = selectedTaskID.flatMap { id in rows.firstIndex(where: { $0.taskID == id }) }
+            ?? (tableView.selectedRow >= 0 ? tableView.selectedRow : nil)
+        let next: Int
+        if let current {
+            next = min(rows.count - 1, max(0, current + offset))
+            guard next != current else { return false }
+        } else {
+            // No selection yet: step into the list from the matching end.
+            next = offset >= 0 ? 0 : rows.count - 1
+        }
+        let taskID = rows[next].taskID
+        selectedTaskID = taskID
+        applyTableSelection(to: taskID)
+        tableView.scrollRowToVisible(next)
+        onSelectTaskID?(taskID)
+        return true
     }
 
     private func applyTableSelection(to taskID: Int64?) {
@@ -1602,11 +1893,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func syncSelectionAppearance() {
-        for row in 0..<rows.count {
-            guard let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
+        let visibleRows = tableView.rows(in: tableView.visibleRect)
+        guard visibleRows.location != NSNotFound else { return }
+        for row in visibleRows.location..<NSMaxRange(visibleRows) {
+            guard row < rows.count,
+                  let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
                 continue
             }
             let on = (rows[row].taskID == selectedTaskID)
+            guard rowView.forcedSelected != on else { continue }
             rowView.forcedSelected = on
             rowView.needsDisplay = true
         }
@@ -1666,13 +1961,19 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             "png", "jpg", "jpeg", "gif", "webp", "heic",
         ].contains(ext)
         let preview = CoverArtCache.shared.image(for: item.taskID)
+        if preview == nil, usesContentBackdrop {
+            CoverArtCache.shared.ensureCover(
+                taskID: item.taskID,
+                remoteURL: nil,
+                localFile: item.localFileURL
+            )
+        }
         rowView.artworkStyle = usesContentBackdrop ? .fullBleed : .ambient
+        rowView.washColor = nil
         if usesContentBackdrop {
             rowView.coverImage = preview
-            rowView.washColor = preview == nil ? FileCategoryWash.color(forFilename: item.filename) : nil
         } else {
             rowView.coverImage = preview ?? NDMChrome.fileIcon(filename: item.filename, pointSize: 128)
-            rowView.washColor = FileCategoryWash.color(forFilename: item.filename)
         }
         rowView.needsDisplay = true
     }
@@ -1705,6 +2006,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         }
         contextMenuDelegate = delegate
         menu.delegate = delegate
+        let quickLook = NSMenuItem(
+            title: L10n.quickLook,
+            action: #selector(ctxQuickLook),
+            keyEquivalent: " "
+        )
+        quickLook.keyEquivalentModifierMask = []
+        quickLook.target = self
+        quickLook.ndmSymbol("eye")
+        menu.addItem(quickLook)
         let specs: [(String, Selector, String?, String)?] = [
             (L10n.open, #selector(ctxOpen), "o", "doc.fill"),
             (L10n.showInFinder, #selector(ctxReveal), "r", "folder.fill"),
@@ -1746,6 +2056,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let presentation = rows[row]
         for item in menu.items {
             switch item.action {
+            case #selector(ctxQuickLook): item.isEnabled = presentation.canOpen
             case #selector(ctxOpen): item.isEnabled = presentation.canOpen
             case #selector(ctxReveal): item.isEnabled = presentation.canShowInFinder
             case #selector(ctxShare): item.isEnabled = presentation.canOpen
@@ -1800,6 +2111,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         onContextAction?(.delete, rows[row].taskID)
     }
 
+    @objc private func ctxQuickLook() { if let id = currentContextTaskID() { onContextAction?(.quickLook, id) } }
     @objc private func ctxOpen() { if let id = currentContextTaskID() { onContextAction?(.open, id) } }
     @objc private func ctxReveal() { if let id = currentContextTaskID() { onContextAction?(.reveal, id) } }
     @objc private func ctxShare() { if let id = currentContextTaskID() { onContextAction?(.share, id) } }
@@ -1927,17 +2239,10 @@ private final class TaskRowCellView: NSTableCellView {
         badgeHeight?.constant = 16 * scale
 
         let cover = CoverArtCache.shared.image(for: row.taskID)
-        let wash = FileCategoryWash.color(forFilename: row.filename)
-        glyph.apply(filename: row.filename, cover: cover, categoryWash: wash)
+        glyph.apply(filename: row.filename, cover: cover)
         titleLabel.stringValue = row.filename
-        // Soft contrast lift when sitting on a frosted cover wash.
-        if cover != nil {
-            titleLabel.textColor = .labelColor
-            trailingLabel.textColor = .labelColor
-        } else {
-            titleLabel.textColor = .labelColor
-            trailingLabel.textColor = .labelColor
-        }
+        titleLabel.textColor = .labelColor
+        trailingLabel.textColor = .labelColor
 
         if let badge = row.mediaBadge {
             badgeLabel.stringValue = " \(badge) "
@@ -2048,6 +2353,7 @@ private final class InspectorViewController: NSViewController {
     private let firstActionSeparator = ChromeBox(fill: NDMChrome.hairline)
     private let secondActionSeparator = ChromeBox(fill: NDMChrome.hairline)
     private let ambientArtifactView = InspectorArtifactView()
+    private let completionStackView = CompletionStackView()
     private let diagBox = ChromeBox(
         fill: NSColor.systemRed.withAlphaComponent(0.08),
         cornerRadius: 8
@@ -2070,6 +2376,10 @@ private final class InspectorViewController: NSViewController {
     private var actionButtonHeights: [NSLayoutConstraint] = []
     private var iconSizeConstraints: [NSLayoutConstraint] = []
     private var ambientHeightConstraint: NSLayoutConstraint?
+    private var completionResultURL: URL?
+#if DEBUG
+    private var qaCompletionSidecarCount = -1
+#endif
 
     override func loadView() {
         view = ChromeBox(fill: NDMChrome.contentSurface)
@@ -2218,7 +2528,7 @@ private final class InspectorViewController: NSViewController {
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         // Actions belong with the selected item, directly after its information;
         // they should not float at the bottom of a mostly empty inspector.
-        for sub in [titleLabel, header, kvStack, progressBar, actionDivider, actionsStack, tuneBox, diagBox] {
+        for sub in [titleLabel, header, kvStack, completionStackView, progressBar, actionDivider, actionsStack, tuneBox, diagBox] {
             contentStack.addArrangedSubview(sub)
         }
         contentStack.setCustomSpacing(14, after: titleLabel)
@@ -2266,6 +2576,7 @@ private final class InspectorViewController: NSViewController {
             header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             progressBar.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             kvStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
+            completionStackView.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             actionDivider.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             actionDivider.heightAnchor.constraint(equalToConstant: 1),
             actionsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
@@ -2314,6 +2625,7 @@ private final class InspectorViewController: NSViewController {
         diagMessageLabel.font = .systemFont(ofSize: 11 * next)
         diagRawLabel.font = .monospacedSystemFont(ofSize: 9 * next, weight: .regular)
         tuneLabel.font = .systemFont(ofSize: 11 * next)
+        completionStackView.setContentScale(next)
 
         let layoutScale = 1 + (next - 1) * 0.45
         kvStack.spacing = 8 * layoutScale
@@ -2450,10 +2762,14 @@ private final class InspectorViewController: NSViewController {
     func relocalizeChrome() {
         titleLabel.stringValue = L10n.details.uppercased()
         placeholderLabel.stringValue = L10n.selectDownloadHint
-        update(row: currentRow)
+        completionStackView.relocalize()
+        let row = currentRow
+        currentRow = nil
+        update(row: row)
     }
 
     func update(row: TaskRowPresentation?) {
+        guard currentRow != row else { return }
         currentRow = row
         let hasSelection = row != nil
         placeholderLabel.isHidden = hasSelection
@@ -2462,6 +2778,8 @@ private final class InspectorViewController: NSViewController {
         ambientArtifactView.isHidden = !hasSelection
         titleLabel.stringValue = L10n.details.uppercased()
         guard let row else {
+            completionResultURL = nil
+            completionStackView.apply(nil)
             refreshAmbientPreview()
             return
         }
@@ -2504,6 +2822,22 @@ private final class InspectorViewController: NSViewController {
         }
 
         if row.isComplete {
+            // The sidecar discovery walks the download directory; do it once
+            // per selected result instead of on every one-second refresh.
+            if completionResultURL != row.localFileURL {
+                let discoveredCompletion = SmartFinalize.completionStack(primary: row.localFileURL)
+                completionResultURL = row.localFileURL
+                completionStackView.apply(discoveredCompletion)
+                completionStackView.setContentScale(contentScale)
+#if DEBUG
+                qaCompletionSidecarCount = discoveredCompletion?.sidecars.count ?? -1
+#endif
+            }
+#if DEBUG
+            if QAPreviewOverrides.isEnabled {
+                statusLabel.stringValue = "QA成果\(qaCompletionSidecarCount) · " + statusLabel.stringValue
+            }
+#endif
             progressBar.isHidden = true
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
             if !row.host.isEmpty { pairs.append((L10n.source, row.host)) }
@@ -2513,6 +2847,8 @@ private final class InspectorViewController: NSViewController {
             }
             reloadKV(pairs)
         } else {
+            completionResultURL = nil
+            completionStackView.apply(nil)
             progressBar.isHidden = !row.isDownloading
             progressBar.progress = row.progressFraction
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
@@ -2632,6 +2968,7 @@ private final class InspectorViewController: NSViewController {
         let menu = NSMenu()
         menu.autoenablesItems = false
         if utilityButtonSharesFile {
+            addMoreItem(menu, title: L10n.quickLook, selector: #selector(moreQuickLook), symbol: "eye")
             addMoreItem(menu, title: L10n.copyURL, selector: #selector(moreCopyURL), symbol: "link")
         }
         addMoreItem(menu, title: L10n.propertiesEllipsis, selector: #selector(moreProperties), symbol: "info.circle")
@@ -2652,6 +2989,7 @@ private final class InspectorViewController: NSViewController {
         menu.addItem(item)
     }
 
+    @objc private func moreQuickLook() { onAction?(.quickLook) }
     @objc private func moreCopyURL() { onAction?(.copyURL) }
     @objc private func moreProperties() { onAction?(.properties) }
     @objc private func moreDelete() { onAction?(.delete) }
