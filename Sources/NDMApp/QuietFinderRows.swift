@@ -11,9 +11,9 @@ enum QuietFinderRowScrimStyle {
 }
 
 enum QuietFinderRowScrim {
-    /// Flip to `.legacyMultiStop` to A/B the old multi-stop veil (or revert the
-    /// following “flatten row scrim” commit). Default stays legacy until that commit.
-    static var style: QuietFinderRowScrimStyle = .legacyMultiStop
+    /// Production default: flat wash. Set `.legacyMultiStop` (or
+    /// `git revert` this commit) to restore the multi-stop veil.
+    static var style: QuietFinderRowScrimStyle = .flat
 }
 
 /// Rounded accent selection — Quiet Finder list / sidebar (Design Suite `.row.on` / `.nav.on`).
