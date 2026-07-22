@@ -678,13 +678,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private func updateInspector() {
         inspectorController.update(row: selectedRow())
         syncQuickLookWithSelectionIfVisible()
-        if let inspectorItem = splitController.splitViewItems.last {
-            // An inspector with no selection is a large, low-information blank
-            // column. Keep the task list spacious by default, then reveal the
-            // inspector as soon as the user selects a row.
-            let shouldCollapse = selectedTaskID == nil
-            if inspectorItem.isCollapsed != shouldCollapse {
-                inspectorItem.animator().isCollapsed = shouldCollapse
+        // Expand once on the first selection, then never auto-collapse.
+        // Auto-collapsing on deselect reflowed the whole content column on
+        // every click — in the gallery that reshuffled the poster grid
+        // mid-click (4 columns → 3 and back) so the second click landed on a
+        // card that had already moved. A stable column with a quiet
+        // placeholder when nothing is selected beats a layout that jumps.
+        if let inspectorItem = splitController.splitViewItems.last,
+           selectedTaskID != nil, inspectorItem.isCollapsed {
+            if window?.isVisible == true {
+                inspectorItem.animator().isCollapsed = false
+            } else {
+                inspectorItem.isCollapsed = false
             }
         }
     }
@@ -2289,9 +2294,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
-        if collectionView.selectionIndexPaths.isEmpty {
-            selectedTaskID = nil
-            onSelectTaskID?(nil)
+        // Click-to-switch fires deselect(old) before select(new). Emitting a
+        // nil selection in that gap flashes the inspector's empty state, so
+        // only report nil if the selection is still empty on the next tick.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isGalleryActive,
+                  self.galleryView.selectionIndexPaths.isEmpty else { return }
+            self.selectedTaskID = nil
+            self.onSelectTaskID?(nil)
         }
     }
 
@@ -3325,12 +3335,19 @@ private final class TaskRowCellView: NSTableCellView {
 /// inline instead of being stretched up to hero size.
 private final class HeroPreviewView: NSView {
     override var isFlipped: Bool { true }
+    static let reflectionHeight: CGFloat = 22
     private let imageLayer = CALayer()
+    // Cinema-screen reflection: the cover mirrors faintly beneath the frame,
+    // fading fast — the artwork sits on a surface, not on a spec sheet.
+    private let reflectionLayer = CALayer()
+    private let reflectionMask = CAGradientLayer()
 
     var image: NSImage? {
         didSet {
             let wasEmpty = oldValue == nil
             imageLayer.contents = image
+            reflectionLayer.contents = image
+            reflectionLayer.isHidden = image == nil
             updateShadowColor()
             if wasEmpty, image != nil, window != nil { revealEntrance() }
         }
@@ -3347,6 +3364,21 @@ private final class HeroPreviewView: NSView {
         imageLayer.cornerRadius = 12
         imageLayer.masksToBounds = true
         layer?.addSublayer(imageLayer)
+
+        reflectionLayer.contentsGravity = .resizeAspectFill
+        // Mirror vertically and sample the cover's bottom edge.
+        reflectionLayer.transform = CATransform3DMakeScale(1, -1, 1)
+        reflectionLayer.cornerRadius = 12
+        reflectionLayer.masksToBounds = true
+        reflectionLayer.isHidden = true
+        reflectionMask.colors = [
+            NSColor.white.withAlphaComponent(0.35).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        reflectionMask.startPoint = CGPoint(x: 0.5, y: 0)
+        reflectionMask.endPoint = CGPoint(x: 0.5, y: 0.9)
+        reflectionLayer.mask = reflectionMask
+        layer?.addSublayer(reflectionLayer)
     }
 
     private func revealEntrance() {
@@ -3373,7 +3405,21 @@ private final class HeroPreviewView: NSView {
 
     override func layout() {
         super.layout()
-        imageLayer.frame = bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let screen = NSRect(
+            x: 0, y: 0,
+            width: bounds.width,
+            height: max(0, bounds.height - Self.reflectionHeight)
+        )
+        imageLayer.frame = screen
+        reflectionLayer.frame = NSRect(
+            x: 0, y: screen.maxY + 2,
+            width: bounds.width,
+            height: Self.reflectionHeight - 2
+        )
+        reflectionMask.frame = reflectionLayer.bounds
+        CATransaction.commit()
     }
 
     private func updateShadowColor() {
@@ -3416,11 +3462,11 @@ private final class InspectorViewController: NSViewController {
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressBar = ThinProgressView()
     private let kvStack = NSStackView()
-    private let primaryButton = NSButton(title: L10n.start, target: nil, action: nil)
-    private let secondaryButton = NSButton(title: L10n.pause, target: nil, action: nil)
-    private let tertiaryButton = NSButton(title: L10n.detailsEllipsis, target: nil, action: nil)
-    private let copyURLButton = NSButton(title: L10n.copyURL, target: nil, action: nil)
-    private let moreButton = NSButton(title: "", target: nil, action: nil)
+    private let primaryButton = InspectorActionButton(title: L10n.start)
+    private let secondaryButton = InspectorActionButton(title: L10n.pause)
+    private let tertiaryButton = InspectorActionButton(title: L10n.detailsEllipsis)
+    private let copyURLButton = InspectorActionButton(title: L10n.copyURL)
+    private let moreButton = InspectorActionButton(title: "")
     private let deleteButton = NSButton(title: L10n.removeEllipsis, target: nil, action: nil)
     private let placeholderLabel = NSTextField(wrappingLabelWithString: L10n.selectDownloadHint)
     private let placeholderIcon = NSImageView()
@@ -3643,7 +3689,13 @@ private final class InspectorViewController: NSViewController {
         ]
         NSLayoutConstraint.activate([
             heroImageView.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            heroImageView.heightAnchor.constraint(equalToConstant: 148),
+            // True 16:9 screen plus the reflection strip below it — a squashed
+            // cover reads as a bug, not a thumbnail.
+            heroImageView.heightAnchor.constraint(
+                equalTo: heroImageView.widthAnchor,
+                multiplier: 9.0 / 16.0,
+                constant: HeroPreviewView.reflectionHeight
+            ),
             diagBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             diagStack.topAnchor.constraint(equalTo: diagBox.topAnchor),
             diagStack.leadingAnchor.constraint(equalTo: diagBox.leadingAnchor),
@@ -3899,7 +3951,10 @@ private final class InspectorViewController: NSViewController {
         chrome: ActionChrome
     ) {
         button.title = title
-        button.toolTip = title
+        // No tooltip: a tooltip that just repeats the visible label is noise.
+        // Keep the label for VoiceOver, drop the hover bubble.
+        button.toolTip = nil
+        button.setAccessibilityLabel(title)
         button.isBordered = false
         button.bezelStyle = .inline
         button.controlSize = .regular
@@ -3946,7 +4001,10 @@ private final class InspectorViewController: NSViewController {
     private func fileTypeText(for row: TaskRowPresentation) -> String {
         let ext = (row.filename as NSString).pathExtension.lowercased()
         guard !ext.isEmpty else { return L10n.other }
-        return UTType(filenameExtension: ext)?.localizedDescription ?? ext.uppercased()
+        // UTType.localizedDescription follows the OS language ("MPEG-4 movie"
+        // on an English system), which reads as a leak in a Chinese UI. Name
+        // the format ourselves: "MP4 视频", "DMG 磁盘映像".
+        return L10n.fileTypeDisplay(ext: ext)
     }
 
     private func locationText(for row: TaskRowPresentation) -> String? {
@@ -4186,10 +4244,8 @@ private final class InspectorViewController: NSViewController {
 
         if utilityButtonSharesFile {
             decorate(copyURLButton, title: L10n.share, symbol: "square.and.arrow.up", chrome: .soft)
-            copyURLButton.toolTip = L10n.share
         } else {
             decorate(copyURLButton, title: L10n.copyURL, symbol: "link", chrome: .soft)
-            copyURLButton.toolTip = L10n.copyURL
         }
         moreButton.image = NDMChrome.symbol(
             "ellipsis",

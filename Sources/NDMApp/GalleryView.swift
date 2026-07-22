@@ -11,7 +11,14 @@ final class GalleryCardItem: NSCollectionViewItem {
     var onActivate: ((Int64) -> Void)?
 
     private let coverHost = NSView()
-    private let coverPlate = NSView()
+    /// The artwork lives on an owned sublayer inside the masked plate, so
+    /// hover can zoom the image while the rounded frame never moves — AppKit
+    /// clobbers transforms on view-backing layers (that was the "corners go
+    /// square mid-animation" bug), but leaves our sublayers alone. The plate
+    /// frames that sublayer in its own `layout()`, which — unlike the item's
+    /// `viewDidLayout` — reliably fires when the flow layout sizes the cell.
+    private let coverPlate = CoverPlateView()
+    private var imageLayer: CALayer { coverPlate.imageLayer }
     private let iconView = NSImageView()
     private let speedBadge = NSTextField(labelWithString: "")
     private let progressBar = ThinProgressView()
@@ -32,14 +39,11 @@ final class GalleryCardItem: NSCollectionViewItem {
         coverHost.layer?.shadowOffset = CGSize(width: 0, height: -3)
         coverHost.translatesAutoresizingMaskIntoConstraints = false
 
-        coverPlate.wantsLayer = true
-        coverPlate.layer?.cornerRadius = 12
-        coverPlate.layer?.masksToBounds = true
-        coverPlate.layer?.contentsGravity = .resizeAspectFill
         coverPlate.translatesAutoresizingMaskIntoConstraints = false
 
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 44, weight: .regular)
 
         speedBadge.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
         speedBadge.textColor = .white
@@ -89,8 +93,8 @@ final class GalleryCardItem: NSCollectionViewItem {
             coverPlate.bottomAnchor.constraint(equalTo: coverHost.bottomAnchor),
             iconView.centerXAnchor.constraint(equalTo: coverPlate.centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: coverPlate.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 52),
-            iconView.heightAnchor.constraint(equalToConstant: 52),
+            iconView.widthAnchor.constraint(equalToConstant: 56),
+            iconView.heightAnchor.constraint(equalToConstant: 56),
             speedBadge.topAnchor.constraint(equalTo: coverHost.topAnchor, constant: 8),
             speedBadge.trailingAnchor.constraint(equalTo: coverHost.trailingAnchor, constant: -8),
             speedBadge.heightAnchor.constraint(equalToConstant: 19),
@@ -121,13 +125,19 @@ final class GalleryCardItem: NSCollectionViewItem {
         titleLabel.stringValue = row.filename
 
         if let cover {
-            coverPlate.layer?.contents = cover.layerContents(forContentsScale: view.window?.backingScaleFactor ?? 2)
+            imageLayer.contents = cover.layerContents(forContentsScale: view.window?.backingScaleFactor ?? 2)
             coverPlate.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.06).cgColor
+            coverPlate.setTypeTint(nil)
             iconView.isHidden = true
         } else {
-            coverPlate.layer?.contents = nil
-            coverPlate.layer?.backgroundColor = NDMChrome.track.cgColor
-            iconView.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 52)
+            // No artwork: a big centered type glyph tinted to the file's
+            // category, on a faint tint wash — a designed placeholder, not a
+            // gray void with a stamp-sized Finder icon.
+            imageLayer.contents = nil
+            let tint = Self.categoryTint(for: row.filename)
+            coverPlate.setTypeTint(tint)
+            iconView.image = Self.typeGlyph(for: row.filename, tint: tint)
+            iconView.contentTintColor = tint.withAlphaComponent(0.9)
             iconView.isHidden = false
         }
 
@@ -201,39 +211,119 @@ final class GalleryCardItem: NSCollectionViewItem {
         setHovering(false)
     }
 
-    /// Poster lift — the card answers the pointer like a physical object.
+    /// The frame stays perfectly still; the artwork breathes inside it and
+    /// the shadow blooms underneath — touching a print in a gallery, not
+    /// bouncing a widget.
     private func setHovering(_ hovering: Bool) {
         guard isHovering != hovering else { return }
         isHovering = hovering
-        guard let layer = coverHost.layer else { return }
         CATransaction.begin()
-        CATransaction.setAnimationDuration(0.22)
+        CATransaction.setAnimationDuration(0.45)
         CATransaction.setAnimationTimingFunction(
-            CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.3, 1)
+            CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
         )
-        if hovering {
-            let lift = CATransform3DConcat(
-                CATransform3DMakeScale(1.025, 1.025, 1),
-                CATransform3DMakeTranslation(0, 2, 0)
-            )
-            layer.transform = lift
-            layer.shadowOpacity = 0.22
-            layer.shadowRadius = 14
-        } else {
-            layer.transform = CATransform3DIdentity
-            layer.shadowOpacity = 0.10
-            layer.shadowRadius = 8
+        imageLayer.transform = hovering
+            ? CATransform3DMakeScale(1.06, 1.06, 1)
+            : CATransform3DIdentity
+        coverHost.layer?.shadowOpacity = hovering ? 0.24 : 0.10
+        coverHost.layer?.shadowRadius = hovering ? 16 : 8
+        if !isSelected {
+            coverPlate.layer?.borderColor = hovering
+                ? NDMChrome.accent.withAlphaComponent(0.45).cgColor
+                : NDMChrome.hairline.cgColor
         }
         CATransaction.commit()
+    }
+
+    // MARK: - No-artwork placeholder
+
+    private static func categoryTint(for filename: String) -> NSColor {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "dmg", "iso": return .systemIndigo
+        case "pkg", "app", "exe", "msi", "apk": return .systemPurple
+        case "zip", "rar", "7z", "gz", "tar": return .systemOrange
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": return .systemBlue
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg": return .systemPink
+        case "html", "htm", "js", "css", "json", "xml": return .systemTeal
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": return NDMChrome.accent
+        default: return .systemGray
+        }
+    }
+
+    private static func typeGlyph(for filename: String, tint: NSColor) -> NSImage? {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let name: String
+        switch ext {
+        case "dmg", "iso": name = "externaldrive.fill"
+        case "pkg", "app", "exe", "msi", "apk": name = "shippingbox.fill"
+        case "zip", "rar", "7z", "gz", "tar": name = "archivebox.fill"
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg": name = "waveform"
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": name = "doc.richtext.fill"
+        case "html", "htm", "js", "css", "json", "xml": name = "chevron.left.forwardslash.chevron.right"
+        case "png", "jpg", "jpeg", "gif", "webp", "heic": name = "photo.fill"
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": name = "film.fill"
+        default: name = "doc.fill"
+        }
+        let img = NDMChrome.symbol(name, pointSize: 44, weight: .regular)
+        img?.isTemplate = true
+        return img
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
         setHovering(false)
-        coverPlate.layer?.contents = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = nil
+        imageLayer.transform = CATransform3DIdentity
+        CATransaction.commit()
         progressBar.isHidden = true
         progressBar.isActive = false
         speedBadge.isHidden = true
+    }
+}
+
+/// Masked, rounded artwork plate. Owns an image sublayer and frames it in
+/// `layout()` — reliably called by AppKit when the flow layout resizes the
+/// cell, unlike `NSCollectionViewItem.viewDidLayout`.
+@MainActor
+final class CoverPlateView: NSView {
+    let imageLayer = CALayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+        layer?.borderColor = NDMChrome.hairline.cgColor
+        imageLayer.contentsGravity = .resizeAspectFill
+        imageLayer.masksToBounds = true
+        layer?.addSublayer(imageLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Faint category wash behind a no-artwork type glyph. nil resets to the
+    /// neutral cover backing used under real artwork.
+    func setTypeTint(_ tint: NSColor?) {
+        guard let tint else {
+            layer?.backgroundColor = NSColor.black.withAlphaComponent(0.06).cgColor
+            return
+        }
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = tint.withAlphaComponent(isDark ? 0.16 : 0.10).cgColor
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.bounds = bounds
+        imageLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        CATransaction.commit()
     }
 }
 

@@ -1313,6 +1313,37 @@ public enum L10n: Sendable {
     public static var searchResultsTitle: String { t("Search Results", "搜索结果") }
     public static var listViewTooltip: String { t("List view", "列表视图") }
     public static var galleryViewTooltip: String { t("Gallery view", "画廊视图") }
+
+    /// Human file-format name in the app's language: "MP4 视频" / "MP4 video".
+    public static func fileTypeDisplay(ext: String) -> String {
+        let upper = ext.uppercased()
+        let word: String
+        switch ext.lowercased() {
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts", "flv":
+            word = t("video", "视频")
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus":
+            word = t("audio", "音频")
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "bmp":
+            word = t("image", "图片")
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub", "pages", "key", "ppt", "pptx", "xls", "xlsx", "csv":
+            word = t("document", "文档")
+        case "zip", "rar", "7z", "gz", "tar", "bz2", "xz":
+            word = t("archive", "压缩包")
+        case "dmg", "iso":
+            word = t("disk image", "磁盘映像")
+        case "pkg", "msi", "apk", "exe":
+            word = t("installer", "安装包")
+        case "app":
+            word = t("application", "应用")
+        case "srt", "vtt", "ass":
+            word = t("subtitles", "字幕")
+        case "html", "htm", "js", "css", "json", "xml":
+            word = t("web file", "网页文件")
+        default:
+            word = t("file", "文件")
+        }
+        return "\(upper) \(word)"
+    }
     public static func headerTaskCount(_ count: Int) -> String {
         t("\(count) items", "\(count) 个任务")
     }
