@@ -43,6 +43,13 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
 
     private static var active: YtDlpQualityPickerWindowController?
 
+    /// Close a picker still waiting on a previous browser capture. The newest
+    /// "download with NDM" supersedes the pending one instead of stacking a
+    /// second picker or being silently dropped.
+    static func dismissActive() {
+        active?.finish(.cancel)
+    }
+
     private var formats: [YtDlpFormat] { probe.formats }
 
     init(

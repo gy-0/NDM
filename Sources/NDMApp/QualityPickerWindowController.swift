@@ -111,6 +111,12 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
     /// Keeps the controller alive while its window is up.
     private static var active: QualityPickerWindowController?
 
+    /// Close an HLS picker still waiting on a previous browser capture so the
+    /// newest "download with NDM" replaces it.
+    static func dismissActive() {
+        active?.window?.close()
+    }
+
     /// Show the picker and await the person's choice.
     static func choose(probe: HLSMasterProbe.Result, title: String) async -> Choice {
         await withCheckedContinuation { continuation in

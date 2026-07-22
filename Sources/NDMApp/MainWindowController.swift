@@ -253,8 +253,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
 
     private func wireContentToolbar() {
         contentToolbar.onNew = { [weak self] in self?.promptNewURL() }
-        contentToolbar.onPause = { [weak self] in self?.pauseSelected() }
-        contentToolbar.onResume = { [weak self] in self?.startSelected() }
+        contentToolbar.onContextAction = { [weak self] action in
+            self?.performToolbarContextAction(action)
+        }
+        contentToolbar.onToggleSidebar = { [weak self] in
+            guard let item = self?.splitController.splitViewItems.first else { return }
+            item.animator().isCollapsed.toggle()
+        }
+        contentToolbar.onToggleInspector = { [weak self] in
+            guard let item = self?.splitController.splitViewItems.last else { return }
+            item.animator().isCollapsed.toggle()
+        }
         contentToolbar.onClipboardOffer = { [weak self] in
             self?.openClipboardOffer()
         }
@@ -431,11 +440,49 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     }
 
     private func updateToolbarEnablement() {
-        let actions = TaskSelectionActions.make(from: selectedRow())
+        let row = selectedRow()
+        let actions = TaskSelectionActions.make(from: row)
         startToolbarItem?.isEnabled = actions.canStart
         pauseToolbarItem?.isEnabled = actions.canPause
-        contentToolbar.setResumeEnabled(actions.canStart)
-        contentToolbar.setPauseEnabled(actions.canPause)
+
+        // Contextual command group: what you can do to the selected task
+        // appears next to New. Empty selection keeps the toolbar clean.
+        var context: [(ToolbarContextAction, String, String)] = []
+        if let row {
+            if actions.canPause {
+                context.append((.pause, L10n.pause, "pause.fill"))
+            }
+            if actions.canStart {
+                context.append((.resume, row.isFailed ? L10n.retry : L10n.resume,
+                                row.isFailed ? "arrow.clockwise" : "play.fill"))
+            }
+            if actions.canRetry, !actions.canStart {
+                context.append((.retry, L10n.retry, "arrow.clockwise"))
+            }
+            if actions.canRenew, row.isFailed {
+                context.append((.renew, L10n.renewURL, "link"))
+            }
+            if actions.canOpen {
+                context.append((.open, L10n.open, "arrow.up.forward.app.fill"))
+            }
+            if actions.canShowInFinder {
+                context.append((.reveal, L10n.showInFinder, "folder.fill"))
+            }
+        }
+        contentToolbar.setContextActions(context)
+    }
+
+    private func performToolbarContextAction(_ action: ToolbarContextAction) {
+        guard let id = selectedTaskID else { return }
+        switch action {
+        case .pause: pauseSelected()
+        case .resume: startSelected()
+        case .retry: startTask(id)
+        case .renew: renewURL(for: id)
+        case .open: openTaskFile(id)
+        case .reveal: revealTaskFile(id)
+        case .delete: deleteTask(id)
+        }
     }
 
     // MARK: - Data

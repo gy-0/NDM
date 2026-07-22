@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return value
     }()
     private var waitWindow: WaitWindowController?
+    /// The in-flight browser media preparation, so a newer "download with NDM"
+    /// can supersede a picker/probe still waiting on the previous capture.
+    private var currentBrowserMediaCancellation: BrowserMediaPreparationCancellation?
     private var browsersWindow: BrowsersWindowController?
     private var settingsWindow: SettingsWindowController?
     private var completionWindow: CompletionWindowController?
@@ -890,6 +893,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleBrowserDownloadRequest(_ msg: ParsedBridgeMessage) async {
         guard let manager else { return }
+        // The user just clicked "download with NDM" in their browser — bring
+        // the app forward now, and let this newest capture supersede any
+        // quality picker still open for a previous one.
+        supersedeInFlightBrowserMedia()
+        NSApp.activate(ignoringOtherApps: true)
+        mainWindow?.window?.makeKeyAndOrderFront(nil)
         bridge?.sendToAllClients(BridgeConstants.waiting)
         defer { bridge?.sendToAllClients(BridgeConstants.noWaiting) }
 
@@ -971,6 +980,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Resolves canonical X/YouTube (and other yt-dlp-supported) pages sent by
     /// BetterNDM. A return means the request was consumed, including cancel.
+    /// Cancel a browser media probe still running and close any quality picker
+    /// still waiting, so the newest capture wins.
+    private func supersedeInFlightBrowserMedia() {
+        currentBrowserMediaCancellation?.cancel()
+        currentBrowserMediaCancellation = nil
+        YtDlpQualityPickerWindowController.dismissActive()
+        QualityPickerWindowController.dismissActive()
+    }
+
     private func handleBrowserMediaPage(
         _ message: ParsedBridgeMessage,
         manager: DownloadManager
@@ -984,6 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let cancellation = BrowserMediaPreparationCancellation()
+        currentBrowserMediaCancellation = cancellation
         var working: WorkingPanelController? = WorkingPanelController.schedule(
             stage: .readingMedia,
             on: mainWindow?.window,

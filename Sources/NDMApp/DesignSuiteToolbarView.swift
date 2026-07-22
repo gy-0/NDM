@@ -1,19 +1,30 @@
 import AppKit
 import NDMCore
 
-/// Design Suite in-window tool strip: primary New + Pause/Resume + trailing search.
-/// Text chips — not system rounded push buttons.
+/// A contextual action the toolbar can surface for the current selection.
+enum ToolbarContextAction {
+    case pause, resume, retry, renew, open, reveal, delete
+}
+
+/// Design Suite in-window tool strip: a primary New action, then a contextual
+/// command group that reflects the current selection, then trailing search.
 @MainActor
 final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
     var onNew: (() -> Void)?
-    var onPause: (() -> Void)?
-    var onResume: (() -> Void)?
+    var onContextAction: ((ToolbarContextAction) -> Void)?
     var onClipboardOffer: (() -> Void)?
     var onSearch: ((String) -> Void)?
+    var onToggleSidebar: (() -> Void)?
+    var onToggleInspector: (() -> Void)?
+
+    private let sidebarToggle = PaneToggleButton(symbolName: "sidebar.leading")
+    private let inspectorToggle = PaneToggleButton(symbolName: "sidebar.trailing")
 
     private let newButton = ToolChipButton(title: L10n.new, style: .primary, symbolName: "plus")
-    private let pauseButton = ToolChipButton(title: L10n.pause, style: .ghost, symbolName: "pause.fill")
-    private let resumeButton = ToolChipButton(title: L10n.resume, style: .ghost, symbolName: "play.fill")
+    // Dynamic command group — rebuilt from the selection's capabilities.
+    private let contextStack = NSStackView()
+    private var contextButtons: [ToolChipButton] = []
+    private let contextDivider = ChromeBox(fill: NDMChrome.hairline)
     private let clipboardOfferButton = ClipboardOfferButton()
     private var clipboardOffer: SharedLinkResolution?
     private let activityIcon = NSImageView()
@@ -43,11 +54,11 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
         wantsLayer = true
         newButton.target = self
         newButton.action = #selector(tapNew)
-        pauseButton.target = self
-        pauseButton.action = #selector(tapPause)
-        resumeButton.target = self
-        resumeButton.action = #selector(tapResume)
-        resumeButton.isEnabled = false
+        contextStack.orientation = .horizontal
+        contextStack.spacing = 8
+        contextStack.translatesAutoresizingMaskIntoConstraints = false
+        contextDivider.translatesAutoresizingMaskIntoConstraints = false
+        contextDivider.isHidden = true
         clipboardOfferButton.target = self
         clipboardOfferButton.action = #selector(tapClipboardOffer)
         clipboardOfferButton.isHidden = true
@@ -77,19 +88,37 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
         searchShell.addSubview(searchField)
         searchShell.addSubview(searchClearButton)
 
-        let tools = NSStackView(views: [newButton, pauseButton, resumeButton])
+        let tools = NSStackView(views: [newButton, contextDivider, contextStack])
         tools.orientation = .horizontal
-        tools.spacing = 8
+        tools.spacing = 10
+        tools.alignment = .centerY
         tools.translatesAutoresizingMaskIntoConstraints = false
 
+        sidebarToggle.translatesAutoresizingMaskIntoConstraints = false
+        sidebarToggle.onTap = { [weak self] in self?.onToggleSidebar?() }
+        sidebarToggle.toolTip = L10n.t("Toggle sidebar", "开关侧栏")
+        inspectorToggle.translatesAutoresizingMaskIntoConstraints = false
+        inspectorToggle.onTap = { [weak self] in self?.onToggleInspector?() }
+        inspectorToggle.toolTip = L10n.t("Toggle details", "开关详情栏")
+
         hairline.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sidebarToggle)
         addSubview(tools)
         addSubview(clipboardOfferButton)
         addSubview(activityStack)
         addSubview(searchShell)
+        addSubview(inspectorToggle)
         addSubview(hairline)
         NSLayoutConstraint.activate([
-            tools.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            sidebarToggle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            sidebarToggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+            sidebarToggle.widthAnchor.constraint(equalToConstant: 30),
+            sidebarToggle.heightAnchor.constraint(equalToConstant: 28),
+            inspectorToggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            inspectorToggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+            inspectorToggle.widthAnchor.constraint(equalToConstant: 30),
+            inspectorToggle.heightAnchor.constraint(equalToConstant: 28),
+            tools.leadingAnchor.constraint(equalTo: sidebarToggle.trailingAnchor, constant: 12),
             tools.centerYAnchor.constraint(equalTo: centerYAnchor),
             clipboardOfferButton.leadingAnchor.constraint(equalTo: tools.trailingAnchor, constant: 18),
             clipboardOfferButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -101,7 +130,7 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
             activityStack.trailingAnchor.constraint(lessThanOrEqualTo: searchShell.leadingAnchor, constant: -18),
             activityIcon.widthAnchor.constraint(equalToConstant: 14),
             activityIcon.heightAnchor.constraint(equalToConstant: 14),
-            searchShell.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -22),
+            searchShell.trailingAnchor.constraint(equalTo: inspectorToggle.leadingAnchor, constant: -12),
             searchShell.centerYAnchor.constraint(equalTo: centerYAnchor),
             searchShell.widthAnchor.constraint(equalToConstant: 236),
             searchShell.heightAnchor.constraint(equalToConstant: 36),
@@ -124,9 +153,27 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
             hairline.bottomAnchor.constraint(equalTo: bottomAnchor),
             hairline.heightAnchor.constraint(equalToConstant: 1),
             newButton.heightAnchor.constraint(equalToConstant: 38),
-            pauseButton.heightAnchor.constraint(equalToConstant: 38),
-            resumeButton.heightAnchor.constraint(equalToConstant: 38),
+            contextDivider.widthAnchor.constraint(equalToConstant: 1),
+            contextDivider.heightAnchor.constraint(equalToConstant: 22),
         ])
+    }
+
+    /// Rebuild the contextual command group from the selection's capabilities.
+    /// Empty selection ⇒ just the primary New action; the divider and group
+    /// appear only when there is something to act on.
+    func setContextActions(_ actions: [(ToolbarContextAction, String, String)]) {
+        contextButtons.forEach { $0.removeFromSuperview() }
+        contextButtons.removeAll()
+        for (action, title, symbol) in actions {
+            let button = ToolChipButton(title: title, style: .ghost, symbolName: symbol)
+            button.onTap = { [weak self] in self?.onContextAction?(action) }
+            button.heightAnchor.constraint(equalToConstant: 38).isActive = true
+            contextStack.addArrangedSubview(button)
+            contextButtons.append(button)
+        }
+        let hasActions = !actions.isEmpty
+        contextDivider.isHidden = !hasActions
+        contextStack.isHidden = !hasActions
     }
 
     @available(*, unavailable)
@@ -176,13 +223,6 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
 
     override var wantsUpdateLayer: Bool { true }
 
-    func setResumeEnabled(_ enabled: Bool) {
-        resumeButton.isEnabled = enabled
-    }
-
-    func setPauseEnabled(_ enabled: Bool) {
-        pauseButton.isEnabled = enabled
-    }
 
     func setSearchQuery(_ query: String) {
         searchField.stringValue = query
@@ -250,8 +290,7 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
         contentScale = min(InterfaceScale.maximum, max(InterfaceScale.minimum, scale))
         let textScale = 1 + (contentScale - 1) * 0.55
         newButton.setContentScale(textScale)
-        pauseButton.setContentScale(textScale)
-        resumeButton.setContentScale(textScale)
+        contextButtons.forEach { $0.setContentScale(textScale) }
         clipboardOfferButton.setContentScale(textScale)
         searchField.font = .systemFont(ofSize: 12.5 * textScale)
         activityLabel.font = .monospacedDigitSystemFont(ofSize: 12.5 * textScale, weight: .medium)
@@ -260,8 +299,6 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
 
     func relocalize() {
         newButton.title = L10n.new
-        pauseButton.title = L10n.pause
-        resumeButton.title = L10n.resume
         searchField.placeholderString = L10n.searchDownloads
         searchClearButton.toolTip = L10n.clearSearch
         searchClearButton.setAccessibilityLabel(L10n.clearSearch)
@@ -298,8 +335,6 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func tapNew() { onNew?() }
-    @objc private func tapPause() { onPause?() }
-    @objc private func tapResume() { onResume?() }
     @objc private func tapClipboardOffer() { onClipboardOffer?() }
     @objc private func searchChanged() { emitSearch() }
 
@@ -436,9 +471,58 @@ private final class ClipboardOfferButton: NSButton {
     }
 }
 
+/// Quiet icon button for sidebar/inspector collapse, with a hover cushion.
+private final class PaneToggleButton: NSButton {
+    var onTap: (() -> Void)?
+
+    init(symbolName: String) {
+        super.init(frame: .zero)
+        image = NDMChrome.symbol(symbolName, pointSize: 15, weight: .medium)
+        imagePosition = .imageOnly
+        contentTintColor = .secondaryLabelColor
+        isBordered = false
+        bezelStyle = .inline
+        focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        target = self
+        action = #selector(fire)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func fire() { onTap?() }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        contentTintColor = .labelColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        layer?.backgroundColor = NSColor.clear.cgColor
+        contentTintColor = .secondaryLabelColor
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        ))
+    }
+}
+
 /// Borderless chip matching Design Suite `.tool` / `.tool.primary`.
 private final class ToolChipButton: NSButton {
     enum Style { case primary, ghost }
+
+    /// Optional per-instance handler (used by the dynamic context group, which
+    /// can't share one target/action selector across differing actions).
+    var onTap: (() -> Void)?
 
     private let chipStyle: Style
     private let symbolName: String?
@@ -449,6 +533,8 @@ private final class ToolChipButton: NSButton {
         self.symbolName = symbolName
         super.init(frame: .zero)
         self.title = title
+        self.target = self
+        self.action = #selector(fireOnTap)
         if let symbolName {
             image = NDMChrome.symbol(symbolName, pointSize: 11, weight: .semibold)
             imagePosition = .imageLeading
@@ -479,6 +565,8 @@ private final class ToolChipButton: NSButton {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func fireOnTap() { onTap?() }
 
     override var intrinsicContentSize: NSSize {
         let base = super.intrinsicContentSize
