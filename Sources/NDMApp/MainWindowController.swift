@@ -524,7 +524,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         updateInspector()
         updateToolbarEnablement()
         let snapshot = statusBarSnapshot()
-        contentToolbar.setActivitySummary(activeCount: snapshot.activeCount, bytesPerSecond: snapshot.bytesPerSecond)
+        // The Now Downloading cinema strip carries live traffic now; a second
+        // "N active · speed" chip in the toolbar would say the same thing twice.
+        contentToolbar.setActivitySummary(activeCount: 0, bytesPerSecond: 0)
         if snapshot.activeCount > 0 {
             let speed = TaskPresentationFormatting.speed(snapshot.bytesPerSecond, status: .downloading)
             window?.title = "\(L10n.appName) — \(snapshot.activeCount)↓ \(speed)"
@@ -1928,6 +1930,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     private let tableView = TaskListTableView()
     private let scrollView = NSScrollView()
+    private let heroView = NowDownloadingHeroView()
+    private var heroHeight: NSLayoutConstraint?
     private let emptyLabel = NSTextField(labelWithString: "")
     private let emptySubtitleLabel = NSTextField(labelWithString: "")
     private let emptyStack = NSStackView()
@@ -2043,11 +2047,23 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         batchBar.translatesAutoresizingMaskIntoConstraints = false
         batchBar.isHidden = true
 
+        heroView.alphaValue = 0
+        heroView.onActivateTask = { [weak self] taskID in
+            self?.onActivateTaskID?(taskID)
+        }
+        let heroHeight = heroView.heightAnchor.constraint(equalToConstant: 0)
+        self.heroHeight = heroHeight
+
+        view.addSubview(heroView)
         view.addSubview(scrollView)
         view.addSubview(emptyStack)
         view.addSubview(batchBar)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            heroView.topAnchor.constraint(equalTo: view.topAnchor),
+            heroView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            heroView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            heroHeight,
+            scrollView.topAnchor.constraint(equalTo: heroView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -2149,6 +2165,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let signpostID = NDMPerformance.begin("TaskListUpdate")
         defer { NDMPerformance.end("TaskListUpdate", id: signpostID) }
 #endif
+        // The cinema strip owns the primary live transfer — repeating the same
+        // task as row #1 directly under it reads as a rendering bug. It leaves
+        // the list and returns (with the completion celebration) when done.
+        let heroTaskID = updateHero(rows)
+        let rows = rows.filter { $0.taskID != heroTaskID }
+
         let previousRows = self.rows
         let previousIDs = previousRows.map(\.taskID)
         let nextIDs = rows.map(\.taskID)
@@ -2158,7 +2180,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptySubtitleLabel.stringValue = emptySubtitle
         emptyActionsRow?.isHidden = !emptyShowsActions
         let wasEmpty = !emptyStack.isHidden
-        let isEmpty = rows.isEmpty
+        let isEmpty = rows.isEmpty && heroTaskID == nil
         if wasEmpty != isEmpty {
             emptyStack.isHidden = !isEmpty
             tableView.isHidden = isEmpty
@@ -2221,6 +2243,32 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         if tableView.selectedRowIndexes.count <= 1 {
             applyTableSelection(to: selectedTaskID)
         }
+    }
+
+    /// Raise / collapse the Now Downloading cinema strip. The primary slot
+    /// goes to the fastest live transfer; everything else is a small "+N".
+    /// Returns the task the strip is presenting so the list can exclude it.
+    @discardableResult
+    private func updateHero(_ rows: [TaskRowPresentation]) -> Int64? {
+        let active = rows.filter(\.isDownloading)
+        let primary = active.max { $0.speedBytesPerSecond < $1.speedBytesPerSecond }
+        heroView.update(primary: primary, activeCount: active.count)
+        let targetHeight: CGFloat = primary == nil ? 0 : 150
+        guard heroHeight?.constant != targetHeight else { return primary?.taskID }
+        guard view.window != nil else {
+            heroHeight?.constant = targetHeight
+            heroView.alphaValue = targetHeight == 0 ? 0 : 1
+            return primary?.taskID
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.38
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.3, 1)
+            ctx.allowsImplicitAnimation = true
+            heroHeight?.animator().constant = targetHeight
+            heroView.animator().alphaValue = targetHeight == 0 ? 0 : 1
+            view.layoutSubtreeIfNeeded()
+        }
+        return primary?.taskID
     }
 
     private func visibleRowIndexes() -> IndexSet {
@@ -2291,6 +2339,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func refreshCover(for taskID: Int64?) {
+        heroView.refreshCover(with: rows)
         for row in 0..<rows.count {
             if let taskID, rows[row].taskID != taskID { continue }
             if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView {
@@ -2416,14 +2465,20 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     private func applyHoveredRow(_ row: Int?) {
         guard hoveredRow != row else { return }
-        if let old = hoveredRow,
-           let cell = tableView.view(atColumn: 0, row: old, makeIfNecessary: false) as? TaskRowCellView {
-            cell.setHovered(false)
+        if let old = hoveredRow {
+            if let cell = tableView.view(atColumn: 0, row: old, makeIfNecessary: false) as? TaskRowCellView {
+                cell.setHovered(false)
+            }
+            (tableView.rowView(atRow: old, makeIfNecessary: false) as? QuietFinderRowView)?
+                .isHovered = false
         }
         hoveredRow = row
-        if let new = row,
-           let cell = tableView.view(atColumn: 0, row: new, makeIfNecessary: false) as? TaskRowCellView {
-            cell.setHovered(true)
+        if let new = row {
+            if let cell = tableView.view(atColumn: 0, row: new, makeIfNecessary: false) as? TaskRowCellView {
+                cell.setHovered(true)
+            }
+            (tableView.rowView(atRow: new, makeIfNecessary: false) as? QuietFinderRowView)?
+                .isHovered = true
         }
     }
 

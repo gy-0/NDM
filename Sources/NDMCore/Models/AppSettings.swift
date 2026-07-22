@@ -99,7 +99,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
         bandwidthLimitBytesPerSecond: Int64 = 0,
         showBrowserMediaPanel: Bool = true,
         confirmBrowserDownloads: Bool = false,
-        appearanceMode: AppearanceMode = .system,
+        // Obsidian Cinema: dark is the product's signature look, not a mode.
+        // System/Light remain one click away in Settings.
+        appearanceMode: AppearanceMode = .dark,
         accentTheme: AccentTheme = .classicBlue,
         customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,

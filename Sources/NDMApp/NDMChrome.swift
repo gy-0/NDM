@@ -18,10 +18,12 @@ enum NDMChrome {
     }
 
     /// Window + titlebar + sidebar share one fill so traffic-lights corner doesn’t seam.
+    /// Obsidian Cinema: the dark ramp is deep space blue-black, not system gray —
+    /// covers and accent light are the bright objects on this canvas.
     static var sidebarFill: NSColor {
         dynamic(
             light: srgb(0.945, 0.953, 0.969), // #F1F3F7
-            dark: srgb(0.086, 0.094, 0.110)   // #16181C
+            dark: srgb(0.039, 0.047, 0.067)   // #0A0C11
         )
     }
 
@@ -29,7 +31,7 @@ enum NDMChrome {
     static var toolbarSurface: NSColor {
         dynamic(
             light: srgb(0.977, 0.982, 0.992), // #F9FAFD
-            dark: srgb(0.105, 0.112, 0.128)   // #1B1D21
+            dark: srgb(0.059, 0.071, 0.098)   // #0F1219
         )
     }
 
@@ -39,7 +41,7 @@ enum NDMChrome {
     static var contentSurface: NSColor {
         dynamic(
             light: srgb(0.982, 0.985, 0.992), // #FAFBFD
-            dark: srgb(0.118, 0.125, 0.141)   // #1E2024
+            dark: srgb(0.071, 0.086, 0.118)   // #12161E
         )
     }
 
@@ -70,7 +72,7 @@ enum NDMChrome {
         case .classicBlue:
             return dynamic(
                 light: srgb(0.118, 0.365, 0.855), // #1E5DDA — original NDM blue, refined
-                dark: srgb(0.376, 0.647, 0.980)   // #60A5FA
+                dark: srgb(0.420, 0.671, 1.0)     // #6BABFF — light source on the cinema canvas
             )
         case .indigo:
             return dynamic(
@@ -186,7 +188,7 @@ enum NDMChrome {
     static var sheetSurface: NSColor {
         dynamic(
             light: srgb(0.988, 0.990, 0.994), // #FCFCFD
-            dark: srgb(0.141, 0.149, 0.165)   // #24262A
+            dark: srgb(0.098, 0.114, 0.153)   // #191D27
         )
     }
 
@@ -469,6 +471,13 @@ final class ThinProgressView: NSView {
     private func refreshColors() {
         trackLayer.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
         fillLayer.backgroundColor = NDMChrome.accent.cgColor
+        // Obsidian Cinema: on the dark canvas the accent fill is a light
+        // source — a soft bloom, not a flat bar. Light mode stays matte.
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        fillLayer.shadowColor = NDMChrome.accent.cgColor
+        fillLayer.shadowOpacity = isDark ? 0.6 : 0
+        fillLayer.shadowRadius = 5
+        fillLayer.shadowOffset = .zero
     }
 
     private func updateAccessibilityValue() {
@@ -876,13 +885,16 @@ final class SpeedSparklineView: NSView {
         let line = CGMutablePath()
         let fill = CGMutablePath()
 
+        // Bottom-left origin (non-flipped layer): faster = higher on screen,
+        // fill hangs below the curve. The old formula drew the whole chart
+        // upside down.
         func y(for value: Double) -> CGFloat {
-            h - CGFloat(value / ceiling) * (h - 4) - 1
+            1 + CGFloat(value / ceiling) * (h - 4)
         }
 
         let firstY = y(for: samples[0])
         line.move(to: CGPoint(x: offset, y: firstY))
-        fill.move(to: CGPoint(x: offset, y: h + 1))
+        fill.move(to: CGPoint(x: offset, y: -1))
         fill.addLine(to: CGPoint(x: offset, y: firstY))
 
         for i in 1..<samples.count {
@@ -900,7 +912,7 @@ final class SpeedSparklineView: NSView {
         }
 
         let lastX = offset + CGFloat(samples.count - 1) * step
-        fill.addLine(to: CGPoint(x: lastX, y: h + 1))
+        fill.addLine(to: CGPoint(x: lastX, y: -1))
         fill.closeSubpath()
 
         CATransaction.begin()

@@ -113,6 +113,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var progressText: String
     public var sizeText: String
     public var speedText: String
+    /// Raw transfer rate for animated displays (0 when not downloading).
+    public var speedBytesPerSecond: Double
     public var etaText: String
     public var connectionsText: String
     public var urlText: String
@@ -174,7 +176,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         mediaBadge: String? = nil,
         isDownloading: Bool = false,
         isFailed: Bool = false,
-        isQueued: Bool = false
+        isQueued: Bool = false,
+        speedBytesPerSecond: Double = 0
     ) {
         self.taskID = taskID
         self.filename = filename
@@ -206,6 +209,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.isDownloading = isDownloading
         self.isFailed = isFailed
         self.isQueued = isQueued
+        self.speedBytesPerSecond = speedBytesPerSecond
     }
 
     public static func make(task: DownloadTask, progress: DownloadProgress?) -> TaskRowPresentation {
@@ -369,7 +373,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
             mediaBadge: mediaBadge,
             isDownloading: task.status == .downloading,
             isFailed: task.status == .error,
-            isQueued: task.status == .waiting
+            isQueued: task.status == .waiting,
+            speedBytesPerSecond: task.status == .downloading ? speed : 0
         )
     }
 }
