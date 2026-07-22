@@ -69,22 +69,50 @@ public enum HLSPlaylist {
         public var resolution: String?
         public var codecs: String?
         public var uri: String
+        /// The AUDIO group this video stream references, if its audio is a
+        /// separate rendition (X/Twitter, many CDNs). nil = self-contained.
+        public var audioGroupID: String?
 
-        public init(bandwidth: Int, resolution: String? = nil, codecs: String? = nil, uri: String) {
+        public init(bandwidth: Int, resolution: String? = nil, codecs: String? = nil, uri: String, audioGroupID: String? = nil) {
             self.bandwidth = bandwidth
             self.resolution = resolution
             self.codecs = codecs
             self.uri = uri
+            self.audioGroupID = audioGroupID
+        }
+    }
+
+    /// A separate audio-only rendition declared with `#EXT-X-MEDIA:TYPE=AUDIO`.
+    public struct AudioRendition: Equatable, Sendable {
+        public var groupID: String
+        public var uri: String?
+        public var isDefault: Bool
+        public init(groupID: String, uri: String?, isDefault: Bool) {
+            self.groupID = groupID
+            self.uri = uri
+            self.isDefault = isDefault
         }
     }
 
     public struct Master: Equatable, Sendable {
         public var variants: [Variant]
-        public init(variants: [Variant] = []) { self.variants = variants }
+        public var audioRenditions: [AudioRendition]
+        public init(variants: [Variant] = [], audioRenditions: [AudioRendition] = []) {
+            self.variants = variants
+            self.audioRenditions = audioRenditions
+        }
 
         /// Prefer highest bandwidth (original / typical player default).
         public var preferredVariant: Variant? {
             variants.max(by: { $0.bandwidth < $1.bandwidth })
+        }
+
+        /// The audio-rendition URI a variant should be muxed with, if any.
+        /// Prefers the group's DEFAULT rendition, else the first with a URI.
+        public func audioURI(for variant: Variant) -> String? {
+            guard let group = variant.audioGroupID else { return nil }
+            let inGroup = audioRenditions.filter { $0.groupID == group && $0.uri != nil }
+            return (inGroup.first(where: \.isDefault) ?? inGroup.first)?.uri
         }
     }
 
@@ -118,10 +146,20 @@ public enum HLSPlaylist {
 
     private static func parseMaster(_ lines: [String]) throws -> Master {
         var variants: [Variant] = []
+        var audioRenditions: [AudioRendition] = []
         var i = 0
         while i < lines.count {
             let line = lines[i]
-            if line.hasPrefix("#EXT-X-STREAM-INF:") {
+            if line.hasPrefix("#EXT-X-MEDIA:") {
+                let attrs = parseAttributes(String(line.dropFirst("#EXT-X-MEDIA:".count)))
+                if (attrs["TYPE"] ?? "").uppercased() == "AUDIO", let group = attrs["GROUP-ID"] {
+                    audioRenditions.append(AudioRendition(
+                        groupID: group,
+                        uri: attrs["URI"],
+                        isDefault: (attrs["DEFAULT"] ?? "").uppercased() == "YES"
+                    ))
+                }
+            } else if line.hasPrefix("#EXT-X-STREAM-INF:") {
                 let attrs = parseAttributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))
                 let bw = Int(attrs["BANDWIDTH"] ?? "0") ?? 0
                 i += 1
@@ -134,13 +172,14 @@ public enum HLSPlaylist {
                     bandwidth: bw,
                     resolution: attrs["RESOLUTION"],
                     codecs: attrs["CODECS"],
-                    uri: lines[i]
+                    uri: lines[i],
+                    audioGroupID: attrs["AUDIO"]
                 ))
             }
             i += 1
         }
         guard !variants.isEmpty else { throw HLSError.emptyMaster }
-        return Master(variants: variants)
+        return Master(variants: variants, audioRenditions: audioRenditions)
     }
 
     private static func parseMedia(_ lines: [String]) throws -> Media {

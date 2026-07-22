@@ -80,4 +80,42 @@ final class HLSPlaylistTests: XCTestCase {
             XCTAssertEqual(err as? HLSError, .notPlaylist)
         }
     }
+
+    /// X/Twitter serves video and audio as separate HLS renditions. The master
+    /// parser must capture the EXT-X-MEDIA:TYPE=AUDIO rendition and link it to
+    /// the video variant, or the download is silent (the reported bug).
+    func testMasterParsesSeparateAudioRendition() throws {
+        let text = """
+        #EXTM3U
+        #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Audio",DEFAULT=YES,URI="/a/audio.m3u8"
+        #EXT-X-STREAM-INF:BANDWIDTH=2176000,RESOLUTION=1280x720,CODECS="avc1.640020,mp4a.40.2",AUDIO="aud"
+        /v/720.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=832000,RESOLUTION=640x360,AUDIO="aud"
+        /v/360.m3u8
+        """
+        guard case .master(let master) = try HLSPlaylist.parse(text) else {
+            return XCTFail("expected master playlist")
+        }
+        XCTAssertEqual(master.variants.count, 2)
+        XCTAssertEqual(master.audioRenditions.count, 1)
+        let variant = try XCTUnwrap(master.preferredVariant)
+        XCTAssertEqual(variant.audioGroupID, "aud")
+        XCTAssertEqual(master.audioURI(for: variant), "/a/audio.m3u8")
+    }
+
+    /// A self-contained variant (audio muxed into the video stream) has no
+    /// separate rendition to fetch.
+    func testMasterWithoutSeparateAudioReturnsNil() throws {
+        let text = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720
+        /v/720.m3u8
+        """
+        guard case .master(let master) = try HLSPlaylist.parse(text) else {
+            return XCTFail("expected master playlist")
+        }
+        let variant = try XCTUnwrap(master.preferredVariant)
+        XCTAssertNil(variant.audioGroupID)
+        XCTAssertNil(master.audioURI(for: variant))
+    }
 }

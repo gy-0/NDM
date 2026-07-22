@@ -76,63 +76,32 @@ public actor HLSEngine {
         log("DownloadID = \(taskID) , Protocol = HLS , OS = MAC")
         log("Trying to Start HLS Download for -> \(request.url.absoluteString)")
 
-        let media = try await resolveMediaPlaylist(startingAt: request.url)
+        let streams = try await resolveMediaPlaylist(startingAt: request.url)
+        let media = streams.video
         log("TS-Mode Sockets Created. hlsSegmentsCount = \(media.segments.count)")
 
-        var keyData: Data?
-        if let key = media.key, key.isAES128 {
-            guard let uri = key.uri,
-                  let keyURL = HLSPlaylist.resolveURL(uri, against: request.url) else {
-                throw HLSError.missingKey
-            }
-            keyData = try await fetchData(keyURL)
-            log("Loaded AES-128 key (\(keyData?.count ?? 0) bytes)")
-        }
-
+        // Progress denominator spans both streams when there's separate audio.
+        let audioCount = streams.audio?.segments.count ?? 0
         progress.segmentStates = media.segments.map {
             SegmentState(id: $0.id, start: 0, end: 0, completed: 0, isFinished: false)
         }
-        progress.totalBytes = Int64(media.segments.count) // segment count as progress denominator unit
+        progress.totalBytes = Int64(media.segments.count + audioCount)
 
         let tsDir = workDirectory.appendingPathComponent("ts", isDirectory: true)
         try FileManager.default.createDirectory(at: tsDir, withIntermediateDirectories: true)
 
         var completed: Int64 = 0
-        for (index, seg) in media.segments.enumerated() {
-            if token.isCancelled {
-                if token.isPaused { throw EngineError.paused }
-                throw EngineError.cancelled
-            }
-            let partURL = tsDir.appendingPathComponent(String(format: "seg_%05d.ts", index))
-            // Resume: skip segments already on disk (G06).
-            if FileManager.default.fileExists(atPath: partURL.path),
-               let attrs = try? FileManager.default.attributesOfItem(atPath: partURL.path),
-               let size = (attrs[.size] as? NSNumber)?.intValue, size > 0 {
-                completed += 1
-                progress.completedBytes = completed
-                if index < progress.segmentStates.count {
-                    progress.segmentStates[index].completed = 1
-                    progress.segmentStates[index].isFinished = true
-                }
-                log("TS-Segment \(index + 1)/\(media.segments.count) resumed from disk")
-                continue
-            }
-            guard let segURL = HLSPlaylist.resolveURL(seg.uri, against: request.url) else {
-                throw HLSError.unresolvedURL(seg.uri)
-            }
-            var data = try await fetchData(segURL, byteRange: seg.byteRange)
-            if let keyData, let key = media.key, key.isAES128 {
-                let iv = Self.ivData(hex: key.ivHex, mediaSequence: seg.id)
-                data = try Self.decryptAES128(data, key: keyData, iv: iv)
-            }
-            try data.write(to: partURL, options: .atomic)
-            completed += 1
-            progress.completedBytes = completed
-            if index < progress.segmentStates.count {
-                progress.segmentStates[index].completed = 1
-                progress.segmentStates[index].isFinished = true
-            }
-            log("TS-Segment \(index + 1)/\(media.segments.count) ok (\(data.count) bytes)")
+        try await downloadSegments(media, into: tsDir, label: "TS", completedBase: &completed)
+
+        // Separate audio rendition: download its segments too.
+        var audioMergedURL: URL?
+        if let audio = streams.audio, !audio.segments.isEmpty {
+            let audioDir = workDirectory.appendingPathComponent("audio", isDirectory: true)
+            try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+            try await downloadSegments(audio, into: audioDir, label: "Audio", completedBase: &completed)
+            let merged = workDirectory.appendingPathComponent("audio.ts")
+            try mergeTS(count: audio.segments.count, from: audioDir, to: merged)
+            audioMergedURL = merged
         }
 
         log("DownloadEngine State Changed : Downloading... -> Merging...")
@@ -154,17 +123,26 @@ public actor HLSEngine {
                 .appendingPathComponent((filename as NSString).deletingPathExtension)
                 .appendingPathExtension("mp4")
             do {
-                try FFmpegTool.remuxToMP4(ffmpeg: ffmpeg, input: mergedURL, output: mp4URL)
+                if let audioMergedURL {
+                    // Mux the separate video + audio streams into one MP4.
+                    try FFmpegTool.muxAV(ffmpeg: ffmpeg, video: mergedURL, audio: audioMergedURL, output: mp4URL)
+                    try? FileManager.default.removeItem(at: audioMergedURL)
+                    log("Muxed HLS video + separate audio -> MP4 (stream copy)")
+                } else {
+                    try FFmpegTool.remuxToMP4(ffmpeg: ffmpeg, input: mergedURL, output: mp4URL)
+                    log("Remuxed TS -> MP4 (stream copy, faststart)")
+                }
                 finalURL = mp4URL
                 try? FileManager.default.removeItem(at: mergedURL)
-                log("Remuxed TS -> MP4 (stream copy, faststart)")
             } catch {
-                log("MP4 remux unavailable for this stream; keeping TS. \(error.localizedDescription)")
+                log("MP4 remux/mux unavailable for this stream; keeping TS. \(error.localizedDescription)")
                 finalURL = Self.tsFallbackURL(for: finalURL)
                 try Self.replaceItem(at: finalURL, with: mergedURL)
             }
         } else {
-            log("ffmpeg not found; keeping TS output")
+            // Without ffmpeg a separate audio track can't be muxed; the video
+            // TS is at least playable (silent). Logged so it's diagnosable.
+            log("ffmpeg not found; keeping TS output\(audioMergedURL != nil ? " (audio track could not be muxed)" : "")")
             finalURL = Self.tsFallbackURL(for: finalURL)
             try Self.replaceItem(at: finalURL, with: mergedURL)
         }
@@ -179,13 +157,66 @@ public actor HLSEngine {
         return finalURL
     }
 
+    /// Download every segment of one media playlist into `dir` (seg_%05d.ts),
+    /// decrypting AES-128 when present, advancing shared progress.
+    private func downloadSegments(
+        _ media: HLSPlaylist.Media,
+        into dir: URL,
+        label: String,
+        completedBase completed: inout Int64
+    ) async throws {
+        var keyData: Data?
+        if let key = media.key, key.isAES128 {
+            guard let uri = key.uri,
+                  let keyURL = HLSPlaylist.resolveURL(uri, against: request.url) else {
+                throw HLSError.missingKey
+            }
+            keyData = try await fetchData(keyURL)
+            log("Loaded AES-128 key for \(label) (\(keyData?.count ?? 0) bytes)")
+        }
+        for (index, seg) in media.segments.enumerated() {
+            if token.isCancelled {
+                if token.isPaused { throw EngineError.paused }
+                throw EngineError.cancelled
+            }
+            let partURL = dir.appendingPathComponent(String(format: "seg_%05d.ts", index))
+            if FileManager.default.fileExists(atPath: partURL.path),
+               let attrs = try? FileManager.default.attributesOfItem(atPath: partURL.path),
+               let size = (attrs[.size] as? NSNumber)?.intValue, size > 0 {
+                completed += 1
+                progress.completedBytes = completed
+                continue
+            }
+            guard let segURL = HLSPlaylist.resolveURL(seg.uri, against: request.url) else {
+                throw HLSError.unresolvedURL(seg.uri)
+            }
+            var data = try await fetchData(segURL, byteRange: seg.byteRange)
+            if let keyData, let key = media.key, key.isAES128 {
+                let iv = Self.ivData(hex: key.ivHex, mediaSequence: seg.id)
+                data = try Self.decryptAES128(data, key: keyData, iv: iv)
+            }
+            try data.write(to: partURL, options: .atomic)
+            completed += 1
+            progress.completedBytes = completed
+            log("\(label)-Segment \(index + 1)/\(media.segments.count) ok (\(data.count) bytes)")
+        }
+    }
+
     // MARK: - Playlist
 
-    private func resolveMediaPlaylist(startingAt url: URL) async throws -> HLSPlaylist.Media {
+    private struct ResolvedStreams {
+        var video: HLSPlaylist.Media
+        /// Present when the video variant references a separate audio rendition
+        /// (X/Twitter and many CDNs) — must be downloaded and muxed, or the
+        /// result is silent.
+        var audio: HLSPlaylist.Media?
+    }
+
+    private func resolveMediaPlaylist(startingAt url: URL) async throws -> ResolvedStreams {
         let text = try await fetchText(url)
         switch try HLSPlaylist.parse(text) {
         case .media(let media):
-            return media
+            return ResolvedStreams(video: media, audio: nil)
         case .master(let master):
             guard let variant = master.preferredVariant,
                   let mediaURL = HLSPlaylist.resolveURL(variant.uri, against: url) else {
@@ -196,9 +227,19 @@ public actor HLSEngine {
             guard case .media(let media) = try HLSPlaylist.parse(mediaText) else {
                 throw HLSError.emptyMedia
             }
-            // Re-base segment URLs against media playlist URL by swapping request.url context:
-            // fetch uses resolve against request.url — update via returning media with absolute URIs.
-            return absolutize(media, base: mediaURL)
+            let video = absolutize(media, base: mediaURL)
+
+            // Separate audio rendition → resolve its media playlist too.
+            var audio: HLSPlaylist.Media?
+            if let audioURIString = master.audioURI(for: variant),
+               let audioURL = HLSPlaylist.resolveURL(audioURIString, against: url) {
+                log("Variant has a separate audio rendition -> \(audioURL.absoluteString)")
+                let audioText = try await fetchText(audioURL)
+                if case .media(let audioMedia) = try HLSPlaylist.parse(audioText) {
+                    audio = absolutize(audioMedia, base: audioURL)
+                }
+            }
+            return ResolvedStreams(video: video, audio: audio)
         }
     }
 
