@@ -1059,6 +1059,14 @@ public actor DownloadEngine {
                 isFinished: have >= segment.length
             )
         }
+        // Baseline the speed sampler to the bytes already on disk before this
+        // resume. Without this, the first recount treats every previously
+        // downloaded byte as if it arrived in this instant — the "resume →
+        // fake 900 MB/s spike" bug. Real throughput starts from zero here.
+        let resumedSum = segmentCompleted.values.reduce(Int64(0), +)
+        lastSpeedSample = resumedSum
+        speedWindowBytes = 0
+        speedWindowStart = Date()
         recountProgress()
     }
 

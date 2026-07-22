@@ -140,80 +140,95 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         let steps = finalizeSteps()
         let isMedia = steps != nil
 
-        let title = NSTextField(labelWithString: isMedia ? L10n.readyToPlay : L10n.ready)
-        title.font = .systemFont(ofSize: 22, weight: .semibold)
+        // A small green "done" check leads the headline — the completion
+        // moment earns a beat of success color, not flat label ink.
+        let checkBadge = NSImageView()
+        checkBadge.image = NDMChrome.symbol("checkmark.circle.fill", pointSize: 20, weight: .semibold)
+        checkBadge.contentTintColor = .systemGreen
+        checkBadge.translatesAutoresizingMaskIntoConstraints = false
+        checkBadge.setAccessibilityElement(false)
+        let titleText = NSTextField(labelWithString: isMedia ? L10n.readyToPlay : L10n.ready)
+        titleText.font = .systemFont(ofSize: 24, weight: .bold)
+        let title = NSStackView(views: [checkBadge, titleText])
+        title.orientation = .horizontal
+        title.alignment = .centerY
+        title.spacing = 8
+        NSLayoutConstraint.activate([
+            checkBadge.widthAnchor.constraint(equalToConstant: 22),
+            checkBadge.heightAnchor.constraint(equalToConstant: 22),
+        ])
 
         let name = NSTextField(wrappingLabelWithString: task.filename.isEmpty ? L10n.download : task.filename)
-        name.font = .systemFont(ofSize: 14, weight: .medium)
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
         name.lineBreakMode = .byTruncatingMiddle
+        name.maximumNumberOfLines = 2
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // Real thumbnail of the finished file (video frame, PDF page, image…),
-        // with the file icon as instant placeholder.
-        let thumb = NSImageView()
-        thumb.imageScaling = .scaleProportionallyUpOrDown
-        thumb.wantsLayer = true
-        thumb.layer?.cornerRadius = 8
-        thumb.layer?.masksToBounds = true
+        // A generous 16:9 hero: a real Quick Look thumbnail for media, or a
+        // large category-tinted type glyph on a tinted plate for everything
+        // else — no more stamp-sized gray file icon.
+        let thumb = CompletionHeroView(filename: task.filename)
         thumb.translatesAutoresizingMaskIntoConstraints = false
-        thumb.image = NDMChrome.fileIcon(filename: task.filename, pointSize: 52)
         thumb.setAccessibilityElement(false)
         NSLayoutConstraint.activate([
-            thumb.widthAnchor.constraint(equalToConstant: 92),
-            thumb.heightAnchor.constraint(equalToConstant: 56),
+            thumb.widthAnchor.constraint(equalToConstant: 168),
+            thumb.heightAnchor.constraint(equalToConstant: 104),
         ])
-        loadThumbnail(into: thumb)
+        loadThumbnail(into: thumb.imageView)
 
         let sizeText = task.fileSize > 0
             ? TaskPresentationFormatting.byteCount(task.fileSize)
             : ""
-        let path = task.destinationFileURL?.path ?? task.folderPath ?? ""
-        let meta = NSTextField(wrappingLabelWithString: [sizeText, path].filter { !$0.isEmpty }.joined(separator: "\n"))
-        meta.font = .systemFont(ofSize: 11)
+        let typeText = L10n.fileTypeDisplay(ext: (task.filename as NSString).pathExtension)
+        let meta = NSTextField(labelWithString: [sizeText, typeText].filter { !$0.isEmpty }.joined(separator: "  ·  "))
+        meta.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         meta.textColor = .secondaryLabelColor
-        meta.maximumNumberOfLines = 3
+        meta.lineBreakMode = .byTruncatingTail
         metaLabel = meta
         loadMediaDuration()
 
-        let open = NSButton(
-            title: isMedia ? L10n.play : L10n.open,
-            target: self,
-            action: #selector(openClicked)
-        )
-        NDMChrome.styleMainButton(open)
+        let open = InspectorActionButton(title: isMedia ? L10n.play : L10n.open)
+        open.target = self
+        open.action = #selector(openClicked)
         open.keyEquivalent = "\r"
-        open.controlSize = .regular
-        open.image = NDMChrome.symbol(isMedia ? "play.fill" : "arrow.up.forward.app.fill", pointSize: 11)
+        open.image = NDMChrome.symbol(isMedia ? "play.fill" : "arrow.up.forward.app.fill", pointSize: 12, weight: .semibold)
         open.imagePosition = .imageLeading
+        open.imageHugsTitle = true
+        open.font = .systemFont(ofSize: 13, weight: .semibold)
+        open.contentTintColor = NDMChrome.accent
 
-        let reveal = NSButton(title: L10n.showInFinder, target: self, action: #selector(revealClicked))
-        NDMChrome.styleGhostButton(reveal)
-        reveal.controlSize = .regular
-        reveal.image = NDMChrome.symbol("folder", pointSize: 11)
+        let reveal = InspectorActionButton(title: L10n.showInFinder)
+        reveal.target = self
+        reveal.action = #selector(revealClicked)
+        reveal.image = NDMChrome.symbol("folder", pointSize: 12, weight: .medium)
         reveal.imagePosition = .imageLeading
+        reveal.imageHugsTitle = true
+        reveal.font = .systemFont(ofSize: 13, weight: .medium)
+        reveal.contentTintColor = .secondaryLabelColor
 
-        let share = NSButton(title: "", target: self, action: #selector(shareClicked))
-        share.isBordered = false
-        share.bezelStyle = .inline
-        share.controlSize = .regular
-        share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 12, weight: .medium)
+        let share = InspectorActionButton(title: "")
+        share.target = self
+        share.action = #selector(shareClicked)
+        share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 13, weight: .medium)
         share.imagePosition = .imageOnly
-        share.toolTip = L10n.share
+        share.contentTintColor = .secondaryLabelColor
         share.setAccessibilityLabel(L10n.share)
 
-        let more = NSButton(title: "", target: self, action: #selector(showMoreActions(_:)))
-        more.isBordered = false
-        more.bezelStyle = .inline
-        more.controlSize = .regular
-        more.image = NDMChrome.symbol("ellipsis", pointSize: 12, weight: .semibold)
+        let more = InspectorActionButton(title: "")
+        more.target = self
+        more.action = #selector(showMoreActions(_:))
+        more.image = NDMChrome.symbol("ellipsis", pointSize: 13, weight: .semibold)
         more.imagePosition = .imageOnly
-        more.toolTip = L10n.moreActions
+        more.contentTintColor = .secondaryLabelColor
         more.setAccessibilityLabel(L10n.moreActions)
         more.isHidden = !SmartFinalize.supportsDeliveryRecipes(input: task.destinationFileURL)
 
-        let close = NSButton(title: L10n.close, target: self, action: #selector(closeClicked))
-        NDMChrome.styleGhostButton(close)
+        let close = InspectorActionButton(title: L10n.close)
+        close.target = self
+        close.action = #selector(closeClicked)
         close.keyEquivalent = "\u{1b}"
+        close.font = .systemFont(ofSize: 13, weight: .medium)
+        close.contentTintColor = .secondaryLabelColor
 
         let fileExists = task.destinationFileURL.map {
             FileManager.default.fileExists(atPath: $0.path)
@@ -242,10 +257,17 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             close.heightAnchor.constraint(equalToConstant: 32),
         ])
 
-        let headerRow = NSStackView(views: [thumb, name])
-        headerRow.orientation = .horizontal
-        headerRow.alignment = .centerY
+        // Hero on top, then filename + meta beneath it — a poster-and-caption
+        // composition, not an icon-beside-text row.
+        let caption = NSStackView(views: [name, meta])
+        caption.orientation = .vertical
+        caption.alignment = .leading
+        caption.spacing = 3
+        let headerRow = NSStackView(views: [thumb, caption])
+        headerRow.orientation = .vertical
+        headerRow.alignment = .leading
         headerRow.spacing = 12
+        headerRow.setCustomSpacing(14, after: thumb)
 
         var arranged: [NSView] = [title, headerRow]
         var stepsBoxRef: NSView?
@@ -278,7 +300,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         if !scribeStudioCard.isHidden {
             arranged.append(scribeStudioCard)
         }
-        arranged.append(contentsOf: [meta, actions])
+        arranged.append(actions)
 
         let stack = NSStackView(views: arranged)
         stack.orientation = .vertical
@@ -317,7 +339,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
             headerRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            meta.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            caption.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         if let stepsBoxRef {
             stepsBoxRef.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -355,21 +377,21 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true, animate: animate)
     }
 
-    /// Replace the icon placeholder with a real Quick Look thumbnail.
+    /// Replace the type glyph with a real Quick Look thumbnail once ready.
     private func loadThumbnail(into imageView: NSImageView) {
-        guard let fileURL = task.destinationFileURL,
+        guard let hero = imageView.superview as? CompletionHeroView,
+              let fileURL = task.destinationFileURL,
               FileManager.default.fileExists(atPath: fileURL.path) else { return }
         let request = QLThumbnailGenerator.Request(
             fileAt: fileURL,
-            size: CGSize(width: 92, height: 56),
+            size: CGSize(width: 336, height: 208),
             scale: window?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak imageView] rep, _ in
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak hero] rep, _ in
             guard let rep else { return }
             Task { @MainActor in
-                imageView?.image = rep.nsImage
-                imageView?.imageScaling = .scaleProportionallyUpOrDown
+                hero?.showThumbnail(rep.nsImage)
             }
         }
     }
@@ -480,4 +502,112 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
 private final class CompletionDocumentView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// Completion hero: a rounded 16:9 plate that shows a real Quick Look
+/// thumbnail once it loads, or a large category-tinted type glyph as the
+/// resting state — plus a soft drop shadow so the finished file feels like an
+/// object, not a list entry.
+@MainActor
+final class CompletionHeroView: NSView {
+    let imageView = NSImageView()
+    private let plate = NSView()
+    private let glyphView = NSImageView()
+
+    init(filename: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.14
+        layer?.shadowRadius = 12
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
+
+        plate.wantsLayer = true
+        plate.layer?.cornerRadius = 12
+        plate.layer?.masksToBounds = true
+        plate.layer?.borderWidth = 1
+        plate.layer?.borderColor = NDMChrome.hairline.cgColor
+        plate.translatesAutoresizingMaskIntoConstraints = false
+
+        let tint = Self.tint(for: filename)
+        plate.layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
+
+        glyphView.image = Self.glyph(for: filename)
+        glyphView.contentTintColor = tint.withAlphaComponent(0.9)
+        glyphView.imageScaling = .scaleProportionallyUpOrDown
+        glyphView.translatesAutoresizingMaskIntoConstraints = false
+
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.wantsLayer = true
+        imageView.layer?.cornerRadius = 12
+        imageView.layer?.masksToBounds = true
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.isHidden = true
+
+        addSubview(plate)
+        plate.addSubview(glyphView)
+        addSubview(imageView)
+        NSLayoutConstraint.activate([
+            plate.leadingAnchor.constraint(equalTo: leadingAnchor),
+            plate.trailingAnchor.constraint(equalTo: trailingAnchor),
+            plate.topAnchor.constraint(equalTo: topAnchor),
+            plate.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glyphView.centerXAnchor.constraint(equalTo: plate.centerXAnchor),
+            glyphView.centerYAnchor.constraint(equalTo: plate.centerYAnchor),
+            glyphView.widthAnchor.constraint(equalToConstant: 46),
+            glyphView.heightAnchor.constraint(equalToConstant: 46),
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // Reveal the real thumbnail as soon as one is assigned.
+        imageView.postsFrameChangedNotifications = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        plate.layer?.borderColor = NDMChrome.hairline.cgColor
+    }
+
+    /// Called by the QL callback; flips from glyph to photo.
+    func showThumbnail(_ image: NSImage) {
+        imageView.image = image
+        imageView.isHidden = false
+        plate.isHidden = true
+    }
+
+    private static func tint(for filename: String) -> NSColor {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "dmg", "iso": return .systemIndigo
+        case "pkg", "app", "exe", "msi", "apk": return .systemPurple
+        case "zip", "rar", "7z", "gz", "tar": return .systemOrange
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": return .systemBlue
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg": return .systemPink
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": return NDMChrome.accent
+        default: return .systemGray
+        }
+    }
+
+    private static func glyph(for filename: String) -> NSImage? {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let name: String
+        switch ext {
+        case "dmg", "iso": name = "externaldrive.fill"
+        case "pkg", "app", "exe", "msi", "apk": name = "shippingbox.fill"
+        case "zip", "rar", "7z", "gz", "tar": name = "archivebox.fill"
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg": name = "waveform"
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": name = "doc.richtext.fill"
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": name = "film.fill"
+        default: name = "doc.fill"
+        }
+        let img = NDMChrome.symbol(name, pointSize: 46, weight: .regular)
+        img?.isTemplate = true
+        return img
+    }
 }

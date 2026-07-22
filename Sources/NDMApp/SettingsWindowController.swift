@@ -185,15 +185,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         appearancePopup.action = #selector(appearanceSelectionChanged)
         accentPopup.target = self
         accentPopup.action = #selector(accentSelectionChanged)
-        customAccentColorWell.target = self
-        customAccentColorWell.action = #selector(customAccentChanged)
+        // The well is now an off-screen holder for the chosen custom color;
+        // the visible interaction is the system color panel (see
+        // openCustomAccentPanel). No target/action or layout needed.
         customAccentColorWell.setAccessibilityLabel(L10n.t("Custom accent color", "自定义强调色"))
-        // A minimal well opens an inline swatch grid instead of the heavyweight
-        // system color panel — the "clicking custom did nothing" felt broken
-        // because the big panel was easy to miss/dismiss.
-        if #available(macOS 13.0, *) {
-            customAccentColorWell.colorWellStyle = .minimal
-        }
         languagePopup.removeAllItems()
         AppLanguageMode.allCases.forEach { languagePopup.addItem(withTitle: $0.settingsTitle) }
         languagePopup.target = self
@@ -527,14 +522,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func makeAppearancePane() -> NSView {
         appearancePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
-        accentPopup.widthAnchor.constraint(equalToConstant: 140).isActive = true
-        customAccentColorWell.widthAnchor.constraint(equalToConstant: 34).isActive = true
-        customAccentColorWell.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        customAccentColorWell.toolTip = L10n.t("Choose any color", "选择任意颜色")
-        let customLabel = NSTextField(labelWithString: L10n.t("Custom", "自定义"))
-        customLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        customLabel.textColor = .secondaryLabelColor
-        let accentControls = NSStackView(views: [accentPopup, customLabel, customAccentColorWell])
+        accentPopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        // The accent row is just the menu now. Picking "自定义…" opens the
+        // color panel directly — no permanent "Custom" label + color well
+        // sitting in the row getting in the way when a preset is chosen.
+        let accentControls = NSStackView(views: [accentPopup])
         accentControls.orientation = .horizontal
         accentControls.alignment = .centerY
         accentControls.spacing = 8
@@ -595,11 +587,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                     detail: L10n.t("Upper limit — not a forced connection count.", "上限，不是始终强制使用的连接数。"),
                     control: connField
                 ),
-                toggleRow(
+                { let row = toggleRow(
                     title: L10n.smartConnectionsTitle,
                     detail: L10n.smartConnectionsFootnote,
                     toggle: smartConnSwitch
-                ),
+                ); row.toolTip = L10n.smartConnectionsDetail; return row }(),
                 settingsRow(
                     title: L10n.globalSpeedCaption,
                     detail: L10n.t("Enter 0 for unlimited.", "输入 0 表示不限速。"),
@@ -1070,15 +1062,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     @objc private func accentSelectionChanged() {
-        refreshAccentControls()
+        let themes = AccentTheme.allCases
+        let index = accentPopup.indexOfSelectedItem
+        let isCustom = themes.indices.contains(index) && themes[index] == .custom
+        if isCustom {
+            // Selecting "自定义…" opens the system color panel right away —
+            // that IS the interaction, not a separate well to hunt for.
+            openCustomAccentPanel()
+        }
         commitAppearanceLive()
     }
 
-    @objc private func customAccentChanged() {
+    private func openCustomAccentPanel() {
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.color = NDMChrome.accent(for: .custom, customHex: settings.customAccentHex)
+        panel.setTarget(self)
+        panel.setAction(#selector(customAccentPanelChanged(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func customAccentPanelChanged(_ sender: NSColorPanel) {
         guard let customIndex = AccentTheme.allCases.firstIndex(of: .custom) else { return }
+        customAccentColorWell.color = sender.color
         accentPopup.selectItem(at: customIndex)
-        accentPopup.item(at: customIndex)?.image = Self.accentSwatch(color: customAccentColorWell.color)
-        refreshAccentControls()
+        accentPopup.item(at: customIndex)?.image = Self.accentSwatch(color: sender.color)
         commitAppearanceLive()
     }
 
@@ -1103,8 +1111,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         if AppLanguageMode.allCases.indices.contains(languageIndex) {
             next.languageMode = AppLanguageMode.allCases[languageIndex]
         }
+        let appearanceChanged = settings.appearanceMode != next.appearanceMode
         settings = next
-        AppearanceApplicator.apply(next.appearanceMode)
+        AppearanceApplicator.apply(next.appearanceMode, animated: appearanceChanged)
         NDMChrome.applyAccentTheme(next.accentTheme, customHex: next.customAccentHex)
         L10n.apply(next.languageMode)
         // Refresh the accent swatches in the popup to the new theme colors.
@@ -1501,6 +1510,10 @@ private final class SettingsNavigationButton: NSButton {
         }
     }
 
+    private var isHovering = false {
+        didSet { if oldValue != isHovering { needsDisplay = true } }
+    }
+
     init(
         title: String,
         symbolName: String,
@@ -1560,8 +1573,37 @@ private final class SettingsNavigationButton: NSButton {
 
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (isSelected ? NDMChrome.rowActive : NSColor.clear).cgColor
+            let bg: NSColor
+            if isSelected {
+                bg = NDMChrome.rowActive
+            } else if isHovering {
+                bg = NSColor.labelColor.withAlphaComponent(0.05)
+            } else {
+                bg = .clear
+            }
+            layer?.backgroundColor = bg.cgColor
         }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { if $0.owner === self { removeTrackingArea($0) } }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovering = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovering = false
     }
 
     override func keyDown(with event: NSEvent) {

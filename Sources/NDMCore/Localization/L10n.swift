@@ -1217,15 +1217,20 @@ public enum L10n: Sendable {
         t("Max connections per download (1–32)", "每个任务最大连接数（1–32）")
     }
     public static var smartConnectionsTitle: String {
-        t(
-            "Smart connections (automatically test up to the selected limit)",
-            "智能连接（自动测试至所选上限）"
-        )
+        t("Smart connections", "智能连接")
     }
+    /// Short one-liner shown under the toggle — the full method is in the tooltip.
     public static var smartConnectionsFootnote: String {
         t(
-            "Large resumable downloads start at 2 and try 4, 8, 16, then 32 only while each step improves measured throughput by at least 25%. This can make the first few seconds slower. Turn it off to attempt the selected connection count immediately; a server may still queue, throttle, ignore, or reject excess Range requests.",
-            "支持续传的大文件会从 2 条开始，再按 4、8、16、32 逐级实测；每次至少提升 25% 才继续，因此开头几秒可能更慢。关闭后会立即尝试所选连接数；服务器仍可能对过多的 Range 请求排队、限速、忽略或拒绝。"
+            "Ramps connections up step by step to find the fastest stable count.",
+            "自动逐级增加连接数，找到最快且稳定的档位。"
+        )
+    }
+    /// Full explanation, surfaced on hover so the row stays uncluttered.
+    public static var smartConnectionsDetail: String {
+        t(
+            "Large resumable downloads start at 2 connections and try 4, 8, 16, then 32 — advancing only while each step measurably improves throughput. The selected count is the ceiling. Turn this off to attempt that count immediately; some servers throttle or reject excess Range requests.",
+            "支持续传的大文件从 2 条连接开始，依次尝试 4、8、16、32，只有每一级实测吞吐确有提升才继续。所选连接数是上限。关闭后会立即尝试该连接数；部分服务器会对过多的 Range 请求限速或拒绝。"
         )
     }
     public static var whySoFastPrefix: String { t("Why so fast: ", "为什么这么快：") }
