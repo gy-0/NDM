@@ -519,7 +519,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             emptySubtitle: emptyStateSubtitle(),
             // Action buttons only for the true first-run empty state,
             // not for empty filter/search results.
-            emptyShowsActions: allTasks.isEmpty && searchQuery.isEmpty
+            emptyShowsActions: allTasks.isEmpty && searchQuery.isEmpty,
+            headerTitle: searchQuery.isEmpty
+                ? selectedFilter.title
+                : L10n.searchResultsTitle,
+            headerMeta: L10n.headerTaskCount(displayedRows.count)
         )
         updateInspector()
         updateToolbarEnablement()
@@ -1466,6 +1470,15 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         vibrancy.blendingMode = .behindWindow
         vibrancy.state = .followsWindowActiveState
         view = vibrancy
+        let paper = ChromeBox(fill: NDMChrome.sidebarPaperOverlay)
+        paper.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(paper)
+        NSLayoutConstraint.activate([
+            paper.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            paper.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            paper.topAnchor.constraint(equalTo: view.topAnchor),
+            paper.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
         tableView.style = .plain
         tableView.floatsGroupRows = false
         tableView.headerView = nil
@@ -1932,6 +1945,10 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private let scrollView = NSScrollView()
     private let heroView = NowDownloadingHeroView()
     private var heroHeight: NSLayoutConstraint?
+    // Editorial header — the content column opens with the filter's name in
+    // display type, not with a bare file list.
+    private let headerTitleLabel = NSTextField(labelWithString: "")
+    private let headerMetaLabel = NSTextField(labelWithString: "")
     private let emptyLabel = NSTextField(labelWithString: "")
     private let emptySubtitleLabel = NSTextField(labelWithString: "")
     private let emptyStack = NSStackView()
@@ -2054,12 +2071,27 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let heroHeight = heroView.heightAnchor.constraint(equalToConstant: 0)
         self.heroHeight = heroHeight
 
+        headerTitleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        headerTitleLabel.textColor = .labelColor
+        headerTitleLabel.lineBreakMode = .byTruncatingTail
+        headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerMetaLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        headerMetaLabel.textColor = .tertiaryLabelColor
+        headerMetaLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        view.addSubview(headerTitleLabel)
+        view.addSubview(headerMetaLabel)
         view.addSubview(heroView)
         view.addSubview(scrollView)
         view.addSubview(emptyStack)
         view.addSubview(batchBar)
         NSLayoutConstraint.activate([
-            heroView.topAnchor.constraint(equalTo: view.topAnchor),
+            headerTitleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
+            headerTitleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            headerTitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerMetaLabel.leadingAnchor, constant: -12),
+            headerMetaLabel.firstBaselineAnchor.constraint(equalTo: headerTitleLabel.firstBaselineAnchor),
+            headerMetaLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            heroView.topAnchor.constraint(equalTo: headerTitleLabel.bottomAnchor, constant: 12),
             heroView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             heroView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             heroHeight,
@@ -2159,8 +2191,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         selectedTaskID: Int64?,
         emptyTitle: String,
         emptySubtitle: String,
-        emptyShowsActions: Bool = false
+        emptyShowsActions: Bool = false,
+        headerTitle: String = "",
+        headerMeta: String = ""
     ) {
+        headerTitleLabel.stringValue = headerTitle
+        headerMetaLabel.stringValue = headerMeta
 #if DEBUG
         let signpostID = NDMPerformance.begin("TaskListUpdate")
         defer { NDMPerformance.end("TaskListUpdate", id: signpostID) }

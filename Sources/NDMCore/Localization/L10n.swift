@@ -1310,6 +1310,10 @@ public enum L10n: Sendable {
         t("\(count) active · \(speed)", "\(count) 个进行中 · \(speed)")
     }
     public static var nowDownloading: String { t("NOW DOWNLOADING", "正在下载") }
+    public static var searchResultsTitle: String { t("Search Results", "搜索结果") }
+    public static func headerTaskCount(_ count: Int) -> String {
+        t("\(count) items", "\(count) 个任务")
+    }
     public static func heroMoreActive(_ count: Int) -> String {
         t("+\(count) more active", "另有 \(count) 个进行中")
     }

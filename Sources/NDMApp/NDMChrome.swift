@@ -22,8 +22,19 @@ enum NDMChrome {
     /// covers and accent light are the bright objects on this canvas.
     static var sidebarFill: NSColor {
         dynamic(
-            light: srgb(0.945, 0.953, 0.969), // #F1F3F7
+            light: srgb(0.982, 0.985, 0.992), // #FAFBFD — one seamless paper canvas
             dark: srgb(0.039, 0.047, 0.067)   // #0A0C11
+        )
+    }
+
+    /// Painted over the sidebar's vibrancy view. Light: opaque paper so the
+    /// window reads as one continuous sheet (the system "sidebar gray" is
+    /// exactly the old-macOS look we are killing). Dark: fully clear — the
+    /// Obsidian canvas keeps its behind-window glass.
+    static var sidebarPaperOverlay: NSColor {
+        dynamic(
+            light: srgb(0.982, 0.985, 0.992),
+            dark: .clear
         )
     }
 
@@ -806,6 +817,11 @@ final class SpeedSparklineView: NSView {
     private let fillLayer = CAShapeLayer()
     private let peakLabel = NSTextField(labelWithString: "")
     private var samples: [Double] = []
+    private var smoothed: Double = 0
+    /// Sticky Y ceiling: snaps up to a new peak instantly, decays slowly.
+    /// Without it every sample rescales the whole chart and the curve
+    /// "breathes" — unreadable as a trend.
+    private var ceiling: Double = 0
     private let maxSamples = 60
 
     override init(frame frameRect: NSRect) {
@@ -836,13 +852,18 @@ final class SpeedSparklineView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func addSample(_ bytesPerSecond: Double) {
-        samples.append(bytesPerSecond)
+        // Light exponential smoothing: the curve should show the trend, not
+        // reproduce every scheduler hiccup as a spike.
+        smoothed = smoothed == 0 ? bytesPerSecond : smoothed * 0.65 + bytesPerSecond * 0.35
+        samples.append(smoothed)
         if samples.count > maxSamples { samples.removeFirst() }
         redraw()
     }
 
     func reset() {
         samples.removeAll()
+        smoothed = 0
+        ceiling = 0
         lineLayer.path = nil
         fillLayer.path = nil
         peakLabel.stringValue = ""
@@ -876,7 +897,9 @@ final class SpeedSparklineView: NSView {
             peakLabel.stringValue = ""
             return
         }
-        let ceiling = max(peak, 1)
+        // Rise instantly to a new peak; give back headroom at ~1%/sample.
+        ceiling = max(peak, ceiling * 0.99, 1)
+        let ceiling = self.ceiling
         let w = bounds.width
         let h = bounds.height - 2
         let step = w / CGFloat(maxSamples - 1)

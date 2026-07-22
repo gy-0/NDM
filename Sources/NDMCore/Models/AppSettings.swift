@@ -99,9 +99,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
         bandwidthLimitBytesPerSecond: Int64 = 0,
         showBrowserMediaPanel: Bool = true,
         confirmBrowserDownloads: Bool = false,
-        // Obsidian Cinema: dark is the product's signature look, not a mode.
-        // System/Light remain one click away in Settings.
-        appearanceMode: AppearanceMode = .dark,
+        // Most users live in light mode — the signature look must carry there.
+        // Dark (Obsidian Cinema) stays a full first-class option, not the default.
+        appearanceMode: AppearanceMode = .system,
         accentTheme: AccentTheme = .classicBlue,
         customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,

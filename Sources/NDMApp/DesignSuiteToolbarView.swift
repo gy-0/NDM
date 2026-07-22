@@ -11,7 +11,7 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
     var onClipboardOffer: (() -> Void)?
     var onSearch: ((String) -> Void)?
 
-    private let newButton = ToolChipButton(title: "＋ \(L10n.new)", style: .primary)
+    private let newButton = ToolChipButton(title: L10n.new, style: .primary, symbolName: "plus")
     private let pauseButton = ToolChipButton(title: L10n.pause, style: .ghost, symbolName: "pause.fill")
     private let resumeButton = ToolChipButton(title: L10n.resume, style: .ghost, symbolName: "play.fill")
     private let clipboardOfferButton = ClipboardOfferButton()
@@ -259,7 +259,7 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
     }
 
     func relocalize() {
-        newButton.title = "＋ \(L10n.new)"
+        newButton.title = L10n.new
         pauseButton.title = L10n.pause
         resumeButton.title = L10n.resume
         searchField.placeholderString = L10n.searchDownloads
@@ -450,10 +450,16 @@ private final class ToolChipButton: NSButton {
         super.init(frame: .zero)
         self.title = title
         if let symbolName {
-            image = NDMChrome.symbol(symbolName, pointSize: 10.5, weight: .semibold)
+            image = NDMChrome.symbol(symbolName, pointSize: 11, weight: .semibold)
             imagePosition = .imageLeading
             imageScaling = .scaleProportionallyDown
+            // Keep icon and label optically one unit — without this the icon
+            // drifts toward the chip's leading edge and the pair looks skewed.
+            if #available(macOS 11.0, *) {
+                imageHugsTitle = true
+            }
         }
+        alignment = .center
         bezelStyle = .inline
         isBordered = false
         // The stock AppKit focus ring is painted outside the button's layer.
@@ -485,7 +491,7 @@ private final class ToolChipButton: NSButton {
             weight: chipStyle == .primary ? .semibold : .medium
         )
         if let symbolName {
-            image = NDMChrome.symbol(symbolName, pointSize: 10.5 * scale, weight: .semibold)
+            image = NDMChrome.symbol(symbolName, pointSize: 11 * scale, weight: .semibold)
         }
         horizontalPadding = 34 * (1 + (scale - 1) * 0.35)
         invalidateIntrinsicContentSize()
