@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCheckInFlight = false
     private var statusPollTask: Task<Void, Never>?
     private var lastPasteboardChangeCount = -1
+    private var languageRebuildScheduled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         L10n.apply(settings.languageMode)
@@ -46,10 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.setupMainMenu()
-                self?.rebuildStatusItemMenu()
-                await self?.mainWindow?.reload()
+            // Delivered on OperationQueue.main → already on the main thread.
+            MainActor.assumeIsolated {
+                self?.scheduleLocalizedMenuRebuild()
             }
         }
         do {
@@ -300,6 +300,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         _ = mainWindow?.offerClipboardText(raw)
+    }
+
+    /// Live language switch is driven from the Settings language popup.
+    /// Reassigning `NSApp.mainMenu` / the status menu while that popup's menu
+    /// tracking is still unwinding re-enters MenuBarClientCore and traps in
+    /// SerialExecutor.isMainExecutor (0x7c8) on macOS 26/27. Defer the rebuild
+    /// to a clean runloop turn, past menu-tracking teardown, and coalesce
+    /// rapid switches into one rebuild.
+    private func scheduleLocalizedMenuRebuild() {
+        guard !languageRebuildScheduled else { return }
+        languageRebuildScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.languageRebuildScheduled = false
+            self.setupMainMenu()
+            self.rebuildStatusItemMenu()
+            Task { @MainActor [weak self] in
+                await self?.mainWindow?.reload()
+            }
+        }
     }
 
     private func setupMainMenu() {

@@ -2212,6 +2212,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         heroView.onActivateTask = { [weak self] taskID in
             self?.onActivateTaskID?(taskID)
         }
+        heroView.onContextAction = { [weak self] action, taskID in
+            self?.onContextAction?(action, taskID)
+        }
         let heroHeight = heroView.heightAnchor.constraint(equalToConstant: 0)
         self.heroHeight = heroHeight
 

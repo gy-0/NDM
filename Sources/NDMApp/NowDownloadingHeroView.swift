@@ -8,6 +8,9 @@ import NDMCore
 @MainActor
 final class NowDownloadingHeroView: NSView {
     var onActivateTask: ((Int64) -> Void)?
+    /// Right-click actions for the transfer on stage — the hero is not a table
+    /// row, so it carries its own compact menu of in-flight actions.
+    var onContextAction: ((TaskListContextAction, Int64) -> Void)?
 
     private let atmosphere = AtmosphereView()
     private let coverView = NSImageView()
@@ -185,6 +188,28 @@ final class NowDownloadingHeroView: NSView {
         }
         onActivateTask?(currentTaskID)
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard currentTaskID != nil else { return nil }
+        let menu = NSMenu()
+        func add(_ title: String, _ action: Selector, _ symbol: String) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.ndmSymbol(symbol)
+            menu.addItem(item)
+        }
+        add(L10n.progressDetails, #selector(heroProgress), "chart.bar.fill")
+        add(L10n.pause, #selector(heroPause), "pause.fill")
+        menu.addItem(.separator())
+        add(L10n.copyURL, #selector(heroCopyURL), "doc.on.doc")
+        add(L10n.propertiesEllipsis, #selector(heroProperties), "info.circle")
+        return menu
+    }
+
+    @objc private func heroProgress() { if let id = currentTaskID { onContextAction?(.progress, id) } }
+    @objc private func heroPause() { if let id = currentTaskID { onContextAction?(.pause, id) } }
+    @objc private func heroCopyURL() { if let id = currentTaskID { onContextAction?(.copyURL, id) } }
+    @objc private func heroProperties() { if let id = currentTaskID { onContextAction?(.properties, id) } }
 
     /// Live refresh from the 1 s presentation tick.
     func update(primary: TaskRowPresentation?, activeCount: Int) {
