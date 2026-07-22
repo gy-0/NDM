@@ -15,21 +15,20 @@ enum InterfaceScale {
     static let step: CGFloat = 0.1
     static let `default`: CGFloat = 1.0
 
-    private static let suiteName = "dev.ndm.open"
     private static let defaultsKey = "interfaceScale"
     static var current: CGFloat {
         get {
             if let qaScale = QAPreviewOverrides.interfaceScale {
                 return clamp(qaScale)
             }
-            let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+            let defaults = UserDefaults.standard
             let stored = defaults.object(forKey: defaultsKey) as? Double
             let value = CGFloat(stored ?? Double(Self.default))
             return clamp(value)
         }
         set {
             let next = clamp(newValue)
-            let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+            let defaults = UserDefaults.standard
             defaults.set(Double(next), forKey: defaultsKey)
             NotificationCenter.default.post(
                 name: didChangeNotification,

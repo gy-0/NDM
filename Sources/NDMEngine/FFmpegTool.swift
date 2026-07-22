@@ -1,9 +1,15 @@
 import Foundation
+import Darwin
 
 /// Locates and runs the system ffmpeg for lossless finalize steps
 /// (TS → MP4 remux, split A/V track mux). All operations are `-c copy` —
 /// no re-encode, so they finish in seconds even for long videos.
 public enum FFmpegTool {
+    struct ProcessResult: Sendable {
+        let terminationStatus: Int32
+        let standardError: String
+    }
+
     public static func find() -> String? {
         BundledToolLocator.find(
             ["ffmpeg"],
@@ -42,12 +48,12 @@ public enum FFmpegTool {
         ffmpeg: String,
         input: URL,
         output: URL,
-        crf: String,
+        crf _: String,
         maxrate: String
     ) throws {
         try run(ffmpeg, [
             "-y", "-i", input.path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
+            "-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", maxrate,
             "-maxrate", maxrate, "-bufsize", maxrate,
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
@@ -89,7 +95,8 @@ public enum FFmpegTool {
             "-n", "-i", input.path,
             "-map", "0:v:0", "-map", "0:a:0?",
             "-vf", "scale=min(1920\\,iw):min(1080\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:v", "h264_videotoolbox", "-allow_sw", "1",
+            "-b:v", "5M", "-maxrate", "8M", "-bufsize", "10M",
             "-c:a", "aac", "-b:a", "160k",
             "-movflags", "+faststart",
             output.path,
@@ -112,7 +119,7 @@ public enum FFmpegTool {
             "-n", "-i", input.path,
             "-map", "0:v:0", "-map", "0:a:0?",
             "-vf", "scale=min(1280\\,iw):min(720\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-b:v", rate,
+            "-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", rate,
             "-maxrate", rate, "-bufsize", "\(videoKbps * 2)k",
             "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+faststart",
@@ -133,16 +140,11 @@ public enum FFmpegTool {
     }
 
     private static func probeDuration(ffmpeg: String, input: URL) throws -> Double {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: ffmpeg)
-        proc.arguments = ["-hide_banner", "-i", input.path]
-        let err = Pipe()
-        proc.standardError = err
-        proc.standardOutput = Pipe()
-        try proc.run()
-        proc.waitUntilExit()
-        let data = err.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
+        let result = try runProcess(
+            executable: ffmpeg,
+            arguments: ["-hide_banner", "-i", input.path]
+        )
+        let text = result.standardError
         let pattern = #"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
@@ -162,23 +164,73 @@ public enum FFmpegTool {
         if let output = cleanupOnFailure, FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
         }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: ffmpeg)
-        proc.arguments = args
-        let err = Pipe()
-        proc.standardError = err
-        proc.standardOutput = Pipe()
-        try proc.run()
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else {
+        let result: ProcessResult
+        do {
+            result = try runProcess(executable: ffmpeg, arguments: args)
+        } catch {
+            if let output = cleanupOnFailure {
+                try? FileManager.default.removeItem(at: output)
+            }
+            throw error
+        }
+        guard result.terminationStatus == 0 else {
             // A failed run may leave a truncated output file behind.
             if let output = cleanupOnFailure {
                 try? FileManager.default.removeItem(at: output)
             }
-            let data = err.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: data, encoding: .utf8)?
+            let message = result.standardError
                 .split(separator: "\n").last.map(String.init) ?? "ffmpeg failed"
             throw EngineError.mergeFailed(message)
         }
+    }
+
+    /// Run a media subprocess without a bounded pipe. FFmpeg continuously
+    /// writes progress to stderr; waiting before reading can otherwise fill the
+    /// pipe and deadlock a long export. A temporary file keeps output bounded by
+    /// disk instead, while polling lets Swift task cancellation stop the child.
+    static func runProcess(executable: String, arguments: [String]) throws -> ProcessResult {
+        let errorURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-ffmpeg-\(UUID().uuidString).log")
+        guard FileManager.default.createFile(atPath: errorURL.path, contents: nil) else {
+            throw EngineError.mergeFailed("Could not create the media process log")
+        }
+        let errorHandle = try FileHandle(forWritingTo: errorURL)
+        defer {
+            try? errorHandle.close()
+            try? FileManager.default.removeItem(at: errorURL)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardError = errorHandle
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+
+        while process.isRunning {
+            let cancelled = withUnsafeCurrentTask { task in
+                task?.isCancelled ?? false
+            }
+            if cancelled {
+                process.terminate()
+                let deadline = Date().addingTimeInterval(1)
+                while process.isRunning, Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+                if process.isRunning {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                }
+                process.waitUntilExit()
+                throw CancellationError()
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        process.waitUntilExit()
+        try? errorHandle.synchronize()
+        let data = (try? Data(contentsOf: errorURL)) ?? Data()
+        return ProcessResult(
+            terminationStatus: process.terminationStatus,
+            standardError: String(data: data, encoding: .utf8) ?? ""
+        )
     }
 }

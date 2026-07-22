@@ -3,8 +3,8 @@ import AppKit
 /// A restrained, non-interactive type mark for the inspector's empty corner.
 ///
 /// It deliberately has no backdrop, card, play control, or oversized arc. The
-/// mark stays inside a measured safe area, uses one consistent viewing angle,
-/// and never turns a video cover into a second fake player.
+/// mark stays inside a measured safe area, sits upright, and never turns a
+/// video cover into a second fake player.
 @MainActor
 final class InspectorArtifactView: NSView {
     private enum Kind {
@@ -65,8 +65,6 @@ final class InspectorArtifactView: NSView {
         artwork.image = usesRealPreview ? image : Self.symbol(for: filename)
         artwork.tintColor = usesRealPreview ? nil : Self.tint(for: currentKind)
         artwork.alphaValue = usesRealPreview ? 0.18 : 0.28
-        artwork.rotation = usesRealPreview ? -0.055 : -0.12
-        artwork.horizontalSkew = usesRealPreview ? 0 : -0.045
         artwork.isHidden = artwork.image == nil
         configure(for: currentKind)
     }
@@ -139,8 +137,6 @@ final class InspectorArtifactView: NSView {
 private final class ArtifactArtworkView: NSView {
     var image: NSImage? { didSet { needsDisplay = true } }
     var tintColor: NSColor? { didSet { needsDisplay = true } }
-    var rotation: CGFloat = 0 { didSet { needsDisplay = true } }
-    var horizontalSkew: CGFloat = 0 { didSet { needsDisplay = true } }
 
     override var isFlipped: Bool { true }
 
@@ -148,16 +144,12 @@ private final class ArtifactArtworkView: NSView {
         guard let image, image.size.width > 0, image.size.height > 0,
               let context = NSGraphicsContext.current?.cgContext else { return }
 
-        // Rotation happens inside a generous inset, so no type ever loses an
+        // Drawn upright inside a generous inset, so no type ever loses an
         // edge to clipping even at the largest interface scale.
         let safeBounds = bounds.insetBy(dx: 24, dy: 22)
         guard safeBounds.width > 0, safeBounds.height > 0 else { return }
 
         context.saveGState()
-        context.translateBy(x: bounds.midX, y: bounds.midY)
-        context.rotate(by: rotation)
-        context.concatenate(CGAffineTransform(a: 0.985, b: 0.012, c: horizontalSkew, d: 0.985, tx: 0, ty: 0))
-        context.translateBy(x: -bounds.midX, y: -bounds.midY)
 
         let scale = min(safeBounds.width / image.size.width, safeBounds.height / image.size.height)
         let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)

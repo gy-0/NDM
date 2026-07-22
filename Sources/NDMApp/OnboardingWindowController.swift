@@ -68,8 +68,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func showStep(_ index: Int) {
+        let animate = step != index && window?.isVisible == true
         step = index
-        contentBox.subviews.forEach { $0.removeFromSuperview() }
         for (i, dot) in dots.enumerated() {
             dot.fill = i == index
                 ? NDMChrome.accent
@@ -83,6 +83,17 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         default: page = makeReadyStep()
         }
         page.translatesAutoresizingMaskIntoConstraints = false
+
+        if animate {
+            contentBox.wantsLayer = true
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.22
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            contentBox.layer?.add(fade, forKey: "step")
+        }
+
+        contentBox.subviews.forEach { $0.removeFromSuperview() }
         contentBox.addSubview(page)
         NSLayoutConstraint.activate([
             page.centerXAnchor.constraint(equalTo: contentBox.centerXAnchor),
@@ -94,26 +105,22 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Shared pieces
 
     private func makeMark(symbol: String) -> NSView {
-        let mark = ChromeBox(
-            fill: NDMChrome.rowActive,
-            borderColor: NDMChrome.accent.withAlphaComponent(0.16),
-            cornerRadius: 14,
-            borderWidth: 1
-        )
-        mark.translatesAutoresizingMaskIntoConstraints = false
+        // Open hero glyph — a light accent symbol, no pastel tile behind it.
         let icon = NSImageView()
-        icon.image = NDMChrome.symbol(symbol, pointSize: 23, weight: .semibold)
+        icon.image = NDMChrome.symbol(symbol, pointSize: 34, weight: .light)
         icon.contentTintColor = NDMChrome.accent
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.setAccessibilityElement(false)
-        mark.addSubview(icon)
+        let holder = NSView()
+        holder.translatesAutoresizingMaskIntoConstraints = false
+        holder.addSubview(icon)
         NSLayoutConstraint.activate([
-            mark.widthAnchor.constraint(equalToConstant: 52),
-            mark.heightAnchor.constraint(equalToConstant: 52),
-            icon.centerXAnchor.constraint(equalTo: mark.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: mark.centerYAnchor),
+            holder.widthAnchor.constraint(equalToConstant: 52),
+            holder.heightAnchor.constraint(equalToConstant: 44),
+            icon.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
         ])
-        return mark
+        return holder
     }
 
     private func makeTitle(_ text: String) -> NSTextField {
@@ -136,10 +143,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private func makePrimary(_ title: String, action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
         NDMChrome.styleMainButton(button)
-        button.controlSize = .large
         button.keyEquivalent = "\r"
-        button.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 132).isActive = true
         return button
     }
 
@@ -161,14 +167,11 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func makeCapabilityRow(symbol: String, title: String, body: String) -> NSView {
-        let iconWell = ChromeBox(fill: NDMChrome.rowActive, cornerRadius: 9)
-        iconWell.translatesAutoresizingMaskIntoConstraints = false
         let icon = NSImageView()
-        icon.image = NDMChrome.symbol(symbol, pointSize: 15, weight: .semibold)
+        icon.image = NDMChrome.symbol(symbol, pointSize: 17, weight: .medium)
         icon.contentTintColor = NDMChrome.accent
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.setAccessibilityElement(false)
-        iconWell.addSubview(icon)
 
         let heading = NSTextField(labelWithString: title)
         heading.font = .systemFont(ofSize: 12.5, weight: .semibold)
@@ -182,16 +185,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         labels.spacing = 2
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let row = NSStackView(views: [iconWell, labels])
+        let row = NSStackView(views: [icon, labels])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 11
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
+        row.edgeInsets = NSEdgeInsets(top: 9, left: 4, bottom: 9, right: 11)
         NSLayoutConstraint.activate([
-            iconWell.widthAnchor.constraint(equalToConstant: 34),
-            iconWell.heightAnchor.constraint(equalToConstant: 34),
-            icon.centerXAnchor.constraint(equalTo: iconWell.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconWell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 26),
+            icon.heightAnchor.constraint(equalToConstant: 26),
         ])
         return row
     }
@@ -202,9 +203,10 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         card.alignment = .leading
         card.spacing = 0
         card.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
-        card.fill = NDMChrome.dockFill
-        card.cardBorderColor = NDMChrome.hairline
-        card.cornerRadius = 12
+        // Open feature list — rows breathe on the page, no gray card.
+        card.fill = nil
+        card.cardBorderColor = nil
+        card.cornerRadius = 0
         for row in rows {
             row.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -4).isActive = true
         }
@@ -236,7 +238,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             secondary: makeSecondary(L10n.onboardingSkip, action: #selector(finishClicked))
         )
         let stack = NSStackView(views: [
-            makeMark(symbol: "sparkles"),
+            makeMark(symbol: "link"),
             makeTitle(L10n.onboardingStep1Title),
             makeBody(L10n.onboardingStep1Body),
             sources,
@@ -264,7 +266,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
         let foundIcon = NSImageView()
         foundIcon.image = NDMChrome.symbol("checkmark.circle.fill", pointSize: 14, weight: .semibold)
-        foundIcon.contentTintColor = .systemGreen
+        foundIcon.contentTintColor = NDMChrome.accent
         foundIcon.setAccessibilityElement(false)
         let foundTitle = NSTextField(labelWithString: L10n.onboardingExampleFound)
         foundTitle.font = .systemFont(ofSize: 11.5, weight: .semibold)
@@ -286,9 +288,10 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         card.alignment = .leading
         card.spacing = 12
         card.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
-        card.fill = NDMChrome.dockFill
-        card.cardBorderColor = NDMChrome.hairline
-        card.cornerRadius = 12
+        // Open feature list — rows breathe on the page, no gray card.
+        card.fill = nil
+        card.cardBorderColor = nil
+        card.cornerRadius = 0
         shareLabel.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -32).isActive = true
         foundRow.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -32).isActive = true
 

@@ -57,6 +57,7 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertTrue(SidebarFilter.completed.matches(complete))
         XCTAssertTrue(SidebarFilter.failed.matches(failed))
         XCTAssertFalse(SidebarFilter.active.matches(waiting))
+        XCTAssertEqual(SidebarFilter.paused.title, "To Resume")
     }
 
     func testSidebarFilterMatchesCategoriesAndRetryFlags() {

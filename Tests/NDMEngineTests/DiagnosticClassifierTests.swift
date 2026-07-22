@@ -11,9 +11,21 @@ final class DiagnosticClassifierTests: XCTestCase {
             .signInRequired(status: 401)
         )
         XCTAssertEqual(DownloadDiagnostic.classify(EngineError.notResumable), .rangeNotSupported)
+        // `EngineError.mergeFailed` carries every yt-dlp failure; only
+        // genuinely merge-flavored messages keep the merge label.
         XCTAssertEqual(
-            DownloadDiagnostic.classify(EngineError.mergeFailed("boom")),
-            .mergeFailed(detail: "boom")
+            DownloadDiagnostic.classify(EngineError.mergeFailed("ffmpeg exited 1")),
+            .mergeFailed(detail: "ffmpeg exited 1")
+        )
+        XCTAssertEqual(
+            DownloadDiagnostic.classify(EngineError.mergeFailed("Failed on Merging segments.")),
+            .mergeFailed(detail: "Failed on Merging segments.")
+        )
+        XCTAssertEqual(
+            DownloadDiagnostic.classify(
+                EngineError.mergeFailed("ERROR: aria2c exited with code 28")
+            ),
+            .generic(detail: "ERROR: aria2c exited with code 28")
         )
         XCTAssertEqual(
             DownloadDiagnostic.classify(

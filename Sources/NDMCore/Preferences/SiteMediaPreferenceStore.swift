@@ -85,7 +85,6 @@ public struct SiteMediaPreferenceResolution: Equatable, Sendable {
 }
 
 public enum SiteMediaPreferenceStore {
-    private static let suiteName = "dev.ndm.open"
     static let storageKey = "SiteMediaPreferences.v1"
 
     private struct Payload: Codable {
@@ -96,10 +95,7 @@ public enum SiteMediaPreferenceStore {
     }
 
     public static func load(for hostOrURL: String) -> SiteMediaPreference? {
-        load(
-            for: hostOrURL,
-            defaults: UserDefaults(suiteName: suiteName) ?? .standard
-        )
+        load(for: hostOrURL, defaults: .standard)
     }
 
     static func load(
@@ -115,11 +111,7 @@ public enum SiteMediaPreferenceStore {
         _ preference: SiteMediaPreference,
         for hostOrURL: String
     ) {
-        save(
-            preference,
-            for: hostOrURL,
-            defaults: UserDefaults(suiteName: suiteName) ?? .standard
-        )
+        save(preference, for: hostOrURL, defaults: .standard)
     }
 
     static func save(

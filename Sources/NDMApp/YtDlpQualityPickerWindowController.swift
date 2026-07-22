@@ -38,6 +38,7 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
     )
     private let storageIcon = NSImageView()
     private let storageLabel = NSTextField(wrappingLabelWithString: "")
+    private let thumbnailView = NSImageView()
     private var didFinish = false
 
     private static var active: YtDlpQualityPickerWindowController?
@@ -61,7 +62,7 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         self.rememberedPreference = SiteMediaPreferenceStore.load(for: host)
         self.onChoice = onChoice
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: collection == nil ? 584 : 662),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: collection == nil ? 620 : 698),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -117,6 +118,8 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
     private func buildUI() {
         guard let content = window?.contentView else { return }
 
+        let header = makeHeader()
+
         let headline = probe.title.isEmpty ? L10n.advancedVideo : probe.title
         let titleLabel = NSTextField(wrappingLabelWithString: headline)
         titleLabel.font = .systemFont(ofSize: 16, weight: .bold)
@@ -160,7 +163,15 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
 
         let mediaOptions = makeMediaOptions()
         let storageStatus = makeStorageStatus()
-        var arranged: [NSView] = [titleLabel, subLabel]
+        let headerText = NSStackView(views: [titleLabel, subLabel])
+        headerText.orientation = .vertical
+        headerText.alignment = .leading
+        headerText.spacing = 4
+        titleLabel.widthAnchor.constraint(equalTo: headerText.widthAnchor).isActive = true
+        subLabel.widthAnchor.constraint(equalTo: headerText.widthAnchor).isActive = true
+        header.addArrangedSubview(headerText)
+
+        var arranged: [NSView] = [header]
         let collectionScope = collection == nil ? nil : makeCollectionScope()
         if let collectionScope { arranged.append(collectionScope) }
         arranged.append(contentsOf: [optionsStack, storageStatus, mediaOptions, actions])
@@ -168,8 +179,7 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
-        stack.setCustomSpacing(4, after: titleLabel)
-        stack.setCustomSpacing(14, after: subLabel)
+        stack.setCustomSpacing(14, after: header)
         stack.setCustomSpacing(14, after: optionsStack)
         stack.setCustomSpacing(12, after: storageStatus)
         stack.setCustomSpacing(16, after: mediaOptions)
@@ -180,8 +190,7 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            subLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
             optionsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
             storageStatus.widthAnchor.constraint(equalTo: stack.widthAnchor),
             mediaOptions.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -192,10 +201,59 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         ])
         collectionScope?.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         restoreRememberedPreference()
+        loadThumbnail()
+    }
+
+    private func makeHeader() -> NSStackView {
+        thumbnailView.imageScaling = .scaleAxesIndependently
+        thumbnailView.image = NDMChrome.symbol("play.rectangle.fill", pointSize: 28, weight: .medium)
+        thumbnailView.contentTintColor = .tertiaryLabelColor
+        thumbnailView.wantsLayer = true
+        thumbnailView.layer?.cornerRadius = 10
+        thumbnailView.layer?.masksToBounds = true
+        thumbnailView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        thumbnailView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            thumbnailView.widthAnchor.constraint(equalToConstant: 136),
+            thumbnailView.heightAnchor.constraint(equalToConstant: 82),
+        ])
+
+        let row = NSStackView(views: [thumbnailView])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 14
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 82).isActive = true
+        return row
+    }
+
+    private func loadThumbnail() {
+        guard let raw = probe.thumbnailURL,
+              let url = URL(string: raw),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        Task { [weak self] in
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 12
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  data.count <= 12 * 1_024 * 1_024,
+                  let image = NSImage(data: data), image.isValid,
+                  !Task.isCancelled else { return }
+            self?.thumbnailView.contentTintColor = nil
+            self?.thumbnailView.imageScaling = .scaleProportionallyUpOrDown
+            self?.thumbnailView.alphaValue = 0.3
+            self?.thumbnailView.image = image
+            NSAnimationContext.beginGrouping()
+            NSAnimationContext.current.duration = 0.3
+            NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self?.thumbnailView.animator().alphaValue = 1
+            NSAnimationContext.endGrouping()
+        }
     }
 
     private func restoreRememberedPreference() {
         guard let preference = rememberedPreference else {
+            selectFirstUseSubtitleLanguage()
             applySelection(0)
             return
         }
@@ -209,19 +267,33 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         formatPopup.selectItem(at: resolution.container == .compactMKV ? 1 : 0)
 
         if let subtitleLanguage = resolution.subtitleLanguage,
-           let subtitleIndex = probe.subtitleTracks.firstIndex(where: {
+           probe.subtitleTracks.contains(where: {
                $0.code == subtitleLanguage
            }) {
             subtitleCheckbox.state = .on
-            subtitlePopup.selectItem(at: subtitleIndex)
+            selectSubtitle(code: subtitleLanguage)
         } else {
             subtitleCheckbox.state = .off
+            selectFirstUseSubtitleLanguage()
         }
         subtitlePopup.isEnabled = subtitleCheckbox.state == .on
 
         let container = formatPopup.indexOfSelectedItem == 1 ? "MKV" : "MP4"
         for row in optionRows { row.setContainer(container) }
+        refreshOptionSizes()
         applySelection(selectedIndex)
+    }
+
+    private func selectFirstUseSubtitleLanguage() {
+        guard let index = YtDlpTool.preferredSubtitleIndex(in: probe.subtitleTracks) else { return }
+        selectSubtitle(code: probe.subtitleTracks[index].code)
+    }
+
+    private func selectSubtitle(code: String) {
+        guard let item = subtitlePopup.itemArray.first(where: {
+            ($0.representedObject as? String) == code
+        }) else { return }
+        subtitlePopup.select(item)
     }
 
     private func makeStorageStatus() -> NSView {
@@ -311,6 +383,15 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         subtitlePopup.isEnabled = false
         subtitlePopup.target = self
         subtitlePopup.action = #selector(mediaOptionChanged)
+        if YtDlpTool.preferredSubtitleIndex(in: probe.subtitleTracks) == nil,
+           !probe.subtitleTracks.isEmpty {
+            subtitlePopup.insertItem(
+                withTitle: L10n.t("Choose a language", "选择字幕语言"),
+                at: 0
+            )
+            subtitlePopup.item(at: 0)?.representedObject = nil
+        }
+        selectFirstUseSubtitleLanguage()
 
         if probe.subtitleTracks.isEmpty {
             subtitleCheckbox.title = L10n.ytdlpNoSubtitlesFound
@@ -372,7 +453,9 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         subtitlePopup.isEnabled = subtitleCheckbox.state == .on
         let container = formatPopup.indexOfSelectedItem == 1 ? "MKV" : "MP4"
         for row in optionRows { row.setContainer(container) }
+        refreshOptionSizes()
         refreshDownloadButton()
+        refreshStorageStatus()
     }
 
     @objc private func scopeChanged() {
@@ -399,10 +482,14 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         collection != nil && scopeSelector.selectedSegment == 1
     }
 
+    private var selectedContainer: YtDlpContainerPreference {
+        formatPopup.indexOfSelectedItem == 1 ? .compactMKV : .compatibleMP4
+    }
+
     private func storageBudget(for format: YtDlpFormat) -> StorageBudget {
         StorageBudget.media(
-            sampleFinalBytes: format.approximateBytes,
-            sampleComponentBytes: format.componentBytes,
+            sampleFinalBytes: format.estimatedBytes(for: selectedContainer),
+            sampleComponentBytes: format.estimatedComponentBytes(for: selectedContainer),
             sampleDurationSeconds: probe.durationSeconds,
             collectionDurations: collectionIsSelected
                 ? collection?.items.map(\.durationSeconds)
@@ -417,7 +504,7 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
                let bytes = storageBudget(for: format).finalBytes {
                 row.setSizeText("≈ " + TaskPresentationFormatting.byteCount(bytes))
             } else {
-                row.setSizeText(format.sizeText ?? "—")
+                row.setSizeText(format.sizeText(for: selectedContainer) ?? "—")
             }
         }
     }
@@ -475,10 +562,19 @@ final class YtDlpQualityPickerWindowController: NSWindowController, NSWindowDele
         storageLabel.textColor = confidence.level == .insufficient
             ? .systemRed
             : (confidence.level == .tight ? .systemOrange : .secondaryLabelColor)
-        downloadButton.isEnabled = confidence.level != .insufficient
-        downloadButton.toolTip = confidence.level == .insufficient
-            ? storageLabel.stringValue
-            : nil
+        let subtitleReady = subtitleCheckbox.state != .on
+            || subtitlePopup.selectedItem?.representedObject is String
+        downloadButton.isEnabled = confidence.level != .insufficient && subtitleReady
+        if confidence.level == .insufficient {
+            downloadButton.toolTip = storageLabel.stringValue
+        } else if !subtitleReady {
+            downloadButton.toolTip = L10n.t(
+                "Choose a subtitle language first",
+                "请先选择字幕语言"
+            )
+        } else {
+            downloadButton.toolTip = nil
+        }
     }
 
     private var selectedOptions: YtDlpDownloadOptions {

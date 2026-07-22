@@ -10,7 +10,9 @@ final class CoverArtCache {
 
     private var memory: [Int64: NSImage] = [:]
     private var inFlight: Set<Int64> = []
-    private let folder: URL
+    private var failedUntil: [Int64: Date] = [:]
+    private var folder: URL
+    private let failureCacheDuration: TimeInterval = 30
 
     private init() {
         let support = DownloadStore.defaultSupportDirectory
@@ -18,60 +20,81 @@ final class CoverArtCache {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
 
+    /// Keep artwork in the same support root as the task database. This is
+    /// essential for isolated QA runs and also prevents a future alternate
+    /// profile from reading or overwriting another profile's cover cache.
+    func configure(supportRoot: URL) {
+        let next = supportRoot.appendingPathComponent("covers", isDirectory: true)
+            .standardizedFileURL
+        guard next != folder.standardizedFileURL else { return }
+        folder = next
+        memory.removeAll()
+        failedUntil.removeAll()
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    }
+
     func image(for taskID: Int64) -> NSImage? {
         if let cached = memory[taskID] { return cached }
-        let url = folder.appendingPathComponent("\(taskID).jpg")
-        guard let data = try? Data(contentsOf: url),
-              let image = NSImage(data: data) else { return nil }
-        memory[taskID] = image
-        return image
+        let onDisk = Self.diskImage(for: taskID, in: folder)
+        if let onDisk { memory[taskID] = onDisk }
+        return onDisk
     }
 
     func prefetchRemote(taskID: Int64, urlString: String) {
-        guard memory[taskID] == nil, !inFlight.contains(taskID) else { return }
-        guard let remote = URL(string: urlString) else { return }
-        inFlight.insert(taskID)
+        guard let remote = URL(string: urlString), beginLoad(taskID: taskID) else { return }
         Task.detached(priority: .utility) { [folder] in
-            defer {
-                Task { @MainActor in CoverArtCache.shared.inFlight.remove(taskID) }
+            if let image = Self.diskImage(for: taskID, in: folder) {
+                await MainActor.run {
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                }
+                return
             }
             do {
                 let (data, _) = try await URLSession.shared.data(from: remote)
-                guard let image = NSImage(data: data), image.isValid else { return }
-                let dest = folder.appendingPathComponent("\(taskID).jpg")
-                if let tiff = image.tiffRepresentation,
-                   let rep = NSBitmapImageRep(data: tiff),
-                   let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.82]) {
-                    try jpeg.write(to: dest, options: .atomic)
+                guard let image = NSImage(data: data), image.isValid else {
+                    await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                    return
                 }
+                Self.store(image, for: taskID, in: folder)
                 await MainActor.run {
-                    CoverArtCache.shared.memory[taskID] = image
-                    NotificationCenter.default.post(
-                        name: CoverArtCache.didUpdateNotification,
-                        object: nil,
-                        userInfo: ["taskID": taskID]
-                    )
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
                 }
             } catch {
-                // Soft-fail — list still works with type glyph.
+                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
             }
         }
     }
 
     /// Prefer existing cover; otherwise grab an AVFoundation / Quick Look frame.
     func ensureCover(taskID: Int64, remoteURL: String?, localFile: URL?) {
-        if image(for: taskID) != nil { return }
-        if let remoteURL, !remoteURL.isEmpty {
-            prefetchRemote(taskID: taskID, urlString: remoteURL)
-            return
-        }
-        guard let localFile,
-              FileManager.default.fileExists(atPath: localFile.path),
-              !inFlight.contains(taskID) else { return }
-        inFlight.insert(taskID)
+        guard beginLoad(taskID: taskID) else { return }
         Task.detached(priority: .utility) { [folder] in
-            defer {
-                Task { @MainActor in CoverArtCache.shared.inFlight.remove(taskID) }
+            if let image = Self.diskImage(for: taskID, in: folder) {
+                await MainActor.run {
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                }
+                return
+            }
+            if let remoteURL, !remoteURL.isEmpty, let remote = URL(string: remoteURL) {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: remote)
+                    if let image = NSImage(data: data), image.isValid {
+                        Self.store(image, for: taskID, in: folder)
+                        await MainActor.run {
+                            CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                        }
+                        return
+                    }
+                } catch {
+                    // Soft-fail into the local-file path below. A stale remote
+                    // thumbnail must not prevent a completed video/PDF/image
+                    // from producing its own on-disk preview.
+                }
+            }
+            guard let localFile,
+                  FileManager.default.fileExists(atPath: localFile.path) else {
+                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                return
             }
             let image: NSImage?
             if let frame = await Self.frameImage(from: localFile) {
@@ -79,25 +102,59 @@ final class CoverArtCache {
             } else {
                 image = await Self.quickLookImage(from: localFile)
             }
-            guard let image else { return }
-            let dest = folder.appendingPathComponent("\(taskID).jpg")
-            if let tiff = image.tiffRepresentation,
-               let rep = NSBitmapImageRep(data: tiff),
-               let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.82]) {
-                try? jpeg.write(to: dest, options: .atomic)
+            guard let image else {
+                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                return
             }
+            Self.store(image, for: taskID, in: folder)
             await MainActor.run {
-                CoverArtCache.shared.memory[taskID] = image
-                NotificationCenter.default.post(
-                    name: CoverArtCache.didUpdateNotification,
-                    object: nil,
-                    userInfo: ["taskID": taskID]
-                )
+                CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
             }
         }
     }
 
     static let didUpdateNotification = Notification.Name("NDMCoverArtDidUpdate")
+
+    private func beginLoad(taskID: Int64) -> Bool {
+        guard memory[taskID] == nil, !inFlight.contains(taskID) else { return false }
+        if let failedUntil = failedUntil[taskID] {
+            guard failedUntil <= Date() else { return false }
+            self.failedUntil.removeValue(forKey: taskID)
+        }
+        inFlight.insert(taskID)
+        return true
+    }
+
+    private func finishLoad(taskID: Int64, image: NSImage?) {
+        inFlight.remove(taskID)
+        guard let image else {
+            failedUntil[taskID] = Date().addingTimeInterval(failureCacheDuration)
+            return
+        }
+        failedUntil.removeValue(forKey: taskID)
+        memory[taskID] = image
+        NotificationCenter.default.post(
+            name: Self.didUpdateNotification,
+            object: nil,
+            userInfo: ["taskID": taskID]
+        )
+    }
+
+    nonisolated private static func diskImage(for taskID: Int64, in folder: URL) -> NSImage? {
+        let url = folder.appendingPathComponent("\(taskID).jpg")
+        guard let data = try? Data(contentsOf: url),
+              let image = NSImage(data: data),
+              image.isValid else { return nil }
+        return image
+    }
+
+    nonisolated private static func store(_ image: NSImage, for taskID: Int64, in folder: URL) {
+        let dest = folder.appendingPathComponent("\(taskID).jpg")
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.82]) else { return }
+        try? jpeg.write(to: dest, options: .atomic)
+    }
 
     private static func frameImage(from url: URL) async -> NSImage? {
         let ext = url.pathExtension.lowercased()

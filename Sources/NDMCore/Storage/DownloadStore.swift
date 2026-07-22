@@ -88,8 +88,9 @@ public final class DownloadStore: @unchecked Sendable {
         while sqlite3_step(stmt) == SQLITE_ROW {
             items.append(rowToTask(stmt))
         }
+        let headersByTask = try allHeadersUnlocked()
         for i in items.indices {
-            items[i].headers = try headersUnlocked(for: items[i].id)
+            items[i].headers = headersByTask[items[i].id] ?? []
         }
         return items
     }
@@ -146,6 +147,34 @@ public final class DownloadStore: @unchecked Sendable {
         defer { lock.unlock() }
         try exec("DELETE FROM headers WHERE id=\(id);")
         try exec("DELETE FROM downloads WHERE id=\(id);")
+    }
+
+    /// Reconcile process-local runtime states after a relaunch.
+    ///
+    /// Download engines do not survive the app process, so a persisted
+    /// `downloading` row can never still be running when a new process starts.
+    /// Ordinary `waiting` rows are equally stale. The one intentional exception
+    /// is a yt-dlp collection entry: those rows form a durable playlist queue
+    /// and `DownloadManager.resumeQueuedCollectionIfIdle()` consumes them after
+    /// the main window has been restored.
+    @discardableResult
+    public func recoverInterruptedTasks() throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let sql = """
+        UPDATE downloads
+        SET status='incomplete'
+        WHERE lower(coalesce(status, ''))='downloading'
+           OR (
+                lower(coalesce(status, ''))='waiting'
+                AND NOT (
+                    lower(coalesce(ltype, ''))='ytdlp'
+                    AND length(trim(coalesce(pageurl, ''))) > 0
+                )
+           );
+        """
+        try exec(sql)
+        return Int(sqlite3_changes(db))
     }
 
     // MARK: - Auths (original credentials table)
@@ -216,21 +245,22 @@ public final class DownloadStore: @unchecked Sendable {
 
     // MARK: - Private
 
-    private func headersUnlocked(for id: Int64) throws -> [String] {
-        let sql = "SELECT header FROM headers WHERE id=?;"
+    private func allHeadersUnlocked() throws -> [Int64: [String]] {
+        let sql = "SELECT id, header FROM headers ORDER BY id, rowid;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw StoreError.prepareFailed
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, id)
-        var result: [String] = []
+
+        var headersByTask: [Int64: [String]] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
-            if let c = sqlite3_column_text(stmt, 0) {
-                result.append(String(cString: c))
+            let id = sqlite3_column_int64(stmt, 0)
+            if let c = sqlite3_column_text(stmt, 1) {
+                headersByTask[id, default: []].append(String(cString: c))
             }
         }
-        return result
+        return headersByTask
     }
 
     private func replaceHeadersUnlocked(id: Int64, headers: [String]) throws {

@@ -54,6 +54,11 @@ public actor YtDlpEngine {
         token.pause()
     }
 
+    public func cancel() {
+        token.cancel()
+        progress.status = .incomplete
+    }
+
     /// Downloads into `directory`, updating progress for the progress window.
     public func run(
         url: String,
@@ -63,6 +68,9 @@ public actor YtDlpEngine {
         forceOverwrite: Bool = false,
         options: YtDlpDownloadOptions = .init()
     ) async throws -> URL {
+        guard !Task.isCancelled, !token.isCancelled else {
+            throw EngineError.cancelled
+        }
         progress.status = .downloading
         do {
             let dest = try await YtDlpTool.download(
@@ -204,6 +212,14 @@ public actor YtDlpEngine {
         case .subtitles: floor = 0.985
         case .finalizing: floor = 0.992
         }
+        // yt-dlp runs subtitle postprocessors as soon as the subs are written —
+        // which is BEFORE the video transfer starts. Applying the floor then
+        // would jump the journey to 98% at the beginning of the download, and
+        // the ratchet in `apply(report:)` keeps it stuck there. Only honor
+        // postprocess floors once the transfer itself is essentially done.
+        let transferDone = !components.isEmpty
+            && components.values.allSatisfy(\.finished)
+        guard transferDone || progress.fractionCompleted >= 0.9 else { return }
         progress.journeyFraction = max(progress.fractionCompleted, floor)
     }
 

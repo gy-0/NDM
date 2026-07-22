@@ -29,6 +29,18 @@ public struct MediaPreflightResult: Equatable, Sendable {
     }
 }
 
+/// Keeps the entry flow's preparation decision testable. Short social links
+/// are media pages too, so they must not be excluded just because the general
+/// page classifier also recognizes them.
+public enum MediaPreparationPlan {
+    public static func shouldResolveSharedLink(
+        _ rawURL: String,
+        hasPreparedMetadata: Bool
+    ) -> Bool {
+        !hasPreparedMetadata && ShortLinkExpander.shouldExpand(rawURL)
+    }
+}
+
 /// Session-scoped Link Lens store. It deduplicates in-flight work and lets the
 /// New Download sheet hand the exact same probe to the quality picker.
 public actor MediaPreflightStore {
@@ -155,7 +167,12 @@ public enum MediaLinkClassifier {
               scheme == "http" || scheme == "https" else { return false }
         let directExtensions: Set<String> = [
             "mp4", "mkv", "mov", "m4v", "webm", "mp3", "m4a", "flac", "wav",
-            "zip", "dmg", "pkg", "exe", "iso", "pdf", "ts", "m3u8", "m3u",
+            "aac", "ogg", "opus", "avi", "flv", "ts", "m3u8", "m3u",
+            "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "dmg", "pkg", "exe", "msi", "iso", "apk",
+            "pdf", "epub", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "txt", "md", "csv",
+            "jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "ico",
+            "json", "xml", "yaml", "yml", "toml", "js", "css", "sh", "py", "swift", "dat", "bin",
+            "ttf", "otf", "woff", "woff2",
         ]
         return !directExtensions.contains(url.pathExtension.lowercased()) && url.host != nil
     }

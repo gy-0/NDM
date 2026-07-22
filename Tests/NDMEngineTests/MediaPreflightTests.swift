@@ -15,6 +15,30 @@ final class MediaPreflightTests: XCTestCase {
         subtitleTracks: [YtDlpSubtitleTrack(code: "zh", displayName: "Chinese", isAutomatic: false)]
     )
 
+    func testPreparationPlanResolvesShortMediaPagesBeforeProbe() {
+        let shortLinks = [
+            "https://v.douyin.com/abc/",
+            "https://xhslink.com/a/abc",
+            "https://b23.tv/abc",
+            "https://youtu.be/abc",
+        ]
+        for link in shortLinks {
+            XCTAssertTrue(MediaLinkClassifier.looksLikeMediaPage(link), link)
+            XCTAssertTrue(MediaPreparationPlan.shouldResolveSharedLink(
+                link,
+                hasPreparedMetadata: false
+            ), link)
+            XCTAssertFalse(MediaPreparationPlan.shouldResolveSharedLink(
+                link,
+                hasPreparedMetadata: true
+            ), link)
+        }
+        XCTAssertFalse(MediaPreparationPlan.shouldResolveSharedLink(
+            "https://www.youtube.com/watch?v=abc",
+            hasPreparedMetadata: false
+        ))
+    }
+
     func testConcurrentRequestsShareOneProbe() async throws {
         let counter = Counter()
         let expected = sampleProbe
@@ -152,6 +176,9 @@ final class MediaPreflightTests: XCTestCase {
         XCTAssertTrue(MediaLinkClassifier.looksLikeMediaPage("https://example.com/article/1"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/movie.mp4"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/app.dmg"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/README.md"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/install.sh"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/payload.dat"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("ftp://example.com/archive.zip"))
         XCTAssertTrue(MediaLinkClassifier.looksLikeCollectionURL(
             "https://www.youtube.com/watch?v=one&list=PL123"

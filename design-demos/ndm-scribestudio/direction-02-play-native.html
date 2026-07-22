@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NDM × ScribeStudio · Approachable Native</title>
+  <!--
+    Assumptions: 复杂功能可保留，但界面要先回答“现在发生什么”和“下一步是什么”。
+    Reasoning: 参照 Play 的组织原则，以原生窗口、清楚模块和逐步揭示承载专业能力。
+  -->
+  <style>
+    :root{--canvas:#e9ebe9;--surface:#fbfbf9;--ink:#1e211f;--muted:#6d736f;--line:#d5d8d4;--line2:#bcc2bd;--accent:#f05f49;--accent-soft:#fbe2dc;--blue:#4774b7;--green:#24805d;--ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;--mono:"SF Mono",ui-monospace,Menlo,monospace}
+    *{box-sizing:border-box}body{margin:0;min-width:1120px;background:var(--canvas);color:var(--ink);font:14px/1.45 var(--ui)}button{font:inherit}
+    .board{height:900px;padding:28px 34px;overflow:hidden}.head{height:108px;display:flex;align-items:flex-start;justify-content:space-between}.head-copy{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start}
+    .number{width:42px;height:42px;display:grid;place-items:center;border:1px solid var(--line2);border-radius:12px;background:var(--surface);font:12px var(--mono)}
+    h1{margin:0;font-size:32px;line-height:1.05;letter-spacing:-.035em}.head p{margin:11px 0 0;max-width:760px;color:var(--muted)}
+    .switcher{display:flex;padding:3px;border:1px solid var(--line2);border-radius:10px;background:rgba(255,255,255,.48)}.switcher button{border:0;border-radius:7px;padding:7px 13px;background:transparent;color:var(--muted);cursor:pointer}.switcher button.active{background:white;color:var(--ink);box-shadow:0 1px 4px rgba(24,29,26,.11)}
+    .stage{height:736px;position:relative}.stage[data-mode="ndm"] .scribe{display:none}.stage[data-mode="ndm"] .ndm{width:100%}.stage[data-mode="scribe"] .ndm{display:none}.stage[data-mode="scribe"] .scribe{width:100%;left:0;top:0;height:720px}
+    .window{position:absolute;border:1px solid #bfc4bf;border-radius:14px;background:var(--surface);box-shadow:0 22px 55px rgba(35,43,38,.16);overflow:hidden}.ndm{left:0;top:0;width:63%;height:720px}.scribe{right:0;top:74px;width:43%;height:626px}
+    .titlebar{height:44px;display:grid;grid-template-columns:78px 1fr 78px;align-items:center;padding:0 13px;border-bottom:1px solid var(--line);background:#f4f5f3}.lights{display:flex;gap:7px}.lights i{width:11px;height:11px;border-radius:50%}.lights i:nth-child(1){background:#ff605c}.lights i:nth-child(2){background:#ffbd44}.lights i:nth-child(3){background:#00ca4e}.appname{text-align:center;font-size:12px;font-weight:650}.mode{text-align:right;color:#7a817c;font-size:11px}
+    .ndm-shell{height:calc(100% - 44px);display:grid;grid-template-columns:176px 1fr}.ndm-side{padding:18px 13px;border-right:1px solid var(--line);background:#f1f3f1}.logo{display:flex;align-items:center;gap:10px;margin:1px 5px 20px;font-weight:760;font-size:16px}.logo img{width:32px;height:32px;border-radius:8px}
+    .side-label{margin:17px 8px 6px;color:#8a918c;font-size:11px}.side-item{width:100%;display:flex;justify-content:space-between;border:0;border-radius:8px;padding:8px 9px;background:transparent;color:#58605b;text-align:left}.side-item.active{background:#fff;color:#202522;box-shadow:0 1px 3px rgba(27,34,29,.1)}.side-item b{font-size:12px}.side-item span{font:11px var(--mono);color:#858c87}
+    .ndm-main{min-width:0}.toolbar{height:64px;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid var(--line)}.toolbar h2{margin:0;font-size:19px}.toolbar p{margin:3px 0 0;color:var(--muted);font-size:12px}.new{margin-left:auto;border:0;border-radius:9px;padding:9px 13px;background:var(--accent);color:white;font-weight:720}.search{margin-left:8px;border:1px solid var(--line);border-radius:9px;padding:8px 11px;color:#8c928d;background:white}
+    .tasks{padding:7px 18px}.task{display:grid;grid-template-columns:45px minmax(0,1fr) 120px;gap:12px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line);cursor:pointer}.thumb{height:45px;border-radius:9px;display:grid;place-items:center;background:#e6e8e5;border:1px solid #d0d4d0;font:10px var(--mono)}.video .thumb{background:#e7ecf5;color:var(--blue)}.task h3{margin:0 0 3px;font-size:14px}.task p{margin:0;color:var(--muted);font-size:12px}.task .right{text-align:right}.status{font-size:12px;color:var(--green)}.status.error{color:#c54837}.meter{height:4px;margin-top:7px;border-radius:2px;background:#ddd}.meter i{display:block;height:100%;width:64%;border-radius:2px;background:var(--accent)}
+    .continuity{margin:12px 18px 0;padding:12px 0;border-top:1px solid var(--line);display:flex;align-items:center;gap:12px}.continuity .file{width:38px;height:38px;border-radius:9px;background:var(--accent-soft);display:grid;place-items:center;color:#a73f31;font:10px var(--mono)}.continuity strong{display:block;font-size:13px}.continuity span{color:var(--muted);font-size:12px}.handoff{margin-left:auto;border:0;border-radius:8px;background:var(--ink);color:#fff;padding:9px 11px;font-weight:680;cursor:pointer}
+    .scribe-shell{height:calc(100% - 44px);display:grid;grid-template-rows:auto 220px 1fr}.scribe-top{display:flex;align-items:center;gap:11px;padding:14px 16px;border-bottom:1px solid var(--line)}.scribe-top img{width:32px;height:32px;border-radius:8px}.scribe-top h2{margin:0;font-size:16px}.scribe-top p{margin:2px 0 0;color:var(--muted);font-size:12px}.scribe-top button{margin-left:auto;border:0;border-radius:8px;background:var(--accent);color:#fff;padding:8px 10px;font-weight:700}
+    .media{position:relative;background:#191d1a;color:#f4f6f3;display:grid;place-items:center}.media:before{content:"";position:absolute;inset:15px;border:1px solid #363c38;border-radius:8px}.play{width:54px;height:54px;border-radius:50%;border:1px solid #5d6660;background:#2b312d;color:#fff;display:grid;place-items:center;font-size:18px}.media-meta{position:absolute;left:24px;right:24px;bottom:17px;display:flex;justify-content:space-between;color:#aeb6b0;font:11px var(--mono)}
+    .workspace{display:grid;grid-template-columns:112px 1fr;min-height:0}.timeline{padding:14px 11px;border-right:1px solid var(--line);background:#f3f4f2}.timeline h3{margin:0 0 11px;font-size:12px}.segment{display:block;width:100%;border:0;border-radius:7px;padding:8px;margin-bottom:6px;background:transparent;text-align:left;color:var(--muted);font:11px var(--mono)}.segment.active{background:var(--accent-soft);color:#983f32}
+    .copy{padding:15px;overflow:hidden}.copy-head{display:flex;align-items:center;justify-content:space-between}.copy h3{margin:0;font-size:15px}.copy-head span{color:var(--muted);font-size:11px}.paragraph{margin-top:12px;padding-left:12px;border-left:2px solid var(--accent);font-size:13px;line-height:1.7}.paragraph + .paragraph{border-left-color:transparent;color:#707670}
+    .note{position:absolute;left:66%;top:15px;transform:translateX(-50%);padding:9px 12px;border:1px solid #d2a79f;border-radius:9px;background:#fff8f6;color:#813c32;box-shadow:0 8px 20px rgba(65,40,35,.11);font-size:12px;z-index:4}
+    @media(max-width:1230px){.scribe{display:none}.ndm{width:100%}.note{display:none}}
+  </style>
+</head>
+<body>
+  <main class="board">
+    <header class="head"><div class="head-copy"><div class="number">02</div><div><h1>复杂能力，也可以很容易靠近</h1><p>现实参照：2025 Apple Design Award 获奖 App Play。借鉴的是清楚组织复杂能力与原生工作流，不复制它的品牌外观。</p></div></div><nav class="switcher"><button class="active" data-mode="both">联动</button><button data-mode="ndm">NDM</button><button data-mode="scribe">ScribeStudio</button></nav></header>
+    <section class="stage" data-mode="both">
+      <div class="note">完成下载后，文件对象自然进入下一款工具</div>
+      <article class="window ndm"><div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="appname">NDM</div><div class="mode">全部任务</div></div>
+        <div class="ndm-shell"><aside class="ndm-side"><div class="logo"><img src="assets/ndm-icon.png" alt="">NDM</div><div class="side-label">状态</div><button class="side-item active"><b>全部</b><span>18</span></button><button class="side-item"><b>进行中</b><span>1</span></button><button class="side-item"><b>待继续</b><span>2</span></button><button class="side-item"><b>已完成</b><span>14</span></button><button class="side-item"><b>失败</b><span>1</span></button><div class="side-label">类型</div><button class="side-item"><b>视频</b><span>8</span></button><button class="side-item"><b>文档</b><span>5</span></button></aside>
+          <section class="ndm-main"><div class="toolbar"><div><h2>下载</h2><p>一个任务正在运行</p></div><button class="new">新建下载</button><div class="search">搜索</div></div><div class="tasks">
+            <div class="task video"><div class="thumb">MP4</div><div><h3>产品访谈_完整版.mp4</h3><p>12 个连接 · youtube.com</p></div><div class="right"><span class="status">正在下载 64%</span><div class="meter"><i></i></div></div></div>
+            <div class="task"><div class="thumb">DMG</div><div><h3>Antigravity.dmg</h3><p>storage.googleapis.com</p></div><div class="right"><span class="status">已完成</span><p>181.5 MB</p></div></div>
+            <div class="task video"><div class="thumb">MP4</div><div><h3>WWDC25_Design.mp4</h3><p>youtube.com</p></div><div class="right"><span class="status">已完成</span><p>1.2 GB</p></div></div>
+            <div class="task"><div class="thumb">PDF</div><div><h3>课程第 07 讲.pdf</h3><p>已保留下载进度</p></div><div class="right"><span class="status error">链接已过期</span><p>更新链接</p></div></div>
+          </div><div class="continuity"><div class="file">MP4</div><div><strong>WWDC25_Design.mp4</strong><span>下载完成 · 可以继续处理</span></div><button class="handoff">在 ScribeStudio 中转写</button></div></section>
+        </div>
+      </article>
+      <article class="window scribe"><div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="appname">ScribeStudio</div><div class="mode">自动保存</div></div>
+        <div class="scribe-shell"><header class="scribe-top"><img src="assets/scribestudio-icon.png" alt=""><div><h2>WWDC25_Design.mp4</h2><p>来自 NDM · 中文优先 · 说话人分离</p></div><button>继续转写</button></header>
+          <section class="media"><button class="play">▶</button><div class="media-meta"><span>03:08</span><span>08:42</span></div></section>
+          <section class="workspace"><aside class="timeline"><h3>片段</h3><button class="segment">02:54</button><button class="segment active">03:08</button><button class="segment">03:21</button><button class="segment">03:47</button></aside><div class="copy"><div class="copy-head"><h3>逐段文本</h3><span>SRT + TXT</span></div><div class="paragraph">用户只需要看见当下真正有用的选择，复杂性应该留在系统内部。</div><div class="paragraph">接下来的内容会继续解释整个工作流，以及怎样自然地完成交付。</div></div></section>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script>
+    const stage=document.querySelector('.stage');
+    document.querySelectorAll('.switcher button').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.switcher button').forEach(x=>x.classList.remove('active'));button.classList.add('active');stage.dataset.mode=button.dataset.mode;}));
+    document.querySelector('.handoff').addEventListener('click',()=>{stage.dataset.mode='scribe';document.querySelectorAll('.switcher button').forEach(x=>x.classList.toggle('active',x.dataset.mode==='scribe'));});
+    document.querySelectorAll('.segment').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.segment').forEach(x=>x.classList.remove('active'));button.classList.add('active');}));
+  </script>
+</body>
+</html>

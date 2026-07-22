@@ -20,12 +20,34 @@ final class CompletionStackView: NSView {
     private let contentStack = NSStackView()
     private var result: CompletionStack?
     private var expanded = false
+    private var contentScale: CGFloat = 1
 
     /// Extra vertical space needed when the disclosure opens. Each artifact
     /// row resolves to 40pt, with a one-pixel divider between adjacent rows.
     var expansionHeight: CGFloat {
         guard let count = result?.artifacts.count, count > 0 else { return 0 }
-        return CGFloat(count * 40 + max(0, count - 1))
+        return CGFloat(count) * rowHeight
+            + CGFloat(max(0, count - 1))
+            + 8 * layoutScale
+    }
+
+    private var layoutScale: CGFloat {
+        1 + (contentScale - 1) * 0.38
+    }
+
+    private var rowHeight: CGFloat {
+        40 * layoutScale
+    }
+
+    override var intrinsicContentSize: NSSize {
+        guard !isHidden else {
+            return NSSize(width: NSView.noIntrinsicMetric, height: 0)
+        }
+        let collapsedHeight = 36 * layoutScale
+        return NSSize(
+            width: NSView.noIntrinsicMetric,
+            height: collapsedHeight + (expanded ? expansionHeight : 0)
+        )
     }
 
     override init(frame frameRect: NSRect) {
@@ -96,6 +118,7 @@ final class CompletionStackView: NSView {
         // A single main file is already represented by the completion header.
         // The stack earns its space only when a real sidecar exists.
         isHidden = (result?.sidecars.isEmpty ?? true)
+        invalidateIntrinsicContentSize()
         relocalize()
     }
 
@@ -115,6 +138,22 @@ final class CompletionStackView: NSView {
         updateDisclosure()
     }
 
+    func setContentScale(_ scale: CGFloat) {
+        contentScale = min(InterfaceScale.maximum, max(InterfaceScale.minimum, scale))
+        toggleButton.font = .systemFont(ofSize: 12.5 * contentScale, weight: .semibold)
+        summaryLabel.font = .systemFont(ofSize: 11 * contentScale)
+        contentStack.spacing = 8 * layoutScale
+        contentStack.edgeInsets = NSEdgeInsets(
+            top: 9 * layoutScale,
+            left: 11 * layoutScale,
+            bottom: 9 * layoutScale,
+            right: 11 * layoutScale
+        )
+        rebuildRows()
+        updateDisclosure()
+        invalidateIntrinsicContentSize()
+    }
+
     @objc private func toggleExpanded() {
         setExpanded(!expanded, notify: true)
     }
@@ -122,6 +161,7 @@ final class CompletionStackView: NSView {
     private func setExpanded(_ value: Bool, notify: Bool) {
         expanded = value
         rowsStack.isHidden = !value
+        invalidateIntrinsicContentSize()
         updateDisclosure()
         needsLayout = true
         window?.contentView?.layoutSubtreeIfNeeded()
@@ -131,7 +171,7 @@ final class CompletionStackView: NSView {
     private func updateDisclosure() {
         toggleButton.image = NDMChrome.symbol(
             expanded ? "chevron.down" : "chevron.right",
-            pointSize: 10,
+            pointSize: 10 * contentScale,
             weight: .semibold
         )
         toggleButton.toolTip = expanded ? L10n.completionHideFiles : L10n.completionShowFiles
@@ -164,13 +204,13 @@ final class CompletionStackView: NSView {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let name = NSTextField(labelWithString: artifact.url.lastPathComponent)
-        name.font = .systemFont(ofSize: 11.5, weight: .medium)
+        name.font = .systemFont(ofSize: 11.5 * contentScale, weight: .medium)
         name.lineBreakMode = .byTruncatingMiddle
         name.toolTip = artifact.url.lastPathComponent
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let detail = NSTextField(labelWithString: artifactDetail(artifact))
-        detail.font = .systemFont(ofSize: 10.5)
+        detail.font = .systemFont(ofSize: 10.5 * contentScale)
         detail.textColor = .secondaryLabelColor
         let labels = NSStackView(views: [name, detail])
         labels.orientation = .vertical
@@ -178,11 +218,11 @@ final class CompletionStackView: NSView {
         labels.spacing = 2
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let reveal = ArtifactRevealButton(url: artifact.url)
-        reveal.target = self
-        reveal.action = #selector(revealArtifact(_:))
+        let actions = ArtifactActionsButton(url: artifact.url)
+        actions.target = self
+        actions.action = #selector(showArtifactActions(_:))
 
-        let row = NSStackView(views: [icon, labels, reveal])
+        let row = NSStackView(views: [icon, labels, actions])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 9
@@ -190,8 +230,8 @@ final class CompletionStackView: NSView {
         NSLayoutConstraint.activate([
             icon.widthAnchor.constraint(equalToConstant: 20),
             icon.heightAnchor.constraint(equalToConstant: 20),
-            reveal.widthAnchor.constraint(equalToConstant: 28),
-            reveal.heightAnchor.constraint(equalToConstant: 28),
+            actions.widthAnchor.constraint(equalToConstant: 28),
+            actions.heightAnchor.constraint(equalToConstant: 28),
         ])
         return row
     }
@@ -224,30 +264,54 @@ final class CompletionStackView: NSView {
     private func tint(for kind: CompletionArtifact.Kind) -> NSColor {
         switch kind {
         case .primary: return NDMChrome.accent
-        case .subtitle: return .systemGreen
+        case .subtitle: return .systemTeal
         case .cover: return .systemTeal
         case .audio: return .systemPink
         case .metadata, .other: return .secondaryLabelColor
         }
     }
 
-    @objc private func revealArtifact(_ sender: ArtifactRevealButton) {
-        NSWorkspace.shared.activateFileViewerSelecting([sender.fileURL])
+    @objc private func showArtifactActions(_ sender: ArtifactActionsButton) {
+        let menu = NSMenu()
+        let open = NSMenuItem(title: L10n.open, action: #selector(openArtifact(_:)), keyEquivalent: "")
+        open.target = self
+        open.representedObject = sender.fileURL
+        menu.addItem(open)
+
+        let reveal = NSMenuItem(title: L10n.showInFinder, action: #selector(revealArtifact(_:)), keyEquivalent: "")
+        reveal.target = self
+        reveal.representedObject = sender.fileURL
+        menu.addItem(reveal)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 3), in: sender)
+    }
+
+    @objc private func openArtifact(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func revealArtifact(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }
 
-private final class ArtifactRevealButton: NSButton {
+private final class ArtifactActionsButton: NSButton {
     let fileURL: URL
 
     init(url: URL) {
         fileURL = url
         super.init(frame: .zero)
-        image = NDMChrome.symbol("folder", pointSize: 13, weight: .medium)
+        image = NDMChrome.symbol("ellipsis", pointSize: 12, weight: .semibold)
         bezelStyle = .inline
         isBordered = false
         contentTintColor = .secondaryLabelColor
-        focusRingType = .none
-        toolTip = L10n.showInFinder
+        focusRingType = .default
+        toolTip = L10n.moreActions
+        setAccessibilityLabel(L10n.t(
+            "More actions for \(url.lastPathComponent)",
+            "对「\(url.lastPathComponent)」执行更多操作"
+        ))
         translatesAutoresizingMaskIntoConstraints = false
     }
 

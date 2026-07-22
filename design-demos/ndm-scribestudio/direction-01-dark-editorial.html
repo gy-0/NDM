@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NDM × ScribeStudio · Dark Editorial</title>
+  <!--
+    Assumptions: 两款工具属于同一条内容工作流；深色不是“科技氛围”，而是高密度编辑台。
+    Reasoning: 用一个荧光黄绿只标记当前任务与主操作，其他层级依赖字号、空间和规则线。
+    Placeholder: 媒体封面只承担内容类型识别，不伪造第三方视频截图。
+  -->
+  <style>
+    :root{
+      --bg:#0b0d0c;--ink:#f2f0e8;--muted:#8f9791;--line:#303532;
+      --paper:#f2f0e8;--paper-2:#e5e3da;--dark:#121513;--accent:#c7f36b;
+      --red:#f05b47;--green:#1d8b62;--mono:"SF Mono",ui-monospace,Menlo,monospace;
+      --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-width:1120px;background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:14px;line-height:1.45}
+    button{font:inherit}
+    .board{height:900px;padding:24px 28px 28px;overflow:hidden}
+    .board-head{height:112px;display:grid;grid-template-columns:1fr auto;align-items:start;border-bottom:1px solid var(--line)}
+    .titleline{display:flex;align-items:baseline;gap:18px}
+    h1{margin:0;font-size:34px;line-height:1;font-weight:780;letter-spacing:-.035em}
+    .index{font:12px var(--mono);color:var(--accent)}
+    .summary{margin:14px 0 0;max-width:760px;color:#aeb4af}
+    .switcher{display:flex;border:1px solid #3b413d}
+    .switcher button{border:0;border-right:1px solid #3b413d;padding:9px 14px;background:transparent;color:#aeb4af;cursor:pointer}
+    .switcher button:last-child{border-right:0}
+    .switcher button.active{background:var(--accent);color:#11140f}
+    .stage{height:736px;padding-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+    .stage[data-mode="ndm"]{grid-template-columns:1fr}.stage[data-mode="ndm"] .scribe-window{display:none}
+    .stage[data-mode="scribe"]{grid-template-columns:1fr}.stage[data-mode="scribe"] .ndm-window{display:none}
+    .mac-window{height:714px;min-width:0;border:1px solid #303632;background:var(--paper);color:#171a17;box-shadow:0 18px 40px rgba(0,0,0,.32);overflow:hidden}
+    .windowbar{height:42px;display:grid;grid-template-columns:84px 1fr 84px;align-items:center;padding:0 13px;background:#1a1e1b;color:#d7ddd8;border-bottom:1px solid #343a36}
+    .lights{display:flex;gap:7px}.lights i{width:11px;height:11px;border-radius:50%;display:block}.lights i:nth-child(1){background:#ff605c}.lights i:nth-child(2){background:#ffbd44}.lights i:nth-child(3){background:#00ca4e}
+    .window-title{text-align:center;font-size:12px;font-weight:680}.window-state{text-align:right;color:#9da69f;font:11px var(--mono)}
+    .ndm-layout{height:calc(100% - 42px);display:grid;grid-template-columns:132px minmax(280px,1fr) 176px}
+    .rail{padding:18px 12px;background:#131614;color:#d6dbd7;border-right:1px solid #292e2b}
+    .brand{display:flex;align-items:center;gap:9px;margin-bottom:22px;font-size:15px;font-weight:760}
+    .brand img{width:30px;height:30px;border-radius:7px}.nav-title{margin:18px 7px 7px;color:#717b74;font:11px var(--mono);text-transform:uppercase}
+    .nav{width:100%;display:flex;align-items:center;justify-content:space-between;padding:8px 8px;border:0;background:transparent;color:#aeb6b0;text-align:left;cursor:pointer}
+    .nav strong{font-size:12px}.nav span{color:#68716b;font:11px var(--mono)}
+    .nav.active{color:#10140e;background:var(--accent)}.nav.active span{color:#536631}
+    .download-main{min-width:0;background:var(--paper)}
+    .toolbar{height:58px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #c9c8c0}
+    .new{border:0;background:#171b17;color:#fff;padding:9px 12px;font-weight:740;cursor:pointer}.search{margin-left:auto;color:#747a75;border-bottom:1px solid #a9aaa4;padding:7px 2px;width:122px}
+    .list{padding:7px 0}.task{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center;padding:13px 14px;border-bottom:1px solid #cecdc5;cursor:pointer}
+    .task.active{background:#e3e5dd;border-left:4px solid #171b17;padding-left:10px}
+    .filemark{height:38px;display:grid;place-items:center;background:#d0d4ca;border:1px solid #bcc0b7;font:10px var(--mono)}
+    .task.video .filemark{color:#10140e;background:var(--accent)}.task h3{margin:0 0 3px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task p{margin:0;color:#727873;font-size:12px}
+    .task .metric{text-align:right;font:11px var(--mono);color:#59605b}.bad{color:#bd3d30!important}.ok{color:#11734d!important}
+    .inspector{padding:18px 14px;background:var(--paper-2);border-left:1px solid #c7c6be}
+    .inspector-label{font:11px var(--mono);color:#747a75}.inspector h2{margin:10px 0 5px;font-size:18px;line-height:1.2}.inspector p{margin:0;color:#6d736e;font-size:12px}
+    .facts{margin:22px 0 18px;border-top:1px solid #bdbdb6}.fact{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #c8c8c0;font-size:12px}.fact span{color:#737873}.fact strong{font:11px var(--mono)}
+    .action{width:100%;border:0;padding:10px;background:#171b17;color:#fff;font-weight:750;cursor:pointer}.action.accent{background:var(--accent);color:#11140e;margin-top:8px}.text-action{display:block;margin-top:13px;color:#4c524e;text-decoration:underline;cursor:pointer;font-size:12px}
+    .scribe-layout{height:calc(100% - 42px);display:grid;grid-template-columns:168px minmax(280px,1fr) 190px;background:#0d100e;color:#eef2ed}
+    .recipe{padding:18px 13px;border-right:1px solid #2a302c;background:#151917}.recipe .brand{margin-bottom:18px}.from{margin:0 0 18px;padding:9px;border-left:3px solid var(--accent);background:#1d221e;color:#c7cec8;font-size:12px}
+    .section-name{margin:17px 0 7px;color:#78827b;font:11px var(--mono);text-transform:uppercase}.field{padding:8px 0;border-bottom:1px solid #303631}.field label{display:block;color:#8e9790;font-size:11px}.field strong{display:block;margin-top:3px;font-size:12px}.toggle{display:flex;justify-content:space-between}.toggle b{color:var(--accent);font:11px var(--mono)}
+    .run{margin-top:18px;width:100%;border:0;padding:10px;background:var(--accent);color:#10140e;font-weight:780}
+    .media{min-width:0;display:grid;grid-template-rows:62px minmax(0,1fr) 58px;background:#080a09}.media-head{padding:13px 15px;border-bottom:1px solid #282d2a}.media-head h2{margin:0 0 3px;font-size:15px}.media-head p{margin:0;color:#818982;font-size:12px}
+    .frame{position:relative;display:grid;place-items:center;overflow:hidden;background:#050605}.poster{width:72%;height:66%;display:grid;place-items:center;border:1px solid #343a36;color:#6d756f;font:12px var(--mono)}
+    .timeline{padding:12px 15px;border-top:1px solid #292e2b}.track{height:3px;background:#303632}.track i{display:block;width:36%;height:100%;background:var(--accent)}.time{display:flex;justify-content:space-between;margin-top:8px;color:#8f9891;font:11px var(--mono)}
+    .transcript{min-width:0;padding:16px 13px;background:var(--paper);color:#171a17;border-left:1px solid #313632;overflow:hidden}.transcript h2{margin:0;font-size:17px}.transcript .meta{margin:5px 0 16px;color:#727873;font-size:12px}.line{display:grid;grid-template-columns:38px 1fr;gap:8px;padding:10px 0;border-top:1px solid #ccccc4;font-size:12px;line-height:1.55}.line time{font:10px var(--mono);color:#747a75}.line.current{border-left:3px solid var(--accent);padding-left:8px;background:#e8eadf}
+    .handoff-flash{animation:flash .9s ease}@keyframes flash{50%{box-shadow:inset 0 0 0 3px var(--accent)}}
+    @media(max-width:1250px){.stage{grid-template-columns:1fr}.scribe-window{display:none}.board-head{grid-template-columns:1fr auto}.mac-window{height:714px}}
+  </style>
+</head>
+<body>
+  <main class="board">
+    <header class="board-head">
+      <div><div class="titleline"><span class="index">01 / DARK EDITORIAL</span><h1>把工作流当成编辑台</h1></div><p class="summary">轮盘第 11 号。深色用于承载高密度操作，荧光黄绿只标当前任务与下一步；规则线代替卡片堆叠。</p></div>
+      <nav class="switcher" aria-label="预览产品"><button class="active" data-mode="both">联动</button><button data-mode="ndm">NDM</button><button data-mode="scribe">ScribeStudio</button></nav>
+    </header>
+    <section class="stage" data-mode="both">
+      <article class="mac-window ndm-window">
+        <div class="windowbar"><div class="lights"><i></i><i></i><i></i></div><div class="window-title">NDM</div><div class="window-state">3.8 MB/s</div></div>
+        <div class="ndm-layout">
+          <aside class="rail"><div class="brand"><img src="assets/ndm-icon.png" alt="">NDM</div><div class="nav-title">状态</div><button class="nav active"><strong>全部</strong><span>18</span></button><button class="nav"><strong>进行中</strong><span>1</span></button><button class="nav"><strong>待继续</strong><span>2</span></button><button class="nav"><strong>已完成</strong><span>14</span></button><button class="nav"><strong>失败</strong><span>1</span></button><div class="nav-title">类型</div><button class="nav"><strong>视频</strong><span>8</span></button><button class="nav"><strong>文档</strong><span>5</span></button></aside>
+          <section class="download-main"><div class="toolbar"><button class="new">＋ 新建下载</button><div class="search">搜索下载</div></div><div class="list">
+            <div class="task video" data-title="产品访谈_完整版.mp4" data-state="正在下载" data-action="暂停"><div class="filemark">MP4</div><div><h3>产品访谈_完整版.mp4</h3><p>正在下载 · 12 / 16 个连接</p></div><div class="metric">68%<br>3.8 MB/s</div></div>
+            <div class="task active" data-title="Antigravity.dmg" data-state="已完成" data-action="打开"><div class="filemark">DMG</div><div><h3>Antigravity.dmg</h3><p class="ok">已完成 · storage.googleapis.com</p></div><div class="metric">181.5 MB</div></div>
+            <div class="task video" data-title="WWDC25_Design.mp4" data-state="已完成" data-action="在 ScribeStudio 中转写"><div class="filemark">MP4</div><div><h3>WWDC25_Design.mp4</h3><p class="ok">已完成 · youtube.com</p></div><div class="metric">1.2 GB</div></div>
+            <div class="task" data-title="课程第 07 讲.pdf" data-state="链接已过期" data-action="更新链接"><div class="filemark">PDF</div><div><h3>课程第 07 讲.pdf</h3><p class="bad">链接已过期 · 已保留 42%</p></div><div class="metric">42%</div></div>
+          </div></section>
+          <aside class="inspector"><div class="inspector-label">当前选择</div><h2 id="dTitle">Antigravity.dmg</h2><p id="dState">已完成</p><div class="facts"><div class="fact"><span>大小</span><strong>181.5 MB</strong></div><div class="fact"><span>来源</span><strong>HTTPS</strong></div><div class="fact"><span>位置</span><strong>Downloads</strong></div></div><button class="action" id="primaryAction">打开</button><button class="action accent" id="handoff">在 ScribeStudio 中转写</button><span class="text-action">在访达中显示</span></aside>
+        </div>
+      </article>
+      <article class="mac-window scribe-window" id="scribeWindow">
+        <div class="windowbar"><div class="lights"><i></i><i></i><i></i></div><div class="window-title">ScribeStudio</div><div class="window-state">00:08:42</div></div>
+        <div class="scribe-layout">
+          <aside class="recipe"><div class="brand"><img src="assets/scribestudio-icon.png" alt="">Scribe</div><p class="from">来自 NDM<br><strong id="incomingFile">WWDC25_Design.mp4</strong></p><div class="section-name">识别配方</div><div class="field"><label>语言</label><strong>自动 · 中文优先</strong></div><div class="field toggle"><span>说话人分离</span><b>ON</b></div><div class="field toggle"><span>清理口水词</span><b>OFF</b></div><div class="section-name">交付</div><div class="field"><label>格式</label><strong>SRT + TXT</strong></div><button class="run">开始转写</button></aside>
+          <section class="media"><div class="media-head"><h2>WWDC25 · Design systems</h2><p>转写中 · 已完成 36%</p></div><div class="frame"><div class="poster">VIDEO PREVIEW</div></div><div class="timeline"><div class="track"><i></i></div><div class="time"><span>03:08</span><span>08:42</span></div></div></section>
+          <aside class="transcript"><h2>逐段文本</h2><p class="meta">24 个片段 · 自动保存</p><div class="line"><time>02:54</time><span>好的工具应该把复杂性留在系统内部。</span></div><div class="line current"><time>03:08</time><span>用户只需要看见当下真正有用的选择。</span></div><div class="line"><time>03:21</time><span>接下来的内容会继续解释整个工作流。</span></div></aside>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script>
+    const stage=document.querySelector('.stage');
+    document.querySelectorAll('.switcher button').forEach(button=>button.addEventListener('click',()=>{
+      document.querySelectorAll('.switcher button').forEach(item=>item.classList.remove('active'));
+      button.classList.add('active');stage.dataset.mode=button.dataset.mode;
+    }));
+    document.querySelectorAll('.task').forEach(task=>task.addEventListener('click',()=>{
+      document.querySelectorAll('.task').forEach(item=>item.classList.remove('active'));task.classList.add('active');
+      document.querySelector('#dTitle').textContent=task.dataset.title;document.querySelector('#dState').textContent=task.dataset.state;document.querySelector('#primaryAction').textContent=task.dataset.action;
+    }));
+    document.querySelector('#handoff').addEventListener('click',()=>{
+      document.querySelector('#incomingFile').textContent=document.querySelector('#dTitle').textContent;
+      stage.dataset.mode='scribe';document.querySelectorAll('.switcher button').forEach(item=>item.classList.toggle('active',item.dataset.mode==='scribe'));
+      const panel=document.querySelector('#scribeWindow');panel.classList.remove('handoff-flash');void panel.offsetWidth;panel.classList.add('handoff-flash');
+    });
+  </script>
+</body>
+</html>

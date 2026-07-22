@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${0:A:h:h}"
 OUT="${NDM_OUTPUT_DIR:-$ROOT/dist}"
 APP="$OUT/NDM.app"
+CONFIGURATION="${NDM_BUILD_CONFIGURATION:-release}"
 TOOLS="$APP/Contents/Resources/Tools"
 LICENSES="$APP/Contents/Resources/Licenses"
 YTDLP_BIN="${YTDLP_BIN:-$ROOT/Vendor/Tools/yt-dlp}"
@@ -34,11 +35,16 @@ for notice in "${required_licenses[@]}"; do
 done
 
 cd "$ROOT"
-swift build -c release --disable-sandbox
+case "$CONFIGURATION" in
+  debug|release) ;;
+  *) print -u2 "NDM_BUILD_CONFIGURATION must be debug or release"; exit 1 ;;
+esac
+
+swift build -c "$CONFIGURATION" --disable-sandbox
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$TOOLS" "$LICENSES"
-cp "$ROOT/.build/release/NDM" "$APP/Contents/MacOS/NDM"
+cp "$ROOT/.build/$CONFIGURATION/NDM" "$APP/Contents/MacOS/NDM"
 cp -L "$YTDLP_BIN" "$TOOLS/yt-dlp"
 cp -L "$FFMPEG_BIN" "$TOOLS/ffmpeg"
 cp -L "$DENO_BIN" "$TOOLS/deno"
@@ -54,10 +60,24 @@ plutil -insert CFBundleIdentifier -string dev.ndm.open "$PLIST"
 plutil -insert CFBundlePackageType -string APPL "$PLIST"
 plutil -insert CFBundleShortVersionString -string "${NDM_VERSION:-0.1.0}" "$PLIST"
 plutil -insert CFBundleVersion -string "${NDM_BUILD_NUMBER:-1}" "$PLIST"
-plutil -insert LSMinimumSystemVersion -string "${NDM_MINIMUM_MACOS:-14.0}" "$PLIST"
+plutil -insert LSMinimumSystemVersion -string "${NDM_MINIMUM_MACOS:-13.0}" "$PLIST"
 plutil -insert NSHighResolutionCapable -bool true "$PLIST"
 if [[ -n "${NDM_PURCHASE_URL:-}" ]]; then
   plutil -insert NDMPurchaseURL -string "$NDM_PURCHASE_URL" "$PLIST"
+fi
+compatibility_url="${NDM_SITE_COMPATIBILITY_MANIFEST_URL:-}"
+compatibility_key="${NDM_SITE_COMPATIBILITY_PUBLIC_KEY:-}"
+if [[ -n "$compatibility_url" || -n "$compatibility_key" ]]; then
+  if [[ -z "$compatibility_url" || -z "$compatibility_key" ]]; then
+    print -u2 "Site compatibility updates require both manifest URL and public key."
+    exit 1
+  fi
+  if [[ "$compatibility_url" != https://* ]]; then
+    print -u2 "Site compatibility manifest URL must use HTTPS."
+    exit 1
+  fi
+  plutil -insert NDMSiteCompatibilityManifestURL -string "$compatibility_url" "$PLIST"
+  plutil -insert NDMSiteCompatibilityPublicKey -string "$compatibility_key" "$PLIST"
 fi
 
 MANIFEST="$APP/Contents/Resources/MediaToolchain.plist"

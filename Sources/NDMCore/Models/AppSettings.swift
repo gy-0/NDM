@@ -15,6 +15,32 @@ public enum AppearanceMode: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
+/// Accent colors are intentionally restrained and used sparingly for primary
+/// actions, selection, and progress. The surrounding surfaces stay neutral.
+public enum AccentTheme: String, Codable, Sendable, Equatable, CaseIterable {
+    case classicBlue
+    case indigo
+    case graphite
+    case jade
+    case violet
+    case rose
+    case amber
+    case custom
+
+    public var settingsTitle: String {
+        switch self {
+        case .classicBlue: return L10n.t("Classic Blue", "经典蓝")
+        case .indigo: return L10n.t("Indigo", "靛蓝")
+        case .graphite: return L10n.t("Graphite", "石墨")
+        case .jade: return L10n.t("Jade", "青玉")
+        case .violet: return L10n.t("Violet", "紫罗兰")
+        case .rose: return L10n.t("Rose", "玫瑰")
+        case .amber: return L10n.t("Amber", "琥珀")
+        case .custom: return L10n.t("Custom…", "自定义…")
+        }
+    }
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var downloadDirectory: URL
     public var maxConnections: Int
@@ -37,6 +63,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var confirmBrowserDownloads: Bool
     /// Window chrome: System (default) / Light / Dark.
     public var appearanceMode: AppearanceMode
+    /// Restrained app accent; new installs start with NDM's classic blue.
+    public var accentTheme: AccentTheme
+    /// User-selected sRGB accent (`#RRGGBB`) when `accentTheme == .custom`.
+    public var customAccentHex: String?
     /// UI language: System (default) / English / 简体中文.
     public var languageMode: AppLanguageMode
     /// Smart connection tuning: start low, double while it pays off, explain why.
@@ -70,6 +100,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         showBrowserMediaPanel: Bool = true,
         confirmBrowserDownloads: Bool = false,
         appearanceMode: AppearanceMode = .system,
+        accentTheme: AccentTheme = .classicBlue,
+        customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,
         smartConnections: Bool? = true
     ) {
@@ -90,6 +122,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.showBrowserMediaPanel = showBrowserMediaPanel
         self.confirmBrowserDownloads = confirmBrowserDownloads
         self.appearanceMode = appearanceMode
+        self.accentTheme = accentTheme
+        self.customAccentHex = customAccentHex
         self.languageMode = languageMode
         self.smartConnections = smartConnections
     }

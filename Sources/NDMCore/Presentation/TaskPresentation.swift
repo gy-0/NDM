@@ -21,7 +21,9 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
         case .all: return L10n.all
         case .active: return L10n.active
         case .queued: return L10n.queued
-        case .paused: return L10n.paused
+        // This bucket combines explicitly paused and interrupted/incomplete
+        // work, so an action-oriented label is truthful for both states.
+        case .paused: return L10n.toResume
         case .completed: return L10n.completed
         case .failed: return L10n.failed
         case .video: return L10n.video
@@ -295,17 +297,13 @@ public struct TaskRowPresentation: Equatable, Sendable {
         } else if task.status == .complete {
             if mediaBadge != nil {
                 statusDetail = L10n.completedReadyToShare
-            } else if !host.isEmpty {
-                statusDetail = host
             } else {
                 statusDetail = ""
             }
         } else if task.status == .waiting {
-            let hostBit = host.isEmpty ? "" : "\(host) · "
-            statusDetail = "\(hostBit)\(L10n.queuedWillStart)"
+            statusDetail = L10n.queuedWillStart
         } else if task.status == .downloading {
             var parts: [String] = []
-            if !host.isEmpty { parts.append(host) }
             if progress?.phase == .preparing {
                 parts.append(L10n.ytdlpPreparingShort)
             } else if progress?.phase == .merging {
@@ -328,8 +326,6 @@ public struct TaskRowPresentation: Equatable, Sendable {
                 parts.append("≈ \(etaText)")
             }
             statusDetail = parts.joined(separator: " · ")
-        } else if !host.isEmpty {
-            statusDetail = "\(statusTitle) · \(host)"
         } else {
             statusDetail = statusTitle
         }
@@ -430,6 +426,8 @@ public enum TaskPresentationFormatting {
         formatter.allowedUnits = .useAll
         formatter.includesUnit = true
         formatter.isAdaptive = true
+        // "0 KB", never the spelled-out "Zero KB" in list rows.
+        formatter.allowsNonnumericFormatting = false
         // ByteCountFormatter picks unit labels from the process locale; keep numeric style consistent.
         return formatter.string(fromByteCount: max(0, bytes))
     }

@@ -3,9 +3,12 @@ import NDMCore
 
 /// Coordinates queue of download engines and persists task state (NeatDBHelper role).
 public actor DownloadManager {
+    public typealias FileRecycler = @Sendable (URL) async throws -> Void
+
     private let store: DownloadStore
     private var settings: AppSettings
     private let supportRoot: URL
+    private let fileRecycler: FileRecycler?
     private let capacityProvider: @Sendable (URL) -> Int64?
     private let sameVolumeProvider: @Sendable (URL, URL) -> Bool
     private var engines: [Int64: DownloadEngine] = [:]
@@ -23,6 +26,7 @@ public actor DownloadManager {
         store: DownloadStore,
         settings: AppSettings,
         supportRoot: URL = DownloadStore.defaultSupportDirectory,
+        fileRecycler: FileRecycler? = nil,
         capacityProvider: @escaping @Sendable (URL) -> Int64? = {
             VolumeCapacity.availableBytes(at: $0)
         },
@@ -33,6 +37,7 @@ public actor DownloadManager {
         self.store = store
         self.settings = settings
         self.supportRoot = supportRoot
+        self.fileRecycler = fileRecycler
         self.capacityProvider = capacityProvider
         self.sameVolumeProvider = sameVolumeProvider
     }
@@ -91,10 +96,17 @@ public actor DownloadManager {
         if resolvedType == "normal", Self.looksLikeHLS(url: urlString, filename: url.lastPathComponent) {
             resolvedType = "hls"
         }
+        let filename = DownloadFilename.resolve(
+            preferred: nil,
+            contentDispositionName: nil,
+            url: url,
+            mimeType: nil,
+            pageTitle: pageTitle
+        )
         var task = DownloadTask(
             url: urlString,
             method: method,
-            filename: url.lastPathComponent.isEmpty ? "download.bin" : url.lastPathComponent,
+            filename: filename,
             linkType: resolvedType,
             connections: connections ?? settings.maxConnections,
             lastTry: Date(),
@@ -532,6 +544,17 @@ public actor DownloadManager {
             password = cred.password
         }
 
+        // Replace opaque CDN / branch names before the engine opens the file.
+        if !DownloadFilename.isUseful(task.filename) {
+            task.filename = DownloadFilename.resolve(
+                preferred: task.filename,
+                url: url,
+                mimeType: task.mimeType,
+                pageTitle: task.pageTitle
+            )
+            task.category = DownloadCategory.infer(filename: task.filename, mimeType: task.mimeType)
+        }
+
         let request = DownloadRequest(
             url: url,
             method: task.method,
@@ -664,15 +687,35 @@ public actor DownloadManager {
                 filename: fileURL.lastPathComponent,
                 mimeType: done.mimeType
             )
+            // Prefer the on-disk name, but never keep extensionless CDN tokens when
+            // we can recover a real name + extension from the page title / MIME.
+            var workingURL = fileURL
+            let diskName = fileURL.lastPathComponent
+            if !DownloadFilename.isUseful(diskName) {
+                let recovered = DownloadFilename.resolve(
+                    preferred: done.filename,
+                    contentDispositionName: nil,
+                    url: URL(string: done.url) ?? fileURL,
+                    mimeType: done.mimeType,
+                    pageTitle: done.pageTitle
+                )
+                if recovered != diskName {
+                    let dest = fileURL.deletingLastPathComponent().appendingPathComponent(recovered)
+                    let unique = uniqueDestination(dest)
+                    if (try? FileManager.default.moveItem(at: fileURL, to: unique)) != nil {
+                        workingURL = unique
+                    }
+                }
+            }
             let finalizedURL: URL
             if producedCategory == .video || producedCategory == .audio,
                let naming = try? SmartFinalize.applySmartNaming(
-                   primary: fileURL,
+                   primary: workingURL,
                    pageTitle: done.pageTitle
                ) {
                 finalizedURL = naming.primaryURL
             } else {
-                finalizedURL = fileURL
+                finalizedURL = workingURL
             }
             done.filename = finalizedURL.lastPathComponent
             done.folderPath = finalizedURL.deletingLastPathComponent().path
@@ -740,6 +783,21 @@ public actor DownloadManager {
               let tasks = try? store.allDownloads(),
               let next = Self.queuedCollectionCandidate(in: tasks) else { return }
         Task { try? await self.start(taskID: next.id) }
+    }
+
+    /// Finder-style `name (2).ext` when the recovered name already exists.
+    private func uniqueDestination(_ url: URL) -> URL {
+        let folder = url.deletingLastPathComponent()
+        let ext = url.pathExtension
+        let stem = url.deletingPathExtension().lastPathComponent
+        var index = 1
+        while true {
+            let suffix = index == 1 ? "" : " (\(index))"
+            let name = ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
+            let candidate = folder.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            index += 1
+        }
     }
 
     static func queuedCollectionCandidate(in tasks: [DownloadTask]) -> DownloadTask? {
@@ -821,21 +879,84 @@ public actor DownloadManager {
         try store.deleteAuth(id: id)
     }
 
-    public func remove(taskID: Int64, deleteFile: Bool) throws {
-        if deleteFile {
-            let tasks = try store.allDownloads()
-            if let t = tasks.first(where: { $0.id == taskID }),
-               let folder = t.folderPath {
-                let url = URL(fileURLWithPath: folder).appendingPathComponent(t.filename)
-                try? FileManager.default.removeItem(at: url)
-            }
-            try? FileManager.default.removeItem(at: supportRoot.appendingPathComponent("\(taskID)"))
+    public func remove(taskID: Int64, deleteFile: Bool) async throws {
+        guard let task = try store.allDownloads().first(where: { $0.id == taskID }) else {
+            throw ManagerError.taskNotFound
         }
+        let fileURL = deleteFile ? try Self.validatedRemovalURL(for: task) : nil
+
+        // A removed task must not keep writing invisibly. Cancel every engine
+        // first, then await the owning task so no late completion can recreate
+        // the file after it has been moved to Trash.
+        let runningTask = runningTasks[taskID]
+        runningTask?.cancel()
+        await engines[taskID]?.cancel()
+        await hlsEngines[taskID]?.cancel()
+        await ftpEngines[taskID]?.cancel()
+        await mkvEngines[taskID]?.cancel()
+        await ytDlpEngines[taskID]?.cancel()
+        if let runningTask {
+            await runningTask.value
+        }
+
+        defer {
+            engines[taskID] = nil
+            hlsEngines[taskID] = nil
+            ftpEngines[taskID] = nil
+            mkvEngines[taskID] = nil
+            ytDlpEngines[taskID] = nil
+            runningTasks[taskID] = nil
+            try? FileManager.default.removeItem(
+                at: supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)
+            )
+        }
+
+        if let fileURL,
+           FileManager.default.fileExists(atPath: fileURL.path) {
+            guard let fileRecycler else {
+                throw ManagerError.fileRecyclingUnavailable
+            }
+            try await fileRecycler(fileURL)
+        }
+
         try store.delete(id: taskID)
-        engines[taskID] = nil
-        hlsEngines[taskID] = nil
-        ftpEngines[taskID] = nil
-        mkvEngines[taskID] = nil
+    }
+
+    /// Resolve the persisted task destination without trusting filename path
+    /// components. Both lexical traversal and symlink escape fail closed.
+    static func validatedRemovalURL(for task: DownloadTask) throws -> URL? {
+        guard let folderPath = task.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !folderPath.isEmpty,
+              !task.filename.isEmpty else {
+            return nil
+        }
+        let filename = task.filename
+        guard (folderPath as NSString).isAbsolutePath,
+              (filename as NSString).lastPathComponent == filename,
+              filename != ".",
+              filename != ".." else {
+            throw ManagerError.unsafeFileLocation
+        }
+
+        let folder = URL(fileURLWithPath: folderPath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let lexicalCandidate = URL(fileURLWithPath: folderPath, isDirectory: true)
+            .appendingPathComponent(filename, isDirectory: false)
+            .standardizedFileURL
+        if let values = try? lexicalCandidate.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
+        ]), values.isDirectory == true || values.isSymbolicLink == true {
+            throw ManagerError.unsafeFileLocation
+        }
+        let candidate = lexicalCandidate
+            .resolvingSymlinksInPath()
+        let folderPrefix = folder.path.hasSuffix("/") ? folder.path : folder.path + "/"
+        guard candidate.path.hasPrefix(folderPrefix) else {
+            throw ManagerError.unsafeFileLocation
+        }
+        return candidate
     }
 }
 
@@ -845,6 +966,8 @@ public enum ManagerError: Error, LocalizedError {
     case downloadFailed(String)
     case queueBusy
     case insufficientStorage(requiredBytes: Int64, availableBytes: Int64)
+    case unsafeFileLocation
+    case fileRecyclingUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -857,6 +980,10 @@ public enum ManagerError: Error, LocalizedError {
                 requiredBytes: required,
                 availableBytes: available
             )
+        case .unsafeFileLocation:
+            return "The downloaded file is outside its recorded download folder. Nothing was removed."
+        case .fileRecyclingUnavailable:
+            return "This environment cannot move files to Trash. Nothing was removed."
         }
     }
 }

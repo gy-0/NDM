@@ -69,7 +69,7 @@ Cookie: a=b; c=d\r\n
 | `3` | 建议文件名 |
 | `4` | 页面标题 (pageTitle / hittitle) |
 | `5` | 顶层页面 URL / referer 辅助 |
-| `6` | 类型：`normal` \| `media` \| `hls` |
+| `6` | 类型：`normal` \| `media` \| `hls`；新版 BetterNDM 另加 `media-page`，表示 X/YouTube 等规范页面地址，宿主进入 yt-dlp 解析与清晰度选择 |
 | `7` | 文件大小（字节） |
 | `8` | Content-Type |
 | `9` | User-Agent |
@@ -123,6 +123,8 @@ Cookie: a=b; c=d\r\n
 | 11 | bg→ct | INIT / SPA URL 变更 |
 | 13 | bg→ct | SET_VISIBILITY 媒体面板开关 |
 | 15 | bg→ct | CONNECTION_ERROR（NDM 未运行） |
+| 17 | bg→ct | 用户点击工具栏图标，恢复当前标签页最近的媒体入口 |
+| 19 | bg→ct | ADD_RESOURCE，将检测到的 PDF/Office/压缩包/电子书/安装包加入显式资源架；不自动下载 |
 
 ## bg.js 能力摘要
 
@@ -132,12 +134,13 @@ Cookie: a=b; c=d\r\n
 4. 取消浏览器原生 `chrome.downloads` 并改送 NDM  
 5. 右键菜单：`Download by NeatDownloadManager`  
 6. HLS m3u8 解析（`HlsParser`）  
-7. 站点特化：YouTube itag、Vimeo progressive、Facebook video embed  
+7. 站点特化：当前 X 视频帖操作栏、YouTube watch 操作栏、B 站视频工具栏；Vimeo/Instagram/TikTok/抖音采用规范页面 URL + 保守内联入口；另有 YouTube itag、Vimeo progressive、Facebook video embed
 8. Cookie 通过 `chrome.cookies.getAll` 汇总  
+9. 非媒体资源发现与自动下载拦截分离：资源先通过 opcode `19` 展示，只有用户明确点击后才走 opcode `6`
 
 ## ct.js 能力摘要
 
-1. 页面浮动「下载」按钮（可拖动）  
+1. 通用网页使用可找回的媒体浮标和资源架；X/YouTube/B 站等高频站点优先使用融入原页面操作栏的 NDM 按钮
 2. 视频/音频元素旁挂载  
 3. 与 bg 的 neat port 通信  
 4. MutationObserver 处理动态 DOM（Facebook 等）  

@@ -9,6 +9,28 @@ final class SmartConnectionTunerTests: XCTestCase {
 
     // MARK: - Decision logic
 
+    func testConnectionSetupEstimateUsesConservativeRecentPercentile() {
+        XCTAssertEqual(
+            SmartConnectionTuner.connectionSetupSeconds(samples: []),
+            0.75,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            SmartConnectionTuner.connectionSetupSeconds(
+                samples: [0.20, 0.30, 0.40, 3.0]
+            ),
+            0.40,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            SmartConnectionTuner.connectionSetupSeconds(
+                samples: [.nan, -1, 0.001, 42]
+            ),
+            10,
+            accuracy: 0.0001
+        )
+    }
+
     func testDoublesWhileGaining() {
         XCTAssertEqual(SmartConnectionTuner.nextConnections(cap: 16, steps: [step(2, 8)]), 4)
         XCTAssertEqual(

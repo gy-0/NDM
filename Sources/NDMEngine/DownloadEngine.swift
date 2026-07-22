@@ -31,6 +31,8 @@ public actor DownloadEngine {
     private var currentConnections: Int
     /// Cancels only the active transfer round; pause/cancel continue to use `token`.
     private var activePlanToken: CancelToken?
+    /// Automatic tail stealing may need fewer workers than the user's ceiling.
+    private var pendingTailConnectionTarget: Int?
     private var planGeneration: UInt64 = 0
     private var isBootstrappingDynamicPlan = false
     /// Smart connection tuning: probe upward from a low count, stop honestly.
@@ -40,9 +42,39 @@ public actor DownloadEngine {
     private let connectionCap: Int
     private var tuneTask: Task<Void, Never>?
     private var tuneAborted = false
+    /// Recent request-to-response-header samples approximate the TCP/TLS/proxy
+    /// setup cost that a speculative tail worker must earn back.
+    private var connectionSetupSamples: [Double] = []
 
     private enum ReplanSignal: Error {
         case requested
+    }
+
+    private struct SegmentRoundFailure: Error, @unchecked Sendable {
+        let segmentID: Int16
+        let underlying: Error
+    }
+
+    private final class RoundFailureBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: SegmentRoundFailure?
+
+        func record(segmentID: Int16, error: Error) {
+            lock.lock()
+            if stored == nil {
+                stored = SegmentRoundFailure(
+                    segmentID: segmentID,
+                    underlying: error
+                )
+            }
+            lock.unlock()
+        }
+
+        var failure: SegmentRoundFailure? {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
     }
 
     public enum EngineState: String, Sendable {
@@ -144,6 +176,7 @@ public actor DownloadEngine {
 
     public func cancel() {
         token.cancel()
+        session.invalidateAndCancel()
         progress.status = .incomplete
         tuneTask?.cancel()
         log("Download Canceled By User.")
@@ -151,6 +184,7 @@ public actor DownloadEngine {
 
     @discardableResult
     public func start() async throws -> URL {
+        guard !Task.isCancelled else { throw EngineError.cancelled }
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         token.reset()
         openLog()
@@ -167,9 +201,13 @@ public actor DownloadEngine {
 
         let acceptRanges = probe.acceptRanges && total > 0
 
-        let filename = request.suggestedFilename
-            ?? probe.suggestedFilename
-            ?? nonEmptyName(request.url.lastPathComponent)
+        let filename = DownloadFilename.resolve(
+            preferred: request.suggestedFilename,
+            contentDispositionName: probe.suggestedFilename,
+            url: request.url,
+            mimeType: probe.mimeType ?? request.headers["Content-Type"],
+            pageTitle: request.pageTitle
+        )
         let finalURL = request.destinationDirectory.appendingPathComponent(filename)
         try FileManager.default.createDirectory(
             at: request.destinationDirectory,
@@ -193,87 +231,85 @@ public actor DownloadEngine {
         }
 
         if acceptRanges {
-            var segments: [SegmentRecord]
-            if let existing = try loadSegmentsForResume(total: total) {
-                segments = existing
-            } else if currentConnections > 1 {
-                // The original starts Range 0-, lets socket 1 make progress, then socket 2
-                // steals half of the remaining tail. A bounded bootstrap makes that timing
-                // dependent boundary deterministic and append-safe under URLSession.
-                let bootstrapBytes = dynamicBootstrapBytes(total: total)
-                let bootstrap = SegmentRecord(
-                    order: 0,
-                    segmentId: 0,
-                    nextId: SegmentRecord.endOfList,
-                    start: 0,
-                    end: bootstrapBytes - 1
-                )
-                installProgressPlan([bootstrap])
-                try writeSegmentsBin([bootstrap])
-                log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
-                log("SegmentManager Created a New Segment and now has 1 Segments.")
-                isBootstrappingDynamicPlan = true
-                do {
-                    try await downloadSegmentStreaming(bootstrap, planToken: nil)
-                } catch {
+            do {
+                var segments: [SegmentRecord]
+                if let existing = try loadSegmentsForResume(total: total) {
+                    segments = existing
+                } else if currentConnections > 1 {
+                    // The original starts Range 0-, lets socket 1 make progress, then socket 2
+                    // steals half of the remaining tail. A bounded bootstrap makes that timing
+                    // dependent boundary deterministic and append-safe under URLSession.
+                    let bootstrapBytes = dynamicBootstrapBytes(total: total)
+                    let bootstrap = SegmentRecord(
+                        order: 0,
+                        segmentId: 0,
+                        nextId: SegmentRecord.endOfList,
+                        start: 0,
+                        end: bootstrapBytes - 1
+                    )
+                    installProgressPlan([bootstrap])
+                    try writeSegmentsBin([bootstrap])
+                    log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
+                    log("SegmentManager Created a New Segment and now has 1 Segments.")
+                    isBootstrappingDynamicPlan = true
+                    do {
+                        try await downloadSegmentStreaming(bootstrap, planToken: nil)
+                    } catch {
+                        isBootstrappingDynamicPlan = false
+                        throw error
+                    }
                     isBootstrappingDynamicPlan = false
-                    throw error
+                    try throwIfStopped()
+
+                    segments = SegmentFileFormat.planDynamicConnections(
+                        totalBytes: total,
+                        connections: currentConnections,
+                        completedPrefixBytes: bootstrapBytes
+                    )
+                    installProgressPlan(segments)
+                    try writeSegmentsBin(segments)
+                    log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(min(currentConnections, segments.count))")
+                    log("SegmentManager Created a New Segment and now has \(segments.count) Segments.")
+                } else {
+                    segments = SegmentFileFormat.planEqualSegments(totalBytes: total, connections: 1)
+                    installProgressPlan(segments)
+                    try writeSegmentsBin(segments)
                 }
-                isBootstrappingDynamicPlan = false
-                try throwIfStopped()
 
-                segments = SegmentFileFormat.planDynamicConnections(
-                    totalBytes: total,
-                    connections: currentConnections,
-                    completedPrefixBytes: bootstrapBytes
-                )
-                installProgressPlan(segments)
-                try writeSegmentsBin(segments)
-                log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(min(currentConnections, segments.count))")
-                log("SegmentManager Created a New Segment and now has \(segments.count) Segments.")
-            } else {
-                segments = SegmentFileFormat.planEqualSegments(totalBytes: total, connections: 1)
-                installProgressPlan(segments)
-                try writeSegmentsBin(segments)
-            }
-
-            if tuningActive {
-                tuneTask = Task { await self.runAutoTune() }
-            }
-            defer {
+                if tuningActive {
+                    tuneTask = Task { await self.runAutoTune() }
+                }
+                let finalSegments = try await downloadSegmentsWithReplanning(segments, total: total)
                 tuneTask?.cancel()
                 tuneTask = nil
-            }
-            let finalSegments = try await downloadSegmentsWithReplanning(segments, total: total)
-            try throwIfStopped()
+                try throwIfStopped()
 
-            setState(.merging)
-            log("DownloadEngine State Changed : Downloading... -> Merging...")
-            try mergeSegments(finalSegments, to: finalURL, total: total)
-        } else {
-            let seg = SegmentRecord(
-                order: 0, segmentId: 0, nextId: SegmentRecord.endOfList,
-                start: 0, end: max(total - 1, 0)
-            )
-            try writeSegmentsBin([seg])
-            log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
-            let dest = SegmentFileFormat.segmentFileURL(id: 0, in: workDirectory)
-            let have = SegmentFileFormat.existingByteCount(for: seg, in: workDirectory)
-            segmentCompleted[0] = have
-            if have < seg.length || total == 0 {
-                if have > 0 {
-                    log("Sending Http-GET  for Socket ( 1 )  Range = \(seg.start + have)-")
-                } else {
-                    log("Sending Http-GET  for Socket ( 1 )  Range = 0-")
+                setState(.merging)
+                log("DownloadEngine State Changed : Downloading... -> Merging...")
+                try mergeSegments(finalSegments, to: finalURL, total: total)
+            } catch EngineError.notResumable {
+                tuneTask?.cancel()
+                tuneTask = nil
+                isBootstrappingDynamicPlan = false
+                if autoTune {
+                    progress.tuning = ConnectionTuning(
+                        steps: progress.tuning?.steps ?? [],
+                        currentConnections: 1,
+                        outcome: .rangeUnsupported
+                    )
                 }
-                try await downloadSegmentStreaming(seg, planToken: nil)
+                log("Resume Failed. Server ignored a byte Range; retrying once as a clean single-stream download.")
+                try discardSegmentArtifacts(reason: "server ignored Range")
+                try await downloadSingleStream(total: total, finalURL: finalURL)
+            } catch {
+                tuneTask?.cancel()
+                tuneTask = nil
+                isBootstrappingDynamicPlan = false
+                throw error
             }
-            try throwIfStopped()
-            setState(.merging)
-            if FileManager.default.fileExists(atPath: finalURL.path) {
-                try FileManager.default.removeItem(at: finalURL)
-            }
-            try FileManager.default.copyItem(at: dest, to: finalURL)
+        } else {
+            try discardSegmentArtifacts(reason: "server does not advertise byte ranges")
+            try await downloadSingleStream(total: total, finalURL: finalURL)
         }
 
         progress.status = .complete
@@ -348,20 +384,72 @@ public actor DownloadEngine {
     // MARK: - Segments plan / resume
 
     private func loadSegmentsForResume(total: Int64) throws -> [SegmentRecord]? {
-        if let existing = try SegmentFileFormat.loadSegmentsBin(from: workDirectory), !existing.isEmpty {
-            let sorted = existing.sorted { $0.start < $1.start }
-            let contiguous = sorted.first?.start == 0 && zip(sorted, sorted.dropFirst()).allSatisfy {
-                $0.end + 1 == $1.start
-            }
-            let covered = sorted.last.map { $0.end + 1 } ?? 0
-            if total > 0, covered == total, contiguous {
-                log("Segments were loaded from segments.bin file.")
-                installProgressPlan(sorted)
-                return sorted
-            }
-            log("segments.bin size mismatch with remote (\(covered) vs \(total)); replanning.")
+        let existing: [SegmentRecord]?
+        do {
+            existing = try SegmentFileFormat.loadSegmentsBin(from: workDirectory)
+        } catch {
+            log("segments.bin is malformed; discarding incompatible resume data.")
+            try discardSegmentArtifacts(reason: "malformed segments.bin")
+            return nil
         }
-        return nil
+
+        guard let existing, !existing.isEmpty else {
+            // A crash between creating a part file and atomically writing the
+            // plan can leave orphaned seg.xN files. They cannot be mapped safely.
+            try discardOrphanedSegmentFiles()
+            return nil
+        }
+
+        guard SegmentFileFormat.isValidResumePlan(existing, totalBytes: total) else {
+            let covered = existing.map(\.end).max().map { $0 + 1 } ?? 0
+            log("segments.bin is incompatible with remote (\(covered) vs \(total)); discarding resume data.")
+            try discardSegmentArtifacts(reason: "invalid or stale segment plan")
+            return nil
+        }
+
+        let sorted = existing.sorted { $0.start < $1.start }
+        guard sorted.allSatisfy({ segment in
+            SegmentFileFormat.rawExistingByteCount(for: segment, in: workDirectory) <= segment.length
+        }) else {
+            log("A partial segment is larger than its assigned Range; discarding unsafe resume data.")
+            try discardSegmentArtifacts(reason: "oversized partial segment")
+            return nil
+        }
+
+        log("Segments were loaded from segments.bin file.")
+        installProgressPlan(sorted)
+        return sorted
+    }
+
+    private func discardOrphanedSegmentFiles() throws {
+        let names = try FileManager.default.contentsOfDirectory(atPath: workDirectory.path)
+        guard names.contains(where: { $0.hasPrefix("seg.x") }) else { return }
+        try discardSegmentArtifacts(reason: "orphaned segment files without segments.bin")
+    }
+
+    private func discardSegmentArtifacts(reason: String) throws {
+        let files = try FileManager.default.contentsOfDirectory(
+            at: workDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        var removed = 0
+        for file in files {
+            let name = file.lastPathComponent
+            guard name == "segments.bin" || name.hasPrefix("seg.x") else { continue }
+            try FileManager.default.removeItem(at: file)
+            removed += 1
+        }
+        if removed > 0 {
+            log("Discarded \(removed) temporary segment artifact(s): \(reason).")
+        }
+        segmentCompleted.removeAll(keepingCapacity: true)
+        lastSpeedSample = 0
+        speedWindowBytes = 0
+        speedWindowStart = Date()
+        progress.bytesPerSecond = 0
+        progress.segmentStates = []
+        recountProgress()
     }
 
     /// Runtime `applyConnectionsCount:` — user-driven; smart tuning steps aside.
@@ -409,6 +497,7 @@ public actor DownloadEngine {
         var contentLength: Int64?
         var acceptRanges: Bool
         var suggestedFilename: String?
+        var mimeType: String?
     }
 
     private func probeRemoteWithAuth() async throws -> Probe {
@@ -445,7 +534,8 @@ public actor DownloadEngine {
                     return Probe(
                         contentLength: length,
                         acceptRanges: accept || length != nil,
-                        suggestedFilename: http.suggestedFilename
+                        suggestedFilename: http.suggestedFilename,
+                        mimeType: http.value(forHTTPHeaderField: "Content-Type")
                     )
                 }
             }
@@ -480,7 +570,8 @@ public actor DownloadEngine {
         return Probe(
             contentLength: length,
             acceptRanges: http.statusCode == 206,
-            suggestedFilename: http.suggestedFilename
+            suggestedFilename: http.suggestedFilename,
+            mimeType: http.value(forHTTPHeaderField: "Content-Type")
         )
     }
 
@@ -599,6 +690,8 @@ public actor DownloadEngine {
         total: Int64
     ) async throws -> [SegmentRecord] {
         var segments = initial
+        var automaticTailOrigins: [Int16: SegmentRecord] = [:]
+        var allowsAutomaticTailRebalance = true
         while true {
             try throwIfStopped()
             let generation = planGeneration
@@ -608,11 +701,45 @@ public actor DownloadEngine {
                 try await downloadRound(
                     segments,
                     maxConcurrent: currentConnections,
+                    allowTailRebalance: allowsAutomaticTailRebalance,
                     planToken: roundToken
                 )
             } catch ReplanSignal.requested {
                 // Expected control flow: all URLSession tasks have acknowledged cancellation
                 // and closed their FileHandles before the next plan reads file sizes.
+            } catch let failure as SegmentRoundFailure {
+                activePlanToken = nil
+                roundToken.cancel()
+                pendingTailConnectionTarget = nil
+                if isRangeNotSatisfiable(failure.underlying),
+                   let parent = automaticTailOrigins[failure.segmentID],
+                   let rollback = SegmentFileFormat.rollbackTailSplit(
+                       existing: segments,
+                       failedSegmentID: failure.segmentID,
+                       originalParent: parent
+                   ) {
+                    let failedFile = SegmentFileFormat.segmentFileURL(
+                        id: failure.segmentID,
+                        in: workDirectory
+                    )
+                    let discarded = SegmentFileFormat.rawExistingByteCount(
+                        for: segments.first(where: {
+                            $0.segmentId == failure.segmentID
+                        }) ?? parent,
+                        in: workDirectory
+                    )
+                    try writeSegmentsBin(rollback.records)
+                    installProgressPlan(rollback.records)
+                    if FileManager.default.fileExists(atPath: failedFile.path) {
+                        try? FileManager.default.removeItem(at: failedFile)
+                    }
+                    automaticTailOrigins.removeValue(forKey: failure.segmentID)
+                    allowsAutomaticTailRebalance = false
+                    segments = rollback.records
+                    log("Segment Rolled Back To Socket ( \(Int(rollback.survivorID) + 1) ). Segment \(failure.segmentID) Merged To Segment \(rollback.survivorID); discarded \(discarded) speculative bytes and disabled further automatic tail stealing for this task.")
+                    continue
+                }
+                throw failure.underlying
             } catch {
                 activePlanToken = nil
                 roundToken.cancel()
@@ -622,10 +749,41 @@ public actor DownloadEngine {
             try throwIfStopped()
 
             if generation != planGeneration || roundToken.isCancelled {
-                segments = try replanPersistedSegments(segments, total: total)
-                log("Replanned active transfers: MaxAllowedConnection = \(currentConnections), Segments = \(segments.count).")
+                let automaticTailTarget = generation == planGeneration
+                    ? pendingTailConnectionTarget
+                    : nil
+                pendingTailConnectionTarget = nil
+                let target = automaticTailTarget ?? currentConnections
+                let previous = segments
+                let replanned = try replanPersistedSegments(
+                    segments,
+                    total: total,
+                    connectionTarget: target
+                )
+                if automaticTailTarget != nil {
+                    let previousIDs = Set(previous.map(\.segmentId))
+                    let newOrigins: [Int16: SegmentRecord] = Dictionary(uniqueKeysWithValues:
+                        replanned.compactMap { child -> (Int16, SegmentRecord)? in
+                            guard !previousIDs.contains(child.segmentId),
+                                  let parent = previous.first(where: {
+                                      child.start >= $0.start && child.end <= $0.end
+                                  }) else {
+                                return nil
+                            }
+                            return (child.segmentId, parent)
+                        }
+                    )
+                    automaticTailOrigins.merge(newOrigins) { _, new in new }
+                    let activeIDs = Set(replanned.map(\.segmentId))
+                    automaticTailOrigins = automaticTailOrigins.filter { activeIDs.contains($0.key) }
+                } else {
+                    automaticTailOrigins.removeAll(keepingCapacity: true)
+                }
+                segments = replanned
+                log("Replanned active transfers: MaxAllowedConnection = \(currentConnections), ActiveTarget = \(target), Segments = \(segments.count).")
                 continue
             }
+            pendingTailConnectionTarget = nil
             return segments
         }
     }
@@ -633,6 +791,7 @@ public actor DownloadEngine {
     private func downloadRound(
         _ segments: [SegmentRecord],
         maxConcurrent: Int,
+        allowTailRebalance: Bool,
         planToken: CancelToken
     ) async throws {
         let pending = segments.filter {
@@ -641,6 +800,7 @@ public actor DownloadEngine {
         guard !pending.isEmpty else { return }
         let limit = max(1, min(maxConcurrent, pending.count))
         log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(limit)")
+        let failureBox = RoundFailureBox()
 
         do {
             try await withThrowingTaskGroup(of: Int16.self) { group in
@@ -652,6 +812,12 @@ public actor DownloadEngine {
                             try await self.downloadSegmentStreaming(segment, planToken: planToken)
                             return segment.segmentId
                         } catch {
+                            if !(error is ReplanSignal) {
+                                failureBox.record(
+                                    segmentID: segment.segmentId,
+                                    error: error
+                                )
+                            }
                             planToken.cancel()
                             throw error
                         }
@@ -669,39 +835,76 @@ public actor DownloadEngine {
                         enqueue(pending[next])
                         next += 1
                         active += 1
-                    } else if shouldRebalanceTail(
+                    } else if allowTailRebalance, let plan = tailRebalancePlan(
                         segments,
                         activeConnections: active,
                         targetConnections: maxConcurrent
                     ) {
-                        log("TailBalance: \(active) active of \(maxConcurrent); preserving prefixes and splitting unfinished ranges.")
+                        pendingTailConnectionTarget = plan.desiredConnections
+                        let eta = plan.estimatedSecondsRemaining.map {
+                            String(format: "%.1fs", $0)
+                        } ?? "unknown"
+                        let setup = String(
+                            format: "%.2fs",
+                            estimatedConnectionSetupSeconds
+                        )
+                        log("TailBalance: \(active) active of \(maxConcurrent); targeting \(plan.desiredConnections), \(plan.totalRemainingBytes) bytes remain, minimum useful leaf \(plan.minimumUsefulBytesPerConnection) bytes, setup \(setup), ETA \(eta).")
                         planToken.cancel()
                         group.cancelAll()
                         throw ReplanSignal.requested
+                    } else if active > 0, active < maxConcurrent {
+                        log("TailBalance: \(active) active of \(maxConcurrent); finishing without new sockets because reconnect payback is too small.")
                     }
                 }
             }
         } catch {
             planToken.cancel()
+            if let failure = failureBox.failure {
+                throw failure
+            }
             throw error
         }
         recountProgress()
     }
 
-    private func shouldRebalanceTail(
+    private func isRangeNotSatisfiable(_ error: Error) -> Bool {
+        guard let engineError = error as? EngineError else { return false }
+        if case .httpStatus(416) = engineError { return true }
+        return false
+    }
+
+    private func tailRebalancePlan(
         _ segments: [SegmentRecord],
         activeConnections: Int,
         targetConnections: Int
-    ) -> Bool {
+    ) -> TailRebalancePlan? {
         let remaining = segments.map { segment in
             let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
             return max(0, segment.length - have)
         }
-        return SegmentFileFormat.shouldRebalanceTail(
+        return SegmentFileFormat.tailRebalancePlan(
             targetConnections: targetConnections,
             activeConnections: activeConnections,
-            remainingBytesBySegment: remaining
+            remainingBytesBySegment: remaining,
+            bytesPerSecond: progress.bytesPerSecond,
+            connectionSetupSeconds: estimatedConnectionSetupSeconds
         )
+    }
+
+    private var estimatedConnectionSetupSeconds: Double {
+        SmartConnectionTuner.connectionSetupSeconds(
+            samples: connectionSetupSamples
+        )
+    }
+
+    private func recordConnectionSetupSample(_ seconds: Double) {
+        guard seconds.isFinite, seconds > 0 else { return }
+        connectionSetupSamples.append(seconds)
+        if connectionSetupSamples.count > 9 {
+            connectionSetupSamples.removeFirst(
+                connectionSetupSamples.count - 9
+            )
+        }
     }
 
     private func markSegmentFinished(_ segmentID: Int16) {
@@ -713,24 +916,32 @@ public actor DownloadEngine {
 
     private func downloadSegmentStreaming(
         _ segment: SegmentRecord,
-        planToken: CancelToken?
+        planToken: CancelToken?,
+        usesByteRange: Bool = true
     ) async throws {
-        let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+        let have = usesByteRange
+            ? SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
+            : 0
         segmentCompleted[segment.segmentId] = have
-        guard let remaining = SegmentFileFormat.remainingRange(for: segment, have: have) else {
+        guard !usesByteRange || SegmentFileFormat.remainingRange(for: segment, have: have) != nil else {
             // Already complete
             return
         }
 
         var req = URLRequest(url: cleanURL)
         req.httpMethod = "GET"
-        if remaining.end < 0 {
-            req.setValue("bytes=\(remaining.start)-", forHTTPHeaderField: "Range")
+        if usesByteRange,
+           let remaining = SegmentFileFormat.remainingRange(for: segment, have: have) {
+            if remaining.end < 0 {
+                req.setValue("bytes=\(remaining.start)-", forHTTPHeaderField: "Range")
+            } else {
+                req.setValue("bytes=\(remaining.start)-\(remaining.end)", forHTTPHeaderField: "Range")
+            }
+            log("Sending Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) Range = \(remaining.start)-\(remaining.end)")
         } else {
-            req.setValue("bytes=\(remaining.start)-\(remaining.end)", forHTTPHeaderField: "Range")
+            log("Sending clean Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) without Range")
         }
         applyHeaders(to: &req)
-        log("Sending Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) Range = \(remaining.start)-\(remaining.end)")
 
         let fileURL = SegmentFileFormat.segmentFileURL(id: segment.segmentId, in: workDirectory)
         let engine = self
@@ -740,10 +951,10 @@ public actor DownloadEngine {
             var lastChallenge: (Int, String?)?
             for _ in 0..<3 {
                 do {
-                    _ = try await RangeStreamDownloader.download(
+                    let response = try await RangeStreamDownloader.download(
                         request: req,
                         to: fileURL,
-                        append: have > 0,
+                        append: usesByteRange && have > 0,
                         isCancelled: {
                             token.isCancelled || (planToken?.isCancelled ?? false)
                         },
@@ -754,11 +965,24 @@ public actor DownloadEngine {
                                 await engine.noteSegmentProgress(
                                     segmentID: segment.segmentId,
                                     base: have,
-                                    written: deltaWritten
+                                    written: deltaWritten,
+                                    planToken: planToken
                                 )
                             }
                         }
                     )
+                    recordConnectionSetupSample(
+                        response.responseHeaderLatencySeconds
+                    )
+                    if usesByteRange,
+                       let responseTotal = response.contentLengthHint,
+                       progress.totalBytes > 0,
+                       responseTotal != progress.totalBytes {
+                        // A mutable URL changed between probe and a Range body.
+                        // Mixing generations can produce a byte-perfect length
+                        // with semantically corrupt content, so fail this attempt.
+                        throw EngineError.invalidResponse
+                    }
                     lastChallenge = nil
                     break
                 } catch let EngineError.authRequired(status, challenge) {
@@ -785,7 +1009,16 @@ public actor DownloadEngine {
         recountProgress()
     }
 
-    private func noteSegmentProgress(segmentID: Int16, base: Int64, written: Int64) {
+    private func noteSegmentProgress(
+        segmentID: Int16,
+        base: Int64,
+        written: Int64,
+        planToken: CancelToken?
+    ) {
+        // A cancelled round is immediately followed by a disk-backed replan.
+        // Ignore callbacks queued by the old URLSession delegate after that point,
+        // otherwise a reused segment id can inflate the new plan's progress.
+        if planToken?.isCancelled == true { return }
         let completed = max(segmentCompleted[segmentID] ?? 0, base + written)
         segmentCompleted[segmentID] = completed
         if let idx = progress.segmentStates.firstIndex(where: { $0.id == Int(segmentID) }) {
@@ -831,7 +1064,8 @@ public actor DownloadEngine {
 
     private func replanPersistedSegments(
         _ existing: [SegmentRecord],
-        total: Int64
+        total: Int64,
+        connectionTarget: Int? = nil
     ) throws -> [SegmentRecord] {
         var completed: [Int16: Int64] = [:]
         for segment in existing {
@@ -843,7 +1077,7 @@ public actor DownloadEngine {
         let replanned = SegmentFileFormat.replanConnections(
             existing: existing,
             totalBytes: total,
-            newConnections: currentConnections,
+            newConnections: connectionTarget ?? currentConnections,
             completedByID: completed
         )
         try writeSegmentsBin(replanned)
@@ -855,6 +1089,59 @@ public actor DownloadEngine {
     /// files use one quarter so the second socket still gets meaningful work.
     private func dynamicBootstrapBytes(total: Int64) -> Int64 {
         min(960 * 1024, max(1, total / 4))
+    }
+
+    /// Servers that do not support Range still get a safe download path. It is
+    /// intentionally non-resumable: an old prefix is never appended to a 200
+    /// response, matching the original engine's silent fresh-redownload fallback.
+    private func downloadSingleStream(total: Int64, finalURL: URL) async throws {
+        var segment = SegmentRecord(
+            order: 0,
+            segmentId: 0,
+            nextId: SegmentRecord.endOfList,
+            start: 0,
+            end: total > 0 ? total - 1 : -1
+        )
+        installProgressPlan([segment])
+        try writeSegmentsBin([segment])
+        log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
+        try await downloadSegmentStreaming(
+            segment,
+            planToken: nil,
+            usesByteRange: false
+        )
+        try throwIfStopped()
+
+        let part = SegmentFileFormat.segmentFileURL(id: segment.segmentId, in: workDirectory)
+        let actualBytes = SegmentFileFormat.rawExistingByteCount(
+            for: segment,
+            in: workDirectory
+        )
+        if total > 0, actualBytes != total {
+            throw EngineError.invalidResponse
+        }
+        if total <= 0 {
+            segment.end = actualBytes - 1
+            progress.totalBytes = actualBytes
+            try writeSegmentsBin([segment])
+        }
+        progress.completedBytes = actualBytes
+        progress.segmentStates = [
+            SegmentState(
+                id: Int(segment.segmentId),
+                start: segment.start,
+                end: segment.end,
+                completed: actualBytes,
+                isFinished: true
+            ),
+        ]
+
+        setState(.merging)
+        log("DownloadEngine State Changed : Downloading... -> Merging...")
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            try FileManager.default.removeItem(at: finalURL)
+        }
+        try FileManager.default.copyItem(at: part, to: finalURL)
     }
 
     private func mergeSegments(_ segments: [SegmentRecord], to finalURL: URL, total: Int64) throws {
@@ -874,16 +1161,23 @@ public actor DownloadEngine {
             guard FileManager.default.fileExists(atPath: part.path) else {
                 throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
             }
-            let have = SegmentFileFormat.existingByteCount(for: seg, in: workDirectory)
-            guard have >= seg.length || seg.length == 0 else {
+            let have = SegmentFileFormat.rawExistingByteCount(for: seg, in: workDirectory)
+            guard have == seg.length else {
                 throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
             }
             try out.seek(toOffset: UInt64(seg.start))
             do {
                 let input = try FileHandle(forReadingFrom: part)
                 defer { try? input.close() }
-                while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                var remaining = seg.length
+                while remaining > 0,
+                      let chunk = try input.read(upToCount: Int(min(1_048_576, remaining))),
+                      !chunk.isEmpty {
                     try out.write(contentsOf: chunk)
+                    remaining -= Int64(chunk.count)
+                }
+                guard remaining == 0 else {
+                    throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
                 }
             }
         }

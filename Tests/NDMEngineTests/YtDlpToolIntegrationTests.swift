@@ -26,6 +26,44 @@ final class YtDlpToolIntegrationTests: XCTestCase {
             userInfo: [NSLocalizedDescriptionKey: "Fresh cookies (not necessarily logged in) are needed"]
         )
         XCTAssertTrue(YtDlpTool.requiresCookies(error: error))
+        XCTAssertEqual(YtDlpTool.accessIssue(error: error), .browserSessionRequired)
+    }
+
+    func testBrowserAccessIssueCoversPrivateAgeAndLockedCookieStates() {
+        let sessionMessages = [
+            "Sign in to confirm your age",
+            "This video is private",
+            "This content is only available to registered users",
+        ]
+        for message in sessionMessages {
+            let error = NSError(
+                domain: "test",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+            XCTAssertEqual(
+                YtDlpTool.accessIssue(error: error),
+                .browserSessionRequired,
+                message
+            )
+        }
+
+        let locked = NSError(
+            domain: "test",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Could not copy Chrome cookie database"]
+        )
+        XCTAssertEqual(YtDlpTool.accessIssue(error: locked), .browserDataUnavailable)
+    }
+
+    func testOrdinaryUnavailableMediaDoesNotRequestBrowserAccess() {
+        let error = NSError(
+            domain: "test",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Unsupported URL: https://example.com/page"]
+        )
+        XCTAssertNil(YtDlpTool.accessIssue(error: error))
+        XCTAssertFalse(YtDlpTool.requiresCookies(error: error))
     }
 
     func testCollectionProbeBuildsPortableEntryURLs() {

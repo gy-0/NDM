@@ -31,10 +31,10 @@ final class BrowsersWindowController: NSWindowController {
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         if bridgeRunning {
             statusLabel.stringValue = L10n.bridgeReady("ws://127.0.0.1:\(BridgeConstants.port)/download")
-            statusLabel.textColor = .systemGreen
+            statusLabel.textColor = .secondaryLabelColor
         } else {
             statusLabel.stringValue = L10n.bridgeUnavailable(BridgeConstants.port)
-            statusLabel.textColor = .systemOrange
+            statusLabel.textColor = .tertiaryLabelColor
         }
 
         let body = NSTextField(wrappingLabelWithString: L10n.browsersBody)

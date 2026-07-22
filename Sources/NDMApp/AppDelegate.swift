@@ -4,6 +4,12 @@ import NDMEngine
 import NDMBridge
 
 @MainActor
+private final class BrowserMediaPreparationCancellation {
+    private(set) var isCancelled = false
+    func cancel() { isCancelled = true }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     private var statusItem: NSStatusItem?
@@ -12,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusTaskItems: [NSMenuItem] = []
     private var statusPauseAllItem: NSMenuItem?
     private var manager: DownloadManager?
+    private var siteCompatibilityUpdater: SiteCompatibilityUpdater?
     private var bridge: BrowserBridge?
     private var settings: AppSettings = {
         var value = SettingsStore.load()
@@ -30,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         L10n.apply(settings.languageMode)
         AppearanceApplicator.apply(settings.appearanceMode)
+        NDMChrome.applyAccentTheme(settings.accentTheme, customHex: settings.customAccentHex)
         NotificationCenter.default.addObserver(
             forName: L10n.didChangeNotification,
             object: nil,
@@ -44,12 +52,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let support = QAPreviewOverrides.supportDirectory
                 ?? DownloadStore.defaultSupportDirectory
+            CoverArtCache.shared.configure(supportRoot: support)
             let store = try DownloadStore(directory: support)
+            // Engines are process-local. Reconcile stale runtime states before
+            // the first list render so a crashed download cannot trigger a
+            // perpetual one-second structural refresh after relaunch.
+            try store.recoverInterruptedTasks()
             try QAPreviewOverrides.seedPreviewTasks(in: store)
             settings.bridgePort = QAPreviewOverrides.bridgePort
                 ?? BridgeConstants.port
-            let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
+            let manager = DownloadManager(
+                store: store,
+                settings: settings,
+                supportRoot: support,
+                fileRecycler: { url in
+                    try await AppFileRecycler.recycle(url)
+                }
+            )
             self.manager = manager
+            // Keep tool resolution and the updater on the same root, so a
+            // refreshed yt-dlp is found in QA-isolated runs too.
+            YtDlpTool.siteCompatibilitySupportRoot = support
+            let siteCompatibilityUpdater = SiteCompatibilityUpdater.configured(supportRoot: support)
+            self.siteCompatibilityUpdater = siteCompatibilityUpdater
+            if let siteCompatibilityUpdater {
+                Task { await siteCompatibilityUpdater.refreshIfNeeded() }
+            }
 
             let bridge = BrowserBridge(port: settings.bridgePort)
             bridge.onDownloadMessage = { [weak self] msg in
@@ -72,19 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try bridge.start()
                 self.bridge = bridge
             } catch {
+                // Not fatal and not worth interrupting launch: the app runs fine
+                // without the bridge, and the Browsers window already shows a
+                // persistent "bridge unavailable · port busy" status.
                 self.bridge = nil
-                let alert = NSAlert()
-                alert.messageText = L10n.bridgePortInUse(settings.bridgePort)
-                alert.informativeText = L10n.bridgePortInUseBody(
-                    settings.bridgePort,
-                    error.localizedDescription
-                )
-                alert.addButton(withTitle: L10n.continueWithoutBridge)
-                alert.addButton(withTitle: L10n.quit)
-                if alert.runModal() != .alertFirstButtonReturn {
-                    NSApp.terminate(nil)
-                    return
-                }
+                NSLog("Browser bridge unavailable on port %d: %@",
+                      Int(settings.bridgePort), error.localizedDescription)
             }
 
             if let bridge = self.bridge {
@@ -95,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             QAPreviewOverrides.apply(to: &effective)
                             self?.settings = effective
                             AppearanceApplicator.apply(effective.appearanceMode)
+                            NDMChrome.applyAccentTheme(effective.accentTheme, customHex: effective.customAccentHex)
                             L10n.apply(effective.languageMode)
                             self?.refreshClipboardOfferFromPasteboard()
                             for msg in BridgeConstants.showPanelMessages(enabled: effective.showBrowserMediaPanel) {
@@ -115,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             QAPreviewOverrides.apply(to: &effective)
                             self?.settings = effective
                             AppearanceApplicator.apply(effective.appearanceMode)
+                            NDMChrome.applyAccentTheme(effective.accentTheme, customHex: effective.customAccentHex)
                             L10n.apply(effective.languageMode)
                             self?.refreshClipboardOfferFromPasteboard()
                         }
@@ -123,6 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             let window = MainWindowController(manager: manager)
+            window.onOpenSettings = { [weak self] in
+                self?.openSettings()
+            }
             window.showWindow(nil)
             mainWindow = window
             NotificationCenter.default.addObserver(
@@ -161,6 +187,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                }) {
                 DispatchQueue.main.async { [weak self] in
                     self?.presentCompletion(for: task)
+                }
+            }
+            if QAPreviewOverrides.showMediaAccess {
+                Task { @MainActor [weak self] in
+                    _ = await MediaAccessPrompt.choose(
+                        pageURL: QAPreviewOverrides.mediaAccessURL,
+                        parentWindow: self?.mainWindow?.window
+                    )
+                }
+            }
+            if QAPreviewOverrides.showSettings {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.presentSettings(manager: manager, settings: self.settings)
+                }
+            }
+            if QAPreviewOverrides.showNewDownload {
+                DispatchQueue.main.async { [weak self] in
+                    self?.mainWindow?.promptNewURLWithPrefill(QAPreviewOverrides.clipboardText)
+                }
+            }
+            if QAPreviewOverrides.showMediaPreparation {
+                DispatchQueue.main.async { [weak self] in
+                    _ = WorkingPanelController.schedule(
+                        stage: .readingMedia,
+                        on: self?.mainWindow?.window,
+                        delayNanoseconds: 0,
+                        onCancel: {}
+                    )
                 }
             }
 
@@ -279,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(fileMenu, L10n.showProgress, #selector(menuProgress), "i", symbol: "chart.bar.fill")
         add(fileMenu, L10n.propertiesEllipsis, #selector(menuProperties), "i", [.command, .option], symbol: "info.circle")
         add(fileMenu, L10n.copyURL, #selector(menuCopyURL), "c", [.command, .shift], symbol: "doc.on.doc")
+        add(fileMenu, L10n.quickLook, #selector(menuQuickLook), "y", symbol: "eye")
         fileMenu.addItem(.separator())
         add(fileMenu, L10n.removeEllipsis, #selector(menuDelete), String(UnicodeScalar(8)!), symbol: "trash")
         fileItem.submenu = fileMenu
@@ -298,6 +354,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(copy)
         editMenu.addItem(paste)
         editMenu.addItem(selectAll)
+        editMenu.addItem(.separator())
+        let find = NSMenuItem(title: L10n.search, action: #selector(menuFocusSearch), keyEquivalent: "f")
+        find.target = self
+        find.ndmSymbol("magnifyingglass")
+        editMenu.addItem(find)
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
@@ -600,7 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var fillRect = barRect.insetBy(dx: 1.5, dy: 1.5)
             fillRect.size.width = max(fillRect.height, fillRect.width * CGFloat(min(1, max(0, fraction))))
             let fill = NSBezierPath(roundedRect: fillRect, xRadius: fillRect.height / 2, yRadius: fillRect.height / 2)
-            NSColor.controlAccentColor.setFill()
+            NDMChrome.accent.setFill()
             fill.fill()
         }
     }
@@ -700,21 +761,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let settings = await manager.currentSettings()
             if let existing = settingsWindow {
                 existing.showWindow(nil)
+                existing.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
                 return
             }
-            let wc = SettingsWindowController(manager: manager, settings: settings)
-            settingsWindow = wc
-            wc.onWindowClose = { [weak self, weak wc] in
-                guard let self else { return }
-                if self.settingsWindow === wc { self.settingsWindow = nil }
-            }
-            wc.showWindow(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            presentSettings(manager: manager, settings: settings)
         }
+    }
+
+    private func presentSettings(manager: DownloadManager, settings: AppSettings) {
+        if let existing = settingsWindow {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let wc = SettingsWindowController(
+            manager: manager,
+            settings: settings,
+            siteCompatibilityUpdater: siteCompatibilityUpdater,
+            initialSectionName: QAPreviewOverrides.settingsSection
+        )
+        settingsWindow = wc
+        wc.onWindowClose = { [weak self, weak wc] in
+            guard let self else { return }
+            if self.settingsWindow === wc { self.settingsWindow = nil }
+        }
+        wc.showWindow(nil)
+        wc.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func menuStart() { mainWindow?.menuStartSelected() }
     @objc private func menuPause() { mainWindow?.menuPauseSelected() }
+    @objc private func menuFocusSearch() { mainWindow?.menuFocusSearch() }
     @objc private func menuDelete() {
         guard !isEditingText else { return }
         mainWindow?.menuDeleteSelected()
@@ -722,9 +802,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuProgress() { mainWindow?.menuShowProgressSelected() }
     @objc private func menuProperties() { mainWindow?.menuShowPropertiesSelected() }
     @objc private func menuCopyURL() { mainWindow?.menuCopyURLSelected() }
+    @objc private func menuQuickLook() { mainWindow?.menuQuickLookSelected() }
 
     private func presentCompletion(for task: DownloadTask) {
         Task { await mainWindow?.reload() }
+        if !NSApp.isActive {
+            NSApp.requestUserAttention(.informationalRequest)
+        }
         guard settings.showCompletionDialog else { return }
 
         // Progress window already open → complete in place. A modal alert would
@@ -738,6 +822,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         completionWindow = wc
         wc.showWindow(nil)
+        wc.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -827,6 +912,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // A site-integrated action sends a canonical video page URL rather
+        // than one of the many short-lived MP4/TS requests observed by the
+        // browser. Resolve it through the same quality flow as a pasted link;
+        // treating the page itself as an ordinary file was the old bug.
+        if accepted.ltype.lowercased() == "media-page",
+           MediaLinkClassifier.looksLikeMediaPage(accepted.url) {
+            _ = await handleBrowserMediaPage(accepted, manager: manager)
+            return
+        }
+
         // HLS master with several renditions → the quality picker decides,
         // not "highest bandwidth silently wins". Any probe failure falls through.
         if accepted.ltype.lowercased() == "hls" || accepted.url.lowercased().contains(".m3u8") {
@@ -872,5 +967,166 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "\(diag.message)\n(\(diag.rawLabel))"
             alert.runModal()
         }
+    }
+
+    /// Resolves canonical X/YouTube (and other yt-dlp-supported) pages sent by
+    /// BetterNDM. A return means the request was consumed, including cancel.
+    private func handleBrowserMediaPage(
+        _ message: ParsedBridgeMessage,
+        manager: DownloadManager
+    ) async -> Bool {
+        guard YtDlpTool.isAvailable else {
+            showBrowserMediaAlert(
+                message: L10n.advancedVideo,
+                detail: L10n.ytdlpMissingHint
+            )
+            return true
+        }
+
+        let cancellation = BrowserMediaPreparationCancellation()
+        var working: WorkingPanelController? = WorkingPanelController.schedule(
+            stage: .readingMedia,
+            on: mainWindow?.window,
+            onCancel: { cancellation.cancel() }
+        )
+        var mediaURL = message.url
+        var probe: YtDlpProbe?
+        var collection: YtDlpCollectionProbe?
+        var cookieSource: YtDlpCookieSource?
+
+        while probe == nil {
+            do {
+                if let cookieSource {
+                    probe = try await YtDlpTool.probe(
+                        url: mediaURL,
+                        cookieSource: cookieSource
+                    )
+                } else {
+                    let prepared = try await MediaPreflightStore.shared.result(for: message.url)
+                    mediaURL = prepared.mediaURL
+                    probe = prepared.probe
+                    collection = prepared.collection
+                }
+                guard !cancellation.isCancelled else {
+                    working?.dismiss()
+                    return true
+                }
+                working?.update(stage: .preparingOptions)
+            } catch {
+                guard !cancellation.isCancelled else {
+                    working?.dismiss()
+                    return true
+                }
+                working?.dismiss()
+                working = nil
+                guard YtDlpTool.accessIssue(error: error) != nil else {
+                    NSLog("Browser media recognition failed for %@: %@", message.url, error.localizedDescription)
+                    showBrowserMediaAlert(
+                        message: L10n.mediaRecognitionFailed,
+                        detail: L10n.mediaRecognitionFailedBody
+                    )
+                    return true
+                }
+                let previousSource = cookieSource
+                guard let selected = await MediaAccessPrompt.choose(
+                    pageURL: mediaURL,
+                    parentWindow: mainWindow?.window,
+                    previousSource: previousSource,
+                    retrying: previousSource != nil
+                ) else {
+                    return true
+                }
+                cookieSource = selected
+                working = WorkingPanelController.schedule(
+                    stage: .readingMedia,
+                    on: mainWindow?.window,
+                    onCancel: { cancellation.cancel() }
+                )
+            }
+        }
+
+        working?.dismiss()
+        guard !cancellation.isCancelled, let probe else { return true }
+        guard !probe.formats.isEmpty else {
+            showBrowserMediaAlert(
+                message: L10n.mediaRecognitionFailed,
+                detail: L10n.mediaRecognitionFailedBody
+            )
+            return true
+        }
+
+        let currentSettings = await manager.currentSettings()
+        let choice = await YtDlpQualityPickerWindowController.choose(
+            url: mediaURL,
+            probe: probe,
+            collection: collection,
+            cookieSource: cookieSource,
+            destinationDirectory: currentSettings.downloadDirectory,
+            parentWindow: mainWindow?.window
+        )
+        do {
+            switch choice {
+            case .cancel:
+                return true
+            case .download(let picked, let options, let scope):
+                switch scope {
+                case .single:
+                    let task = try await manager.startYtDlp(
+                        url: mediaURL,
+                        formatID: picked.selector(for: options.container),
+                        options: options,
+                        pageTitle: probe.title.isEmpty ? nil : probe.title,
+                        estimatedBytes: picked.estimatedBytes(for: options.container),
+                        estimatedComponentBytes: picked.estimatedComponentBytes(for: options.container),
+                        preferredFilename: probe.title.isEmpty ? nil : probe.title
+                    )
+                    if let thumbnail = probe.thumbnailURL {
+                        CoverArtCache.shared.prefetchRemote(
+                            taskID: task.id,
+                            urlString: thumbnail
+                        )
+                    }
+                    await mainWindow?.reload()
+                    mainWindow?.showProgress(for: task.id)
+                case .collection(let selectedCollection):
+                    let tasks = try await manager.enqueueYtDlpCollection(
+                        selectedCollection.items,
+                        formatID: picked.collectionSelector(for: options.container),
+                        options: options,
+                        collectionURL: message.url,
+                        collectionTitle: selectedCollection.title.isEmpty ? nil : selectedCollection.title,
+                        estimatedSampleBytes: picked.estimatedBytes(for: options.container),
+                        estimatedSampleComponentBytes: picked.estimatedComponentBytes(for: options.container),
+                        sampleDurationSeconds: probe.durationSeconds
+                    )
+                    for (task, item) in zip(tasks, selectedCollection.items) {
+                        if let thumbnail = item.thumbnailURL {
+                            CoverArtCache.shared.prefetchRemote(
+                                taskID: task.id,
+                                urlString: thumbnail
+                            )
+                        }
+                    }
+                    await mainWindow?.reload()
+                    if let first = tasks.first {
+                        mainWindow?.showProgress(for: first.id)
+                    }
+                }
+            }
+        } catch {
+            let diagnostic = DownloadDiagnostic.classify(error)
+            showBrowserMediaAlert(
+                message: diagnostic.title,
+                detail: "\(diagnostic.message)\n(\(diagnostic.rawLabel))"
+            )
+        }
+        return true
+    }
+
+    private func showBrowserMediaAlert(message: String, detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.runModal()
     }
 }

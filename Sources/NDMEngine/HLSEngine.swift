@@ -59,6 +59,7 @@ public actor HLSEngine {
 
     public func cancel() {
         token.cancel()
+        session.invalidateAndCancel()
         progress.status = .incomplete
         log("HLS Download Canceled By User.")
     }
@@ -67,6 +68,7 @@ public actor HLSEngine {
 
     @discardableResult
     public func start() async throws -> URL {
+        guard !Task.isCancelled else { throw EngineError.cancelled }
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         token.reset()
         openLog()

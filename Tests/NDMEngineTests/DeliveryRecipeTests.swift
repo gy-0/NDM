@@ -21,7 +21,8 @@ final class DeliveryRecipeTests: XCTestCase {
 
         let mobileArgs = FFmpegTool.mobileCompatibleArguments(input: input, output: mobile)
         XCTAssertEqual(mobileArgs.first, "-n")
-        XCTAssertTrue(mobileArgs.contains("libx264"))
+        XCTAssertTrue(mobileArgs.contains("h264_videotoolbox"))
+        XCTAssertTrue(mobileArgs.contains("-allow_sw"))
         XCTAssertTrue(mobileArgs.contains("aac"))
         XCTAssertTrue(mobileArgs.contains("format=yuv420p") || mobileArgs.contains { $0.contains("format=yuv420p") })
         XCTAssertEqual(mobileArgs.last, mobile.path)
@@ -41,6 +42,35 @@ final class DeliveryRecipeTests: XCTestCase {
         XCTAssertEqual(short, 2_500)
         XCTAssertLessThan(medium, short)
         XCTAssertEqual(veryLong, 220)
+    }
+
+    func testMediaProcessDrainsLargeStandardErrorWithoutDeadlocking() throws {
+        let script = #"i=0; while [ $i -lt 12000 ]; do printf 'ffmpeg progress line 012345678901234567890123456789\n' >&2; i=$((i+1)); done; exit 7"#
+        let result = try FFmpegTool.runProcess(
+            executable: "/bin/sh",
+            arguments: ["-c", script]
+        )
+
+        XCTAssertEqual(result.terminationStatus, 7)
+        XCTAssertTrue(result.standardError.contains("ffmpeg progress line"))
+        XCTAssertGreaterThan(result.standardError.utf8.count, 64 * 1_024)
+    }
+
+    func testCancellingMediaProcessStopsChildPromptly() async throws {
+        let processTask = Task.detached {
+            try FFmpegTool.runProcess(executable: "/bin/sleep", arguments: ["30"])
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let cancelledAt = Date()
+        processTask.cancel()
+
+        do {
+            _ = try await processTask.value
+            XCTFail("Expected media process cancellation")
+        } catch is CancellationError {
+            // Expected.
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 2)
     }
 
     func testOutputNamingNeverReplacesAnExistingExport() throws {
@@ -99,7 +129,7 @@ final class DeliveryRecipeTests: XCTestCase {
             "-y",
             "-f", "lavfi", "-i", "testsrc=duration=0.5:size=160x90:rate=10",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=0.5",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:v", "h264_videotoolbox", "-allow_sw", "1", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-shortest",
             source.path,
         ]

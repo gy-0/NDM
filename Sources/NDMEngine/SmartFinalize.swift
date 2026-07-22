@@ -184,10 +184,21 @@ public enum SmartFinalize {
 
         let folder = original.deletingLastPathComponent()
         let suggestedStem = (suggested as NSString).deletingPathExtension
+        // Never rename into an extensionless name — keep the on-disk type.
+        let ext = original.pathExtension.isEmpty
+            ? (suggested as NSString).pathExtension
+            : original.pathExtension
+        guard !ext.isEmpty else {
+            return SmartNamingResult(
+                primaryURL: original,
+                originalURL: original,
+                sidecarURLs: completionStack(primary: original)?.sidecars.map(\.url) ?? []
+            )
+        }
         let destination = availableOutputURL(
             in: folder,
             stem: suggestedStem,
-            extension: original.pathExtension
+            extension: ext
         )
         let sidecars = completionStack(primary: original)?.sidecars.map(\.url) ?? []
         let oldStem = original.deletingPathExtension().lastPathComponent
@@ -425,10 +436,18 @@ public enum SmartFinalize {
     static func availableOutputURL(in folder: URL, stem: String, extension ext: String) -> URL {
         let fileManager = FileManager.default
         let cleanStem = sanitize(stem).isEmpty ? "download" : sanitize(stem)
+        let cleanExt = normalizedExtension(ext)
         var index = 1
         while true {
             let suffix = index == 1 ? "" : " (\(index))"
-            let candidate = folder.appendingPathComponent("\(cleanStem)\(suffix).\(ext)")
+            let filename: String
+            if cleanExt.isEmpty {
+                // No trailing "." — Finder shows those as extensionless junk.
+                filename = "\(cleanStem)\(suffix)"
+            } else {
+                filename = "\(cleanStem)\(suffix).\(cleanExt)"
+            }
+            let candidate = folder.appendingPathComponent(filename)
             if !fileManager.fileExists(atPath: candidate.path) { return candidate }
             index += 1
         }

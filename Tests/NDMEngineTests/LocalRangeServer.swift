@@ -6,6 +6,13 @@ final class LocalRangeServer: @unchecked Sendable {
     private let payload: Data
     private let responseDelay: TimeInterval
     private let rangeResponseDelay: @Sendable (Int) -> TimeInterval
+    private let ignoresRangeRequests: Bool
+    private let contentRangeTotalOffset: Int
+    private let injectedRangeFailureStatus: Int?
+    private let injectRangeFailureAfterCount: Int
+    private let injectedRangeFailureLimit: Int
+    private let injectedRangeFailureStartAtOrAbove: Int?
+    private var injectedRangeFailures = 0
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "ndm.test.httpserver")
     private let recordLock = NSLock()
@@ -15,11 +22,23 @@ final class LocalRangeServer: @unchecked Sendable {
     init(
         payload: Data,
         responseDelay: TimeInterval = 0,
-        rangeResponseDelay: @escaping @Sendable (Int) -> TimeInterval = { _ in 0 }
+        rangeResponseDelay: @escaping @Sendable (Int) -> TimeInterval = { _ in 0 },
+        ignoresRangeRequests: Bool = false,
+        contentRangeTotalOffset: Int = 0,
+        injectedRangeFailureStatus: Int? = nil,
+        injectRangeFailureAfterCount: Int = .max,
+        injectedRangeFailureLimit: Int = 0,
+        injectedRangeFailureStartAtOrAbove: Int? = nil
     ) {
         self.payload = payload
         self.responseDelay = responseDelay
         self.rangeResponseDelay = rangeResponseDelay
+        self.ignoresRangeRequests = ignoresRangeRequests
+        self.contentRangeTotalOffset = contentRangeTotalOffset
+        self.injectedRangeFailureStatus = injectedRangeFailureStatus
+        self.injectRangeFailureAfterCount = injectRangeFailureAfterCount
+        self.injectedRangeFailureLimit = injectedRangeFailureLimit
+        self.injectedRangeFailureStartAtOrAbove = injectedRangeFailureStartAtOrAbove
     }
 
     var recordedRanges: [String] {
@@ -61,13 +80,18 @@ final class LocalRangeServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
+            var rangeOrdinal: Int?
             if let range = req.components(separatedBy: "\r\n")
                 .first(where: { $0.lowercased().hasPrefix("range:") }) {
                 self.recordLock.lock()
                 self._recordedRanges.append(range)
+                rangeOrdinal = self._recordedRanges.count
                 self.recordLock.unlock()
             }
-            let response = self.buildResponse(for: req)
+            let response = self.buildResponse(
+                for: req,
+                rangeOrdinal: rangeOrdinal
+            )
             let send = {
                 connection.send(content: response, completion: .contentProcessed { _ in
                     connection.cancel()
@@ -94,7 +118,10 @@ final class LocalRangeServer: @unchecked Sendable {
         return Int(spec.split(separator: "-", maxSplits: 1).first ?? "")
     }
 
-    private func buildResponse(for request: String) -> Data {
+    private func buildResponse(
+        for request: String,
+        rangeOrdinal: Int?
+    ) -> Data {
         let lines = request.components(separatedBy: "\r\n")
         let first = lines.first ?? ""
         let method = first.split(separator: " ").first.map(String.init) ?? "GET"
@@ -110,13 +137,24 @@ final class LocalRangeServer: @unchecked Sendable {
             return Data(h.utf8)
         }
 
-        if let rangeHeader {
+        if let rangeHeader, !ignoresRangeRequests {
             // bytes=START-END
             let spec = rangeHeader.split(separator: ":", maxSplits: 1).last?
                 .trimmingCharacters(in: .whitespaces) ?? ""
             let body = spec.replacingOccurrences(of: "bytes=", with: "")
             let parts = body.split(separator: "-")
             let start = Int(parts.first ?? "0") ?? 0
+            if let rangeOrdinal,
+               let status = injectedRangeFailureStatus,
+               rangeOrdinal > injectRangeFailureAfterCount,
+               injectedRangeFailureStartAtOrAbove.map({ start >= $0 }) ?? true,
+               injectedRangeFailures < injectedRangeFailureLimit {
+                injectedRangeFailures += 1
+                return errorResponse(status: status, total: total)
+            }
+            guard start >= 0, start < total else {
+                return errorResponse(status: 416, total: total)
+            }
             let end: Int
             if parts.count > 1, let e = Int(parts[1]) {
                 end = min(e, total - 1)
@@ -126,7 +164,7 @@ final class LocalRangeServer: @unchecked Sendable {
             let slice = payload.subdata(in: start..<(end + 1))
             var h = "HTTP/1.1 206 Partial Content\r\n"
             h += "Content-Length: \(slice.count)\r\n"
-            h += "Content-Range: bytes \(start)-\(end)/\(total)\r\n"
+            h += "Content-Range: bytes \(start)-\(end)/\(total + contentRangeTotalOffset)\r\n"
             h += "Accept-Ranges: bytes\r\n"
             h += "Content-Type: application/octet-stream\r\n"
             h += "Connection: close\r\n\r\n"
@@ -143,5 +181,22 @@ final class LocalRangeServer: @unchecked Sendable {
         var out = Data(h.utf8)
         out.append(payload)
         return out
+    }
+
+    private func errorResponse(status: Int, total: Int) -> Data {
+        let reason: String
+        switch status {
+        case 416: reason = "Range Not Satisfiable"
+        case 500: reason = "Internal Server Error"
+        case 503: reason = "Service Unavailable"
+        default: reason = "Error"
+        }
+        var headers = "HTTP/1.1 \(status) \(reason)\r\n"
+        if status == 416 {
+            headers += "Content-Range: bytes */\(total)\r\n"
+        }
+        headers += "Content-Length: 0\r\n"
+        headers += "Connection: close\r\n\r\n"
+        return Data(headers.utf8)
     }
 }

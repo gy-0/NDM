@@ -1,12 +1,14 @@
 import AppKit
+import ServiceManagement
 import UniformTypeIdentifiers
 import NDMCore
 import NDMEngine
 
 @MainActor
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private enum Section: Int, CaseIterable {
         case general
+        case appearance
         case downloads
         case browser
         case network
@@ -15,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         var title: String {
             switch self {
             case .general: return L10n.general
+            case .appearance: return L10n.appearance
             case .downloads: return L10n.downloads
             case .browser: return L10n.browser
             case .network: return L10n.network
@@ -25,24 +28,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         var subtitle: String {
             switch self {
             case .general:
-                return L10n.t("Language, appearance, and everyday behavior", "语言、外观与日常行为")
+                return L10n.t("Language and app behavior", "语言与软件行为")
+            case .appearance:
+                return L10n.t("Theme and color", "主题与颜色")
             case .downloads:
-                return L10n.t("Where files go and how transfers use the network", "文件保存位置与下载性能")
+                return L10n.t("Files and transfer limits", "文件与传输限制")
             case .browser:
-                return L10n.t("Optional one-click capture from your browser", "可选的浏览器一键接管")
+                return L10n.t("Browser integration", "浏览器集成")
             case .network:
-                return L10n.t("Proxy routes for restricted or managed networks", "受限网络与代理连接")
+                return L10n.t("Proxy settings", "代理设置")
             case .advanced:
-                return L10n.t(
-                    "Site compatibility and migration tools",
-                    "站点兼容性与迁移工具"
-                )
+                return L10n.t("Compatibility and data", "兼容性与数据")
             }
         }
 
         var symbolName: String {
             switch self {
             case .general: return "slider.horizontal.3"
+            case .appearance: return "paintpalette"
             case .downloads: return "arrow.down.circle"
             case .browser: return "globe"
             case .network: return "bolt.horizontal"
@@ -61,44 +64,49 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let contentTitle = NSTextField(labelWithString: "")
     private let contentSubtitle = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
+    private let saveButton = NSButton(title: "", target: nil, action: nil)
+    private let footerHint = NSTextField(labelWithString: "")
 
     // General
-    private let appearancePopup = NSPopUpButton()
-    private let languagePopup = NSPopUpButton()
-    private let categorySwitch = NSSwitch()
-    private let allAtOnceSwitch = NSSwitch()
-    private let completeSwitch = NSSwitch()
-    private let clipboardSwitch = NSSwitch()
+    private let appearancePopup = SettingsPopupButton()
+    private let accentPopup = SettingsPopupButton()
+    private let customAccentColorWell = NSColorWell()
+    private let languagePopup = SettingsPopupButton()
+    private let categorySwitch = SettingsAccentSwitch()
+    private let allAtOnceSwitch = SettingsAccentSwitch()
+    private let completeSwitch = SettingsAccentSwitch()
+    private let clipboardSwitch = SettingsAccentSwitch()
+    private let launchAtLoginSwitch = SettingsAccentSwitch()
 
     // Downloads
     private let dirField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
-    private let smartConnSwitch = NSSwitch()
+    private let smartConnSwitch = SettingsAccentSwitch()
 
     // Browser
-    private let panelSwitch = NSSwitch()
-    private let confirmSwitch = NSSwitch()
-    private let uaSwitch = NSSwitch()
+    private let panelSwitch = SettingsAccentSwitch()
+    private let confirmSwitch = SettingsAccentSwitch()
+    private let uaSwitch = SettingsAccentSwitch()
     private let uaField = NSTextField(string: "")
 
     // Network
-    private let proxySwitch = NSSwitch()
+    private let proxySwitch = SettingsAccentSwitch()
     private let proxyHostField = NSTextField(string: "")
     private let proxyPortField = NSTextField(string: "8080")
     private let proxyUserField = NSTextField(string: "")
     private let proxyPassField = NSSecureTextField(string: "")
-    private let ftpProxySwitch = NSSwitch()
+    private let ftpProxySwitch = SettingsAccentSwitch()
     private let ftpHostField = NSTextField(string: "")
     private let ftpPortField = NSTextField(string: "8080")
     private let ftpUserField = NSTextField(string: "")
     private let ftpPassField = NSSecureTextField(string: "")
-    private let socksSwitch = NSSwitch()
+    private let socksSwitch = SettingsAccentSwitch()
     private let socksHostField = NSTextField(string: "")
     private let socksPortField = NSTextField(string: "1080")
     private let socksUserField = NSTextField(string: "")
     private let socksPassField = NSSecureTextField(string: "")
-    private let socksVersionPopup = NSPopUpButton()
+    private let socksVersionPopup = SettingsPopupButton()
 
     // Advanced
     private let compatibilityStatusLabel = NSTextField(labelWithString: "")
@@ -106,25 +114,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let compatibilityButton = NSButton()
     private let compatibilitySpinner = NSProgressIndicator()
 
+    private struct ValidationIssue {
+        let field: NSTextField?
+        let message: String
+    }
+
     var onWindowClose: (() -> Void)?
 
     init(
         manager: DownloadManager,
         settings: AppSettings,
-        siteCompatibilityUpdater: SiteCompatibilityUpdater? = nil
+        siteCompatibilityUpdater: SiteCompatibilityUpdater? = nil,
+        initialSectionName: String? = nil
     ) {
         self.manager = manager
         self.settings = settings
         self.siteCompatibilityUpdater = siteCompatibilityUpdater
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 660),
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
         window.title = L10n.settings
-        window.minSize = NSSize(width: 760, height: 560)
+        window.minSize = NSSize(width: 820, height: 600)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         NDMChrome.applyWindowChrome(window)
@@ -134,7 +148,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         configureControls()
         buildUI()
         loadFields()
-        showSection(.general)
+        showSection(Self.section(named: initialSectionName) ?? .general)
         refreshCompatibilityStatus()
         window.center()
     }
@@ -142,16 +156,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    private static func section(named name: String?) -> Section? {
+        switch name?.lowercased() {
+        case "general": return .general
+        case "appearance": return .appearance
+        case "downloads": return .downloads
+        case "browser": return .browser
+        case "network": return .network
+        case "advanced": return .advanced
+        default: return nil
+        }
+    }
+
     private func configureControls() {
         appearancePopup.removeAllItems()
         AppearanceMode.allCases.forEach { appearancePopup.addItem(withTitle: $0.settingsTitle) }
+        accentPopup.removeAllItems()
+        for theme in AccentTheme.allCases {
+            accentPopup.addItem(withTitle: theme.settingsTitle)
+            accentPopup.lastItem?.image = Self.accentSwatch(
+                color: NDMChrome.accent(for: theme, customHex: settings.customAccentHex)
+            )
+        }
+        accentPopup.target = self
+        accentPopup.action = #selector(accentSelectionChanged)
+        customAccentColorWell.target = self
+        customAccentColorWell.action = #selector(customAccentChanged)
+        customAccentColorWell.setAccessibilityLabel(L10n.t("Custom accent color", "自定义强调色"))
         languagePopup.removeAllItems()
         AppLanguageMode.allCases.forEach { languagePopup.addItem(withTitle: $0.settingsTitle) }
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
 
-        [appearancePopup, languagePopup, socksVersionPopup].forEach {
-            $0.controlSize = .large
+        [appearancePopup, accentPopup, languagePopup, socksVersionPopup].forEach {
             $0.font = .systemFont(ofSize: 13, weight: .medium)
         }
 
@@ -163,6 +200,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ]
         regularFields.forEach(styleField)
         [proxyPassField, ftpPassField, socksPassField].forEach(styleField)
+        (regularFields + [proxyPassField, ftpPassField, socksPassField]).forEach {
+            $0.delegate = self
+        }
 
         dirField.isEditable = false
         dirField.isSelectable = true
@@ -184,6 +224,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         socksPassField.placeholderString = L10n.passwordPlaceholder
         uaField.placeholderString = L10n.userAgentString
 
+        dirField.setAccessibilityLabel(L10n.saveFilesTo)
+        connField.setAccessibilityLabel(L10n.maxConnectionsCaption)
+        bwField.setAccessibilityLabel(L10n.globalSpeedCaption)
+        uaField.setAccessibilityLabel(L10n.userAgentString)
+
         proxySwitch.target = self
         proxySwitch.action = #selector(proxyStateChanged)
         ftpProxySwitch.target = self
@@ -196,7 +241,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         compatibilityStatusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         compatibilityStatusLabel.textColor = .labelColor
         compatibilityStatusLabel.alignment = .right
-        compatibilityDetailLabel.font = .systemFont(ofSize: 11.5)
+        compatibilityDetailLabel.font = .systemFont(ofSize: 12)
         compatibilityDetailLabel.textColor = .secondaryLabelColor
         compatibilityDetailLabel.alignment = .right
         compatibilityDetailLabel.maximumNumberOfLines = 2
@@ -229,14 +274,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // Match System Settings: section label lines up with row titles (after icon).
         let sidebarTitle = NSTextField(labelWithString: L10n.settings)
-        sidebarTitle.font = .systemFont(ofSize: 11, weight: .semibold)
-        sidebarTitle.textColor = .tertiaryLabelColor
+        sidebarTitle.font = .systemFont(ofSize: 19, weight: .bold)
+        sidebarTitle.textColor = .labelColor
         sidebarTitle.alignment = .left
         sidebarTitle.translatesAutoresizingMaskIntoConstraints = false
 
         // NSStackView kept fighting the full-rail buttons (ambiguous/zero
         // heights collapsed every row onto the same line). Lay the rows out
-        // by hand instead: each row is a fixed 32pt band pinned top-to-bottom.
+        // by hand instead: each row is a fixed band pinned top-to-bottom.
         let navigation = NSView()
         navigation.translatesAutoresizingMaskIntoConstraints = false
         var previousButton: SettingsNavigationButton?
@@ -248,16 +293,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 target: self,
                 action: #selector(navigationClicked(_:))
             )
+            button.onMoveSelection = { [weak self] offset in
+                self?.moveSelection(from: section, offset: offset)
+            }
             navigationButtons[section] = button
             navigation.addSubview(button)
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 button.leadingAnchor.constraint(equalTo: navigation.leadingAnchor),
                 button.trailingAnchor.constraint(equalTo: navigation.trailingAnchor),
-                button.heightAnchor.constraint(equalToConstant: 32),
+                button.heightAnchor.constraint(equalToConstant: 44),
                 button.topAnchor.constraint(
                     equalTo: previousButton?.bottomAnchor ?? navigation.topAnchor,
-                    constant: previousButton == nil ? 0 : 1
+                    constant: previousButton == nil ? 0 : 4
                 ),
             ])
             previousButton = button
@@ -290,27 +338,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        let save = NSButton(title: L10n.save, target: self, action: #selector(saveClicked))
-        save.keyEquivalent = "\r"
-        save.controlSize = .large
-        NDMChrome.styleMainButton(save)
+        saveButton.title = L10n.save
+        saveButton.target = self
+        saveButton.action = #selector(saveClicked)
+        saveButton.keyEquivalent = "\r"
+        saveButton.controlSize = .large
+        NDMChrome.styleMainButton(saveButton)
 
         let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
         cancel.keyEquivalent = "\u{1b}"
         cancel.controlSize = .large
         NDMChrome.styleGhostButton(cancel)
 
-        let footerHint = NSTextField(labelWithString: L10n.t(
-            "Changes apply to new and active downloads when saved.",
-            "保存后将应用到新任务和正在进行的任务。"
-        ))
-        footerHint.font = .systemFont(ofSize: 11.5)
+        footerHint.stringValue = defaultFooterHint
+        footerHint.font = .systemFont(ofSize: 12)
         footerHint.textColor = .tertiaryLabelColor
         footerHint.lineBreakMode = .byTruncatingTail
 
         let footerSpacer = NSView()
         footerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [footerHint, footerSpacer, cancel, save])
+        let footer = NSStackView(views: [footerHint, footerSpacer, cancel, saveButton])
         footer.orientation = .horizontal
         footer.alignment = .centerY
         footer.spacing = 10
@@ -330,16 +377,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             sidebar.topAnchor.constraint(equalTo: content.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             sidebar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: 168),
+            // Match the main window's 215 pt navigation rail closely enough
+            // that Settings feels like the same product, not a miniature
+            // utility window with a squeezed source list.
+            sidebar.widthAnchor.constraint(equalToConstant: 212),
 
-            // Title aligns with row labels (icon 16 + gap 8 + row inset 8 = 32).
             sidebarTitle.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 48),
-            sidebarTitle.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 32),
-            sidebarTitle.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
+            sidebarTitle.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 28),
+            sidebarTitle.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
 
-            navigation.topAnchor.constraint(equalTo: sidebarTitle.bottomAnchor, constant: 8),
-            navigation.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8),
-            navigation.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8),
+            navigation.topAnchor.constraint(equalTo: sidebarTitle.bottomAnchor, constant: 18),
+            navigation.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
+            navigation.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
 
             contentSurface.topAnchor.constraint(equalTo: content.topAnchor),
             contentSurface.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
@@ -364,11 +413,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             footer.trailingAnchor.constraint(equalTo: contentSurface.trailingAnchor, constant: -24),
             footer.bottomAnchor.constraint(equalTo: contentSurface.bottomAnchor, constant: -16),
             footer.heightAnchor.constraint(greaterThanOrEqualToConstant: 34),
-            save.widthAnchor.constraint(greaterThanOrEqualToConstant: 92),
+            saveButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 92),
             cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 86),
         ])
 
         panes[.general] = makeGeneralPane()
+        panes[.appearance] = makeAppearancePane()
         panes[.downloads] = makeDownloadsPane()
         panes[.browser] = makeBrowserPane()
         panes[.network] = makeNetworkPane()
@@ -389,8 +439,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
 
         guard let pane = panes[section] else { return }
+        let isSwitch = scrollView.documentView !== pane
         NSLayoutConstraint.deactivate(paneConstraints)
         scrollView.documentView = pane
+        if isSwitch, window?.isVisible == true {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            scrollView.layer?.add(fade, forKey: "section")
+        }
         pane.translatesAutoresizingMaskIntoConstraints = false
         paneConstraints = [
             pane.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
@@ -398,13 +456,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             pane.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
         ]
         NSLayoutConstraint.activate(paneConstraints)
-        scrollView.contentView.scroll(to: .zero)
+        resetScrollPosition(for: pane)
+        // The first section switch happens before the settings window has
+        // completed its first layout pass. Reassert the top position on the
+        // next run-loop turn, but only if this pane is still current.
+        DispatchQueue.main.async { [weak self, weak pane] in
+            guard let self, let pane, self.scrollView.documentView === pane else { return }
+            self.resetScrollPosition(for: pane)
+        }
+    }
+
+    private func resetScrollPosition(for pane: NSView) {
+        scrollView.layoutSubtreeIfNeeded()
+        pane.layoutSubtreeIfNeeded()
+        scrollView.contentView.setBoundsOrigin(.zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
+    private func moveSelection(from section: Section, offset: Int) {
+        let sections = Section.allCases
+        guard let index = sections.firstIndex(of: section) else { return }
+        let nextIndex = min(sections.index(before: sections.endIndex), max(sections.startIndex, index + offset))
+        let next = sections[nextIndex]
+        showSection(next)
+        if let button = navigationButtons[next] {
+            window?.makeFirstResponder(button)
+        }
+    }
+
     private func makeGeneralPane() -> NSView {
-        let interfaceCard = makeCard(
-            title: L10n.t("Interface", "界面"),
+        let appCard = makeCard(
+            title: "NDM",
             subtitle: nil,
             symbolName: "macwindow",
             rows: [
@@ -413,32 +495,53 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     detail: L10n.languageFootnote,
                     control: fixedWidth(languagePopup, 190)
                 ),
+                toggleRow(
+                    title: L10n.t("Open NDM at login", "登录时打开 NDM"),
+                    detail: nil,
+                    toggle: launchAtLoginSwitch
+                ),
+                toggleRow(title: L10n.clipboardWatchTitle, detail: L10n.t(
+                    "Show a prompt when NDM becomes active.",
+                    "切回 NDM 时显示提示。"
+                ), toggle: clipboardSwitch),
+                toggleRow(title: L10n.showCompletionDialog, detail: nil, toggle: completeSwitch),
+            ]
+        )
+        return paneStack([appCard])
+    }
+
+    private func makeAppearancePane() -> NSView {
+        appearancePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        accentPopup.widthAnchor.constraint(equalToConstant: 140).isActive = true
+        customAccentColorWell.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        customAccentColorWell.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        customAccentColorWell.toolTip = L10n.t("Choose any color", "选择任意颜色")
+        let customLabel = NSTextField(labelWithString: L10n.t("Custom", "自定义"))
+        customLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        customLabel.textColor = .secondaryLabelColor
+        let accentControls = NSStackView(views: [accentPopup, customLabel, customAccentColorWell])
+        accentControls.orientation = .horizontal
+        accentControls.alignment = .centerY
+        accentControls.spacing = 8
+
+        let themeCard = makeCard(
+            title: L10n.t("Theme", "主题"),
+            subtitle: nil,
+            symbolName: "paintpalette",
+            rows: [
                 settingsRow(
-                    title: L10n.appearance,
+                    title: L10n.t("Mode", "模式"),
                     detail: L10n.appearanceFootnote,
-                    control: fixedWidth(appearancePopup, 190)
+                    control: appearancePopup
+                ),
+                settingsRow(
+                    title: L10n.t("Accent color", "强调色"),
+                    detail: nil,
+                    control: accentControls
                 ),
             ]
         )
-
-        let behaviorCard = makeCard(
-            title: L10n.behavior,
-            subtitle: nil,
-            symbolName: "switch.2",
-            rows: [
-                toggleRow(title: L10n.organizeCategories, detail: L10n.t(
-                    "Create Video, Audio, Documents, and other folders automatically.",
-                    "自动建立视频、音频、文档等分类文件夹。"
-                ), toggle: categorySwitch),
-                toggleRow(title: L10n.downloadAllAtOnce, detail: nil, toggle: allAtOnceSwitch),
-                toggleRow(title: L10n.showCompletionDialog, detail: nil, toggle: completeSwitch),
-                toggleRow(title: L10n.clipboardWatchTitle, detail: L10n.t(
-                    "Prompt only when NDM becomes active; never auto-start.",
-                    "仅在切回 NDM 时提示，不会自动开始下载。"
-                ), toggle: clipboardSwitch),
-            ]
-        )
-        return paneStack([interfaceCard, behaviorCard])
+        return paneStack([themeCard])
     }
 
     private func makeDownloadsPane() -> NSView {
@@ -452,21 +555,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         dirField.widthAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
 
         let destinationCard = makeCard(
-            title: L10n.t("Destination", "保存位置"),
+            title: L10n.t("Files", "文件"),
             subtitle: nil,
             symbolName: "folder",
             rows: [
                 settingsRow(title: L10n.saveFilesTo, detail: nil, control: destinationControl),
+                toggleRow(title: L10n.organizeCategories, detail: L10n.t(
+                    "Create folders for videos, audio, documents, and other file types.",
+                    "按视频、音频、文档等类型建立文件夹。"
+                ), toggle: categorySwitch),
             ]
         )
 
         connField.widthAnchor.constraint(equalToConstant: 76).isActive = true
         bwField.widthAnchor.constraint(equalToConstant: 150).isActive = true
         let performanceCard = makeCard(
-            title: L10n.t("Performance", "下载性能"),
+            title: L10n.t("Transfers", "传输"),
             subtitle: nil,
             symbolName: "speedometer",
             rows: [
+                toggleRow(title: L10n.downloadAllAtOnce, detail: nil, toggle: allAtOnceSwitch),
                 settingsRow(
                     title: L10n.maxConnectionsCaption,
                     detail: L10n.t("Upper limit — not a forced connection count.", "上限，不是始终强制使用的连接数。"),
@@ -680,7 +788,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         title: String,
         subtitle: String?,
         toggleTitle: String,
-        toggle: NSSwitch,
+        toggle: SettingsAccentSwitch,
         host: NSTextField,
         port: NSTextField,
         user: NSTextField,
@@ -701,6 +809,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func endpointRow(host: NSTextField, port: NSTextField) -> NSView {
         host.placeholderString = L10n.host
         port.placeholderString = L10n.portPlaceholder
+        host.setAccessibilityLabel(L10n.host)
+        port.setAccessibilityLabel(L10n.t("Port", "端口"))
         host.widthAnchor.constraint(greaterThanOrEqualToConstant: 210).isActive = true
         port.widthAnchor.constraint(equalToConstant: 88).isActive = true
         let controls = NSStackView(views: [host, port])
@@ -714,6 +824,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func credentialsRow(user: NSTextField, pass: NSSecureTextField) -> NSView {
+        user.setAccessibilityLabel(L10n.t("Username", "用户名"))
+        pass.setAccessibilityLabel(L10n.t("Password", "密码"))
         user.widthAnchor.constraint(greaterThanOrEqualToConstant: 145).isActive = true
         pass.widthAnchor.constraint(greaterThanOrEqualToConstant: 145).isActive = true
         let controls = NSStackView(views: [user, pass])
@@ -727,7 +839,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func paneStack(_ cards: [NSView]) -> NSView {
-        let container = NSView()
+        let container = SettingsPaneDocumentView()
         var previous: NSView?
         for card in cards {
             card.translatesAutoresizingMaskIntoConstraints = false
@@ -750,6 +862,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return container
     }
 
+    private static func accentSwatch(color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: 13, height: 13), flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+            NSColor.white.withAlphaComponent(0.35).setStroke()
+            let border = NSBezierPath(ovalIn: rect.insetBy(dx: 1.5, dy: 1.5))
+            border.lineWidth = 1
+            border.stroke()
+            return true
+        }
+    }
+
     private func makeCard(
         title: String,
         subtitle: String?,
@@ -757,25 +881,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rows: [NSView]
     ) -> NSView {
         let card = ChromeBox(
-            fill: NDMChrome.searchSurface,
-            borderColor: NDMChrome.hairline,
-            cornerRadius: 14,
-            borderWidth: 1
+            fill: .clear
         )
         card.translatesAutoresizingMaskIntoConstraints = false
 
-        let iconBox = ChromeBox(fill: NDMChrome.rowActive, cornerRadius: 10)
-        iconBox.translatesAutoresizingMaskIntoConstraints = false
         let icon = NSImageView()
-        icon.image = NDMChrome.symbol(symbolName, pointSize: 16, weight: .semibold)
-        icon.contentTintColor = NDMChrome.accent
+        icon.image = NDMChrome.symbol(symbolName, pointSize: 14, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
         icon.translatesAutoresizingMaskIntoConstraints = false
-        iconBox.addSubview(icon)
         NSLayoutConstraint.activate([
-            iconBox.widthAnchor.constraint(equalToConstant: 36),
-            iconBox.heightAnchor.constraint(equalToConstant: 36),
-            icon.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
         ])
 
         let titleLabel = NSTextField(labelWithString: title)
@@ -784,7 +900,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let labelViews: [NSView]
         if let subtitle, !subtitle.isEmpty {
             let subtitleLabel = NSTextField(wrappingLabelWithString: subtitle)
-            subtitleLabel.font = .systemFont(ofSize: 11.5)
+            subtitleLabel.font = .systemFont(ofSize: 12.5)
             subtitleLabel.textColor = .secondaryLabelColor
             subtitleLabel.maximumNumberOfLines = 2
             labelViews = [titleLabel, subtitleLabel]
@@ -796,10 +912,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         labels.alignment = .leading
         labels.spacing = 2
 
-        let header = NSStackView(views: [iconBox, labels])
+        let header = NSStackView(views: [icon, labels])
         header.orientation = .horizontal
         header.alignment = .centerY
-        header.spacing = 11
+        header.spacing = 8
         header.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSStackView()
@@ -808,7 +924,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         content.spacing = 0
         content.addArrangedSubview(header)
         header.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
-        content.setCustomSpacing(13, after: header)
+        content.setCustomSpacing(10, after: header)
         for (index, row) in rows.enumerated() {
             if index > 0 {
                 let line = divider()
@@ -822,7 +938,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         content.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(content)
         NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
             content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
             content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
             content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
@@ -831,6 +947,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func settingsRow(title: String, detail: String?, control: NSView) -> NSView {
+        (control as? NSControl)?.setAccessibilityLabel(title)
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
         titleLabel.textColor = .labelColor
@@ -838,7 +955,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         var labelViews: [NSView] = [titleLabel]
         if let detail, !detail.isEmpty {
             let detailLabel = NSTextField(wrappingLabelWithString: detail)
-            detailLabel.font = .systemFont(ofSize: 11.5)
+            detailLabel.font = .systemFont(ofSize: 12)
             detailLabel.textColor = .secondaryLabelColor
             detailLabel.maximumNumberOfLines = 3
             detailLabel.preferredMaxLayoutWidth = 310
@@ -862,7 +979,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return row
     }
 
-    private func toggleRow(title: String, detail: String?, toggle: NSSwitch) -> NSView {
+    private func toggleRow(title: String, detail: String?, toggle: SettingsAccentSwitch) -> NSView {
         toggle.setContentCompressionResistancePriority(.required, for: .horizontal)
         return settingsRow(title: title, detail: detail, control: toggle)
     }
@@ -888,10 +1005,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         allAtOnceSwitch.state = settings.downloadAllAtOnce ? .on : .off
         completeSwitch.state = settings.showCompletionDialog ? .on : .off
         clipboardSwitch.state = settings.clipboardWatchEnabled ? .on : .off
+        launchAtLoginSwitch.state = settings.launchAtLogin ? .on : .off
 
         if let index = AppearanceMode.allCases.firstIndex(of: settings.appearanceMode) {
             appearancePopup.selectItem(at: index)
         }
+        if let index = AccentTheme.allCases.firstIndex(of: settings.accentTheme) {
+            accentPopup.selectItem(at: index)
+        }
+        customAccentColorWell.color = NDMChrome.color(hex: settings.customAccentHex)
+            ?? NDMChrome.accent(for: .classicBlue)
         if let index = AppLanguageMode.allCases.firstIndex(of: settings.languageMode) {
             languagePopup.selectItem(at: index)
         }
@@ -919,7 +1042,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         socksUserField.stringValue = settings.socksProxy?.username ?? ""
         socksPassField.stringValue = settings.socksProxy?.password ?? ""
         socksVersionPopup.selectItem(at: settings.socksProxy?.version == .v4 ? 1 : 0)
+        refreshAccentControls()
         updateEnabledStates()
+    }
+
+    @objc private func accentSelectionChanged() {
+        refreshAccentControls()
+    }
+
+    @objc private func customAccentChanged() {
+        guard let customIndex = AccentTheme.allCases.firstIndex(of: .custom) else { return }
+        accentPopup.selectItem(at: customIndex)
+        accentPopup.item(at: customIndex)?.image = Self.accentSwatch(color: customAccentColorWell.color)
+        refreshAccentControls()
+    }
+
+    private func refreshAccentControls() {
+        let themes = AccentTheme.allCases
+        let selectedIndex = accentPopup.indexOfSelectedItem
+        let isCustom = selectedIndex >= 0 && selectedIndex < themes.count
+            && themes[selectedIndex] == .custom
+        customAccentColorWell.isHidden = !isCustom
     }
 
     @objc private func proxyStateChanged() {
@@ -941,6 +1084,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             socksHostField, socksPortField, socksUserField, socksPassField, socksVersionPopup,
         ])
         uaField.isEnabled = uaSwitch.state == .on
+        updateValidationState()
     }
 
     private func setEnabled(_ enabled: Bool, controls: [NSControl]) {
@@ -955,7 +1099,100 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         panel.directoryURL = settings.downloadDirectory
         if panel.runModal() == .OK, let url = panel.url {
             dirField.stringValue = url.path
+            updateValidationState()
         }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        updateValidationState()
+    }
+
+    private var defaultFooterHint: String {
+        L10n.t(
+            "Changes apply to new and active downloads when saved.",
+            "保存后将应用到新任务和正在进行的任务。"
+        )
+    }
+
+    private func trimmed(_ field: NSTextField) -> String {
+        field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func firstValidationIssue() -> ValidationIssue? {
+        let directory = trimmed(dirField)
+        guard !directory.isEmpty, directory.hasPrefix("/") else {
+            return ValidationIssue(
+                field: dirField,
+                message: L10n.t("Choose an absolute download folder.", "请选择一个有效的绝对下载目录。")
+            )
+        }
+
+        guard SettingsInputValidation.connectionCount(connField.stringValue) != nil else {
+            return ValidationIssue(
+                field: connField,
+                message: L10n.t("Connections must be a whole number from 1 to 32.", "连接数必须是 1 到 32 之间的整数。")
+            )
+        }
+
+        guard SettingsInputValidation.bandwidthBytesPerSecond(bwField.stringValue) != nil else {
+            return ValidationIssue(
+                field: bwField,
+                message: L10n.t("Bandwidth must be 0 or a positive whole number.", "带宽必须是 0 或正整数。")
+            )
+        }
+
+        if uaSwitch.state == .on, trimmed(uaField).isEmpty {
+            return ValidationIssue(
+                field: uaField,
+                message: L10n.t("Enter a User-Agent string or turn this option off.", "请输入 User-Agent，或关闭此选项。")
+            )
+        }
+
+        let endpoints: [(Bool, String, NSTextField, NSTextField)] = [
+            (proxySwitch.state == .on, "HTTP(S)", proxyHostField, proxyPortField),
+            (ftpProxySwitch.state == .on, "FTP", ftpHostField, ftpPortField),
+            (socksSwitch.state == .on, "SOCKS", socksHostField, socksPortField),
+        ]
+        for (enabled, name, host, port) in endpoints where enabled {
+            if trimmed(host).isEmpty {
+                return ValidationIssue(
+                    field: host,
+                    message: L10n.t("Enter the \(name) proxy host.", "请输入 \(name) 代理主机。")
+                )
+            }
+            guard SettingsInputValidation.port(port.stringValue) != nil else {
+                return ValidationIssue(
+                    field: port,
+                    message: L10n.t("The \(name) port must be from 1 to 65535.", "\(name) 端口必须是 1 到 65535 之间的整数。")
+                )
+            }
+        }
+        return nil
+    }
+
+    private func updateValidationState() {
+        guard isWindowLoaded else { return }
+        if let issue = firstValidationIssue() {
+            saveButton.isEnabled = false
+            footerHint.stringValue = issue.message
+            footerHint.textColor = .systemRed
+            footerHint.setAccessibilityLabel(L10n.error)
+            footerHint.setAccessibilityValue(issue.message)
+        } else {
+            saveButton.isEnabled = true
+            footerHint.stringValue = defaultFooterHint
+            footerHint.textColor = .tertiaryLabelColor
+            footerHint.setAccessibilityLabel(defaultFooterHint)
+            footerHint.setAccessibilityValue(nil)
+        }
+    }
+
+    private func presentValidationIssue(_ issue: ValidationIssue) {
+        updateValidationState()
+        NSSound.beep()
+        guard let field = issue.field else { return }
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
     }
 
     @objc private func importLegacy() {
@@ -983,9 +1220,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func saveClicked() {
+        if let issue = firstValidationIssue() {
+            presentValidationIssue(issue)
+            return
+        }
         var next = settings
-        next.downloadDirectory = URL(fileURLWithPath: dirField.stringValue)
-        let requestedConnections = min(32, max(1, Int(connField.stringValue) ?? 8))
+        next.downloadDirectory = URL(fileURLWithPath: trimmed(dirField))
+        let requestedConnections = SettingsInputValidation.connectionCount(connField.stringValue)!
         let connectionsCap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
         if requestedConnections > connectionsCap {
             UpgradeWindowController.present(
@@ -999,15 +1240,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         next.maxConnections = min(requestedConnections, connectionsCap)
         next.smartConnections = smartConnSwitch.state == .on
-        next.bandwidthLimitBytesPerSecond = Int64(bwField.stringValue) ?? 0
+        next.bandwidthLimitBytesPerSecond = SettingsInputValidation
+            .bandwidthBytesPerSecond(bwField.stringValue)!
         next.useCategoryFolders = categorySwitch.state == .on
         next.downloadAllAtOnce = allAtOnceSwitch.state == .on
         next.showCompletionDialog = completeSwitch.state == .on
         next.clipboardWatch = clipboardSwitch.state == .on
+        next.launchAtLogin = launchAtLoginSwitch.state == .on
 
         let appearanceIndex = appearancePopup.indexOfSelectedItem
         if AppearanceMode.allCases.indices.contains(appearanceIndex) {
             next.appearanceMode = AppearanceMode.allCases[appearanceIndex]
+        }
+        let accentIndex = accentPopup.indexOfSelectedItem
+        if AccentTheme.allCases.indices.contains(accentIndex) {
+            next.accentTheme = AccentTheme.allCases[accentIndex]
+        }
+        if next.accentTheme == .custom {
+            next.customAccentHex = NDMChrome.hexString(for: customAccentColorWell.color)
         }
         let languageIndex = languagePopup.indexOfSelectedItem
         if AppLanguageMode.allCases.indices.contains(languageIndex) {
@@ -1017,11 +1267,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         next.showBrowserMediaPanel = panelSwitch.state == .on
         next.confirmBrowserDownloads = confirmSwitch.state == .on
         next.useCustomUserAgent = uaSwitch.state == .on
-        next.customUserAgent = uaField.stringValue.isEmpty ? nil : uaField.stringValue
+        next.customUserAgent = trimmed(uaField).isEmpty ? nil : trimmed(uaField)
         AppearanceApplicator.apply(next.appearanceMode)
+        NDMChrome.applyAccentTheme(next.accentTheme, customHex: next.customAccentHex)
         L10n.apply(next.languageMode)
 
-        let pport = UInt16(proxyPortField.stringValue) ?? 8080
+        let pport = SettingsInputValidation.port(proxyPortField.stringValue)
+            ?? settings.httpProxy?.port ?? 8080
         next.httpProxy = ProxySettings(
             host: proxyHostField.stringValue,
             port: pport,
@@ -1031,7 +1283,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         next.httpsProxy = next.httpProxy
 
-        let fport = UInt16(ftpPortField.stringValue) ?? 8080
+        let fport = SettingsInputValidation.port(ftpPortField.stringValue)
+            ?? settings.ftpProxy?.port ?? 8080
         next.ftpProxy = ProxySettings(
             host: ftpHostField.stringValue,
             port: fport,
@@ -1040,7 +1293,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             enabled: ftpProxySwitch.state == .on
         )
 
-        let sport = UInt16(socksPortField.stringValue) ?? 1080
+        let sport = SettingsInputValidation.port(socksPortField.stringValue)
+            ?? settings.socksProxy?.port ?? 1080
         next.socksProxy = SocksProxySettings(
             host: socksHostField.stringValue,
             port: sport,
@@ -1049,6 +1303,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             password: socksPassField.stringValue.isEmpty ? nil : socksPassField.stringValue,
             enabled: socksSwitch.state == .on
         )
+
+        if next.launchAtLogin != settings.launchAtLogin {
+            do {
+                if next.launchAtLogin {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                let alert = NSAlert(error: error)
+                alert.messageText = L10n.t(
+                    "Couldn’t change login settings",
+                    "无法更改登录项设置"
+                )
+                alert.beginSheetModal(for: window!)
+                return
+            }
+        }
 
         SettingsStore.save(next)
         Task { await manager.updateSettings(next) }
@@ -1066,25 +1338,108 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
+/// Scroll documents use a top-left origin so every section opens against the
+/// same top edge, including the very first section shown before window layout.
+private final class SettingsPaneDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// A native-behaving toggle with NDM-owned color. `NSSwitch` always inherits
+/// the Mac's global accent, which made a Jade/Violet NDM still show blue
+/// controls. Keeping this as an `NSButton` preserves target/action, keyboard
+/// activation, state, focus, and accessibility while the small visual surface
+/// follows the product theme.
+private final class SettingsAccentSwitch: NSButton {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        setButtonType(.toggle)
+        bezelStyle = .inline
+        isBordered = false
+        allowsMixedState = false
+        focusRingType = .none
+        // AppKit does not expose an AXSwitch role on our macOS 13 deployment
+        // target; a toggle button with the checkbox role preserves the same
+        // on/off semantics for VoiceOver.
+        setAccessibilityRole(.checkBox)
+        setAccessibilityValue(0)
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 26) }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func setNextState() {
+        super.setNextState()
+        setAccessibilityValue(state == .on ? 1 : 0)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let trackRect = bounds.insetBy(dx: 1, dy: 2)
+        let track = NSBezierPath(
+            roundedRect: trackRect,
+            xRadius: trackRect.height / 2,
+            yRadius: trackRect.height / 2
+        )
+        let on = state == .on
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let trackColor = on
+            ? NDMChrome.accent
+            : NSColor(calibratedWhite: isDark ? 0.34 : 0.82, alpha: 1)
+        trackColor.withAlphaComponent(isEnabled ? 1 : 0.45).setFill()
+        track.fill()
+
+        if window?.firstResponder === self {
+            NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.75).setStroke()
+            track.lineWidth = 2
+            track.stroke()
+        } else if !on {
+            NDMChrome.hairline.setStroke()
+            track.lineWidth = 1
+            track.stroke()
+        }
+
+        let thumbSide = trackRect.height - 4
+        let thumbX = on
+            ? trackRect.maxX - thumbSide - 2
+            : trackRect.minX + 2
+        let thumbRect = NSRect(
+            x: thumbX,
+            y: trackRect.midY - thumbSide / 2,
+            width: thumbSide,
+            height: thumbSide
+        )
+        let thumb = NSBezierPath(ovalIn: thumbRect)
+        NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.72).setFill()
+        thumb.fill()
+    }
+}
+
 /// Full-rail sidebar row — selection paints `bounds`, label stays leading.
-private final class SettingsNavigationButton: NSControl {
+private final class SettingsNavigationButton: NSButton {
     private let symbolName: String
     private let titleText: String
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
+    var onMoveSelection: ((Int) -> Void)?
 
     var isSelected = false {
         didSet {
             updateVisualState()
+            state = isSelected ? .on : .off
+            setAccessibilityValue(isSelected ? 1 : 0)
             needsDisplay = true
         }
     }
-
-    override var tag: Int {
-        get { storedTag }
-        set { storedTag = newValue }
-    }
-    private var storedTag = 0
 
     init(
         title: String,
@@ -1096,37 +1451,115 @@ private final class SettingsNavigationButton: NSControl {
         self.symbolName = symbolName
         self.titleText = title
         super.init(frame: .zero)
-        self.storedTag = tag
+        self.tag = tag
         self.target = target
         self.action = action
+        self.title = ""
+        isBordered = false
+        bezelStyle = .inline
+        focusRingType = .default
+        setAccessibilityRole(.radioButton)
+        setAccessibilityLabel(title)
 
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 11
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyDown
+        iconView.setAccessibilityElement(false)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.stringValue = titleText
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.isSelectable = false
+        titleLabel.setAccessibilityElement(false)
 
         addSubview(iconView)
         addSubview(titleLabel)
-        // Height is owned by the sidebar layout (32pt bands); don't pin here.
+        // Height is owned by the sidebar layout; don't pin here.
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 16),
-            iconView.heightAnchor.constraint(equalToConstant: 16),
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            iconView.widthAnchor.constraint(equalToConstant: 18),
+            iconView.heightAnchor.constraint(equalToConstant: 18),
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
         ])
         updateVisualState()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isSelected ? NDMChrome.rowActive : NSColor.clear).cgColor
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123, 126:
+            onMoveSelection?(-1)
+        case 124, 125:
+            onMoveSelection?(1)
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    private func updateVisualState() {
+        let tint: NSColor = isSelected ? NDMChrome.accent : .labelColor
+        let weight: NSFont.Weight = isSelected ? .semibold : .regular
+        iconView.image = NDMChrome.symbol(symbolName, pointSize: 15, weight: weight)
+        iconView.contentTintColor = isSelected ? NDMChrome.accent : .secondaryLabelColor
+        titleLabel.font = .systemFont(ofSize: 14.5, weight: weight)
+        titleLabel.textColor = tint
+    }
+}
+
+/// A native pop-up menu with one visual owner. AppKit's large bordered pop-up
+/// paints a saturated arrow segment of its own; in the settings cards that
+/// segment was heavier than every surrounding control. Retain native menu,
+/// keyboard and accessibility behavior, but draw a quiet shell and chevron.
+private final class SettingsPopupButton: NSPopUpButton {
+    private let chevronView = NSImageView()
+
+    init() {
+        super.init(frame: .zero, pullsDown: false)
+        controlSize = .regular
+        bezelStyle = .inline
+        isBordered = false
+        alignment = .left
+        focusRingType = .exterior
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+
+        if let popUpCell = cell as? NSPopUpButtonCell {
+            popUpCell.arrowPosition = .noArrow
+        }
+
+        chevronView.image = NDMChrome.symbol("chevron.up.chevron.down", pointSize: 10, weight: .semibold)
+        chevronView.contentTintColor = .secondaryLabelColor
+        chevronView.imageScaling = .scaleProportionallyDown
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
+        chevronView.setAccessibilityElement(false)
+        addSubview(chevronView)
+        NSLayoutConstraint.activate([
+            chevronView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -11),
+            chevronView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevronView.widthAnchor.constraint(equalToConstant: 13),
+            chevronView.heightAnchor.constraint(equalToConstant: 13),
+            heightAnchor.constraint(equalToConstant: 34),
+        ])
     }
 
     @available(*, unavailable)
@@ -1136,22 +1569,8 @@ private final class SettingsNavigationButton: NSControl {
 
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (isSelected ? NDMChrome.rowActive : NSColor.clear).cgColor
+            layer?.backgroundColor = NDMChrome.searchSurface.cgColor
+            layer?.borderColor = NDMChrome.hairline.cgColor
         }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if let action {
-            NSApp.sendAction(action, to: target, from: self)
-        }
-    }
-
-    private func updateVisualState() {
-        let tint: NSColor = isSelected ? NDMChrome.accent : .labelColor
-        let weight: NSFont.Weight = isSelected ? .semibold : .regular
-        iconView.image = NDMChrome.symbol(symbolName, pointSize: 13, weight: weight)
-        iconView.contentTintColor = isSelected ? NDMChrome.accent : .secondaryLabelColor
-        titleLabel.font = .systemFont(ofSize: 13, weight: weight)
-        titleLabel.textColor = tint
     }
 }

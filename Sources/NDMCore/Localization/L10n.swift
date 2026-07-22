@@ -82,16 +82,16 @@ public enum L10n: Sendable {
     public static var share: String { t("Share", "分享") }
     public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
-    public static var renewURL: String { t("Renew URL", "更换链接") }
-    public static var renewURLEllipsis: String { t("Renew URL…", "更换链接…") }
-    public static var renewAndStart: String { t("Renew & Start", "更换并开始") }
-    public static var renew: String { t("Renew", "更换") }
+    public static var renewURL: String { t("Update Link", "更新链接") }
+    public static var renewURLEllipsis: String { t("Update Link…", "更新链接…") }
+    public static var renewAndStart: String { t("Update & Start", "更新链接并开始") }
+    public static var renew: String { t("Update", "更新") }
     public static var properties: String { t("Properties", "属性") }
     public static var propertiesEllipsis: String { t("Properties…", "属性…") }
     public static var detailsEllipsis: String { t("Details…", "详情…") }
     public static var connectionDetails: String { t("Connection details…", "连接详情…") }
     public static var progressDetails: String { t("Progress Details", "进度详情") }
-    public static var resultDetails: String { t("Result Details", "成果详情") }
+    public static var resultDetails: String { t("Details", "文件详情") }
     public static var showProgress: String { t("Show Progress", "显示进度") }
     public static var removeEllipsis: String { t("Remove…", "移除…") }
     public static var removeTask: String { t("Remove Task", "仅移除任务") }
@@ -105,6 +105,7 @@ public enum L10n: Sendable {
     public static var active: String { t("Active", "进行中") }
     public static var queued: String { t("Queued", "排队中") }
     public static var paused: String { t("Paused", "已暂停") }
+    public static var toResume: String { t("To Resume", "待继续") }
     public static var completed: String { t("Completed", "已完成") }
     public static var failed: String { t("Failed", "失败") }
     public static var incomplete: String { t("Incomplete", "未完成") }
@@ -151,6 +152,7 @@ public enum L10n: Sendable {
     public static var startTooltip: String { t("Start or resume the selected download", "开始或继续所选下载") }
     public static var pauseTooltip: String { t("Pause the selected download", "暂停所选下载") }
     public static var searchDownloads: String { t("Search downloads", "搜索下载") }
+    public static var clearSearch: String { t("Clear search", "清空搜索") }
     public static var search: String { t("Search", "搜索") }
     public static var browsers: String { t("Browsers", "浏览器") }
     public static var browsersTooltip: String { t("Browser extension setup", "浏览器扩展设置") }
@@ -164,8 +166,8 @@ public enum L10n: Sendable {
     }
     public static var emptyDropHint: String {
         t(
-            "Press ⌘N or drop a link — one click, finished as a playable MP4.",
-            "按 ⌘N 或把链接拖到这里——点一下，下完就是能播的 MP4。"
+            "Press ⌘N or drop a link to start a download.",
+            "按 ⌘N 或把链接拖到这里即可开始下载。"
         )
     }
     public static var emptyTrySearch: String {
@@ -187,10 +189,7 @@ public enum L10n: Sendable {
         t("Paste an HTTP, HTTPS, or FTP URL.", "粘贴 HTTP、HTTPS 或 FTP 链接。")
     }
     public static var newDownloadLede: String {
-        t(
-            "Paste a link or a copied share message. YouTube, Bilibili, Douyin, Xiaohongshu, and similar pages are recognized automatically.",
-            "粘贴链接或整段分享口令。YouTube、B 站、抖音、小红书等页面都会自动识别。"
-        )
+        t("Paste a file or video link.", "粘贴文件或视频链接。")
     }
     public static var clipboardURLFilled: String {
         t("Filled from clipboard", "已从剪贴板填入")
@@ -244,10 +243,10 @@ public enum L10n: Sendable {
         t("Recognizing this media…", "正在识别这个媒体…")
     }
     public static var linkLensContinueAnytime: String {
-        t("You can continue now — details will follow automatically", "现在就可以继续，详细选项会自动补齐")
+        t("Quality, format, subtitles", "画质、格式、字幕")
     }
     public static var linkLensPreviewUnavailable: String {
-        t("Preview isn't available yet — continue to prepare download options", "暂时没有预览，继续后仍会准备下载选项")
+        t("Preview unavailable", "无法读取预览")
     }
     public static func linkLensPreviewSummary(
         qualityCount: Int,
@@ -339,20 +338,20 @@ public enum L10n: Sendable {
         let available = TaskPresentationFormatting.byteCount(availableBytes)
         return t(
             "This delivery may need \(required) while assembling, but only \(available) is free. Choose a smaller quality or change the download location.",
-            "这个成果在下载和合并时可能需要 \(required)，当前仅有 \(available) 可用。请选择更小画质或更换下载位置。"
+            "下载与合并过程可能需要 \(required)，当前仅有 \(available) 可用。请选择更小画质或更换下载位置。"
         )
     }
     public static var ytdlpReadyHint: String {
         t("Video pages are recognized automatically — no extra setup needed.", "视频页面会自动识别，无需额外设置。")
     }
     public static var ytdlpRecognizedVideoLink: String {
-        t("Video link · quality, format, and subtitles available", "视频链接 · 可选择画质、格式和字幕")
+        t("Video", "视频")
     }
     public static var ytdlpRecognizedPageLink: String {
-        t("Page link · we'll check for downloadable media", "网页链接 · 将检查可下载的媒体")
+        t("Web page", "网页")
     }
     public static var directFileLink: String {
-        t("Direct file link · ready to download", "文件直链 · 可以直接下载")
+        t("File", "文件")
     }
     public static var bilibiliName: String { t("Bilibili", "哔哩哔哩") }
     public static var douyinName: String { t("Douyin", "抖音") }
@@ -608,6 +607,14 @@ public enum L10n: Sendable {
         t("Remove “\(name)”?", "移除「\(name)」？")
     }
 
+    public static func removeConfirmMultiple(_ count: Int) -> String {
+        t("Remove \(count) downloads?", "移除这 \(count) 项下载？")
+    }
+
+    public static func selectedCount(_ count: Int) -> String {
+        t("\(count) selected", "已选 \(count) 项")
+    }
+
     public static var removeConfirmBody: String {
         t(
             "Remove from the list, or also move the downloaded file to Trash.",
@@ -722,8 +729,8 @@ public enum L10n: Sendable {
     }
     public static var proSubline: String {
         t(
-            "One-time purchase · up to 3 Macs · a year of updates · 30-day refund",
-            "一次买断 · 家庭最多三台 Mac · 含一年更新 · 30 天退款"
+            "One-time purchase · up to 3 Macs · a year of updates",
+            "一次买断 · 最多三台 Mac · 含一年更新"
         )
     }
     public static var proFreeName: String { t("Free", "免费版") }
@@ -760,8 +767,9 @@ public enum L10n: Sendable {
         t("This key's update window has ended; it can't activate this version.", "该许可证的更新期已结束，无法激活此版本。")
     }
     public static var proFine: String {
-        t("30-day refund, no questions · student discount available", "30 天无理由退款 · 学生半价")
+        t("License is verified locally · no account required", "许可证在本机验证 · 无需账户")
     }
+    public static var proNotNow: String { t("Not now", "暂时不用") }
     public static var proMenuTitle: String { t("Unlock Pro…", "解锁 Pro…") }
     public static var proGateConnectionsTitle: String {
         t("More than 4 connections is a Pro feature", "超过 4 条连接是 Pro 功能")
@@ -773,7 +781,7 @@ public enum L10n: Sendable {
         )
     }
     public static var proContextEyebrow: String {
-        t("A Pro moment", "这一次，Pro 能替你做什么")
+        "NDM PRO"
     }
     public static func proContextTitle(_ feature: ProFeature?) -> String {
         switch feature {
@@ -799,7 +807,7 @@ public enum L10n: Sendable {
         case nil:
             return t(
                 "Turn complex downloads into ready-to-use files",
-                "把复杂下载，直接变成能用的成果"
+                "把复杂下载，直接变成能用的文件"
             )
         }
     }
@@ -855,7 +863,7 @@ public enum L10n: Sendable {
     }
     public static var proBenefitDeliveryTitle: String { t("Smart Finalize", "Smart Finalize 智能交付") }
     public static var proBenefitDeliveryBody: String {
-        t("Playable containers, clean names, covers, and subtitles as one result.", "可播放容器、干净命名、封面和字幕合成一个成果。")
+        t("Playable container, clean name, cover and subtitles in place.", "可播放容器、干净命名，封面与字幕一并就位。")
     }
     public static var proBenefitMediaTitle: String { t("4K, collections, and batch work", "4K、合集与批量任务") }
     public static var proBenefitMediaBody: String {
@@ -865,8 +873,8 @@ public enum L10n: Sendable {
     public static var proPurchaseUnavailableCTA: String { t("Storefront coming soon", "购买通道即将开放") }
     public static var proPurchaseUnavailableBody: String {
         t(
-            "This build does not have a checkout address yet. If you already have a license, activate it below.",
-            "这个构建还没有配置购买地址；如果你已经有许可证，可以在下方直接激活。"
+            "Already have a license? Enter it to unlock every Pro feature.",
+            "已有许可证？输入后即可解锁全部 Pro 功能。"
         )
     }
 
@@ -1034,13 +1042,13 @@ public enum L10n: Sendable {
         t("Export for WeChat / Telegram", "导出适合微信 / Telegram 的体积")
     }
     public static var completionFilesTitle: String {
-        t("Files in this result", "这个成果包含的文件")
+        t("Included files", "包含的文件")
     }
     public static func completionFileCount(_ count: Int) -> String {
-        t("\(count) files kept together", "\(count) 个文件已归为一个成果")
+        t("\(count) files", "共 \(count) 个文件")
     }
     public static func completionSubtitleCount(_ count: Int) -> String {
-        t("\(count) subtitle\(count == 1 ? "" : "s") ready", "\(count) 个字幕已配好")
+        t("\(count) subtitle\(count == 1 ? "" : "s") included", "含 \(count) 个字幕")
     }
     public static var completionMainFile: String { t("Main file", "主文件") }
     public static var completionSubtitleReady: String {
@@ -1072,6 +1080,21 @@ public enum L10n: Sendable {
     public static var showAudioInFinder: String { t("Show Audio in Finder", "在访达中显示音频") }
     public static var extractAudioAgain: String { t("Extract Audio Again", "再次提取音频") }
     public static var audioExtractionReady: String { t("Audio copy ready", "音频副本已就绪") }
+    public static var continueWorking: String { t("Continue working", "下一步") }
+    public static var createTranscript: String { t("Create subtitles & transcript", "生成字幕与文稿") }
+    public static var openInScribeStudio: String { t("Open in ScribeStudio", "用 ScribeStudio 打开") }
+    public static var scribeStudioDescription: String {
+        t(
+            "Transcribe, review, and export subtitles.",
+            "转写、校对并导出字幕。"
+        )
+    }
+    public static var sentToScribeStudio: String {
+        t("Opened in ScribeStudio.", "已在 ScribeStudio 中打开。")
+    }
+    public static var scribeStudioOpenFailed: String {
+        t("ScribeStudio couldn't open this file.", "ScribeStudio 暂时无法打开这个文件。")
+    }
     public static var deliveryWeChatShort: String { t("WeChat", "微信") }
     public static var deliveryOriginalDescription: String {
         t("Keep the downloaded quality and every original track.", "保留下载时的画质、容器和全部原始音轨。")
@@ -1139,13 +1162,13 @@ public enum L10n: Sendable {
             1. Open Chrome, Edge, or Firefox
             2. Load the unpacked BetterNDM extension
             3. Keep NDM running — the extension connects automatically
-            4. Captured media shows in the page panel when enabled in Settings → Browser
+            4. Hover detected media, or click the BetterNDM toolbar icon, to show download choices
             """,
             """
             1. 打开 Chrome、Edge 或 Firefox
             2. 以「加载已解压的扩展程序」方式加载 BetterNDM
             3. 保持 NDM 运行 — 扩展会自动连接
-            4. 在「设置 → 浏览器」开启后，捕获的媒体会出现在页面浮层
+            4. 将鼠标移到检测到的媒体上，或点击 BetterNDM 工具栏图标，查看下载选项
             """
         )
     }
@@ -1219,7 +1242,7 @@ public enum L10n: Sendable {
         t("Show dialog when a download finishes", "下载完成时显示提示")
     }
     public static var showMediaPanel: String {
-        t("Show floating media panel in browser", "在浏览器显示媒体浮层")
+        t("Show media controls on hover", "鼠标移到媒体上时显示下载控件")
     }
     public static var confirmBrowserCaptures: String {
         t("Ask before starting browser captures", "捕获前先确认再下载")

@@ -1,8 +1,7 @@
 import Foundation
 
-/// Persists host settings under `dev.ndm.open` (independent of original prefs domain).
+/// Persists host settings in this app's standard bundle preferences domain.
 public enum SettingsStore {
-    private static let suiteName = "dev.ndm.open"
     private static let key = "AppSettingsJSON"
 
     private struct DiskSettings: Codable {
@@ -23,6 +22,8 @@ public enum SettingsStore {
         var showBrowserMediaPanel: Bool?
         var confirmBrowserDownloads: Bool?
         var appearanceMode: String?
+        var accentTheme: String?
+        var customAccentHex: String?
         var languageMode: String?
         var smartConnections: Bool?
         var onboardingCompleted: Bool?
@@ -30,7 +31,7 @@ public enum SettingsStore {
     }
 
     public static func load() -> AppSettings {
-        load(defaults: UserDefaults(suiteName: suiteName) ?? .standard)
+        load(defaults: .standard)
     }
 
     /// Internal injection point keeps tests out of the production preferences domain.
@@ -57,6 +58,8 @@ public enum SettingsStore {
             showBrowserMediaPanel: disk.showBrowserMediaPanel ?? true,
             confirmBrowserDownloads: disk.confirmBrowserDownloads ?? false,
             appearanceMode: AppearanceMode(rawValue: disk.appearanceMode ?? "") ?? .system,
+            accentTheme: AccentTheme(rawValue: disk.accentTheme ?? "") ?? .classicBlue,
+            customAccentHex: disk.customAccentHex,
             languageMode: AppLanguageMode(rawValue: disk.languageMode ?? "") ?? .system,
             smartConnections: disk.smartConnections ?? true
         )
@@ -66,7 +69,7 @@ public enum SettingsStore {
     }
 
     public static func save(_ settings: AppSettings) {
-        save(settings, defaults: UserDefaults(suiteName: suiteName) ?? .standard)
+        save(settings, defaults: .standard)
     }
 
     /// Internal injection point keeps tests out of the production preferences domain.
@@ -89,6 +92,8 @@ public enum SettingsStore {
             showBrowserMediaPanel: settings.showBrowserMediaPanel,
             confirmBrowserDownloads: settings.confirmBrowserDownloads,
             appearanceMode: settings.appearanceMode.rawValue,
+            accentTheme: settings.accentTheme.rawValue,
+            customAccentHex: settings.customAccentHex,
             languageMode: settings.languageMode.rawValue,
             smartConnections: settings.smartConnections,
             onboardingCompleted: settings.onboardingCompleted,

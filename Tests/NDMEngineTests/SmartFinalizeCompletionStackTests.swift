@@ -43,6 +43,24 @@ final class SmartFinalizeCompletionStackTests: XCTestCase {
         XCTAssertEqual(stack.artifacts.map(\.kind), [.primary])
     }
 
+    func testDiscoversLocalizedSidecarsWithLanguageSuffixes() throws {
+        let video = folder.appendingPathComponent("大模型中转站，怎么便宜？.mp4")
+        let files = [
+            video,
+            folder.appendingPathComponent("大模型中转站，怎么便宜？.zh-Hans.srt"),
+            folder.appendingPathComponent("大模型中转站，怎么便宜？.en.vtt"),
+            folder.appendingPathComponent("大模型中转站，怎么便宜？.webp"),
+            folder.appendingPathComponent("大模型中转站，怎么便宜？.info.json"),
+        ]
+        for url in files { try Data(url.lastPathComponent.utf8).write(to: url) }
+
+        let stack = try XCTUnwrap(SmartFinalize.completionStack(primary: video))
+        XCTAssertEqual(stack.artifacts.map(\.kind), [
+            .primary, .subtitle, .subtitle, .cover, .metadata,
+        ])
+        XCTAssertEqual(stack.sidecars.count, 4)
+    }
+
     func testMissingPrimaryProducesNoResult() {
         let missing = folder.appendingPathComponent("Missing.mp4")
         XCTAssertNil(SmartFinalize.completionStack(primary: missing))

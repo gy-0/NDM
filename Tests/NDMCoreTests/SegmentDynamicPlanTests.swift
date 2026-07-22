@@ -2,6 +2,41 @@ import XCTest
 @testable import NDMCore
 
 final class SegmentDynamicPlanTests: XCTestCase {
+    func testOwnedOriginalDynamicThresholdsRemainPinned() {
+        XCTAssertEqual(SegmentFileFormat.originalHTTPPlanningQuantumBytes, 0x3A000)
+        XCTAssertEqual(SegmentFileFormat.originalHTTPSplitThresholdBytes, 0x32000)
+        XCTAssertEqual(SegmentFileFormat.originalAlternatePlanningQuantumBytes, 0x88000)
+        XCTAssertEqual(SegmentFileFormat.originalAlternateSplitThresholdBytes, 0x80000)
+    }
+
+    func testOwnedOriginalWorkerCapacityUsesPerRangeQuantum() {
+        let quantum = SegmentFileFormat.originalHTTPPlanningQuantumBytes
+        XCTAssertEqual(
+            SegmentFileFormat.originalHTTPWorkerCapacity(remainingRanges: []),
+            0
+        )
+        XCTAssertEqual(
+            SegmentFileFormat.originalHTTPWorkerCapacity(remainingRanges: [quantum - 1]),
+            1
+        )
+        XCTAssertEqual(
+            SegmentFileFormat.originalHTTPWorkerCapacity(remainingRanges: [quantum]),
+            2
+        )
+        XCTAssertEqual(
+            SegmentFileFormat.originalHTTPWorkerCapacity(
+                remainingRanges: [2 * quantum, quantum / 2]
+            ),
+            4
+        )
+        XCTAssertEqual(
+            SegmentFileFormat.originalHTTPWorkerCapacity(
+                remainingRanges: [100 * quantum]
+            ),
+            32
+        )
+    }
+
     func testTailRebalanceWaitsForMeaningfulWorkerDeficitAndBytes() {
         let oneMiB = Int64(1024 * 1024)
 
@@ -13,7 +48,7 @@ final class SegmentDynamicPlanTests: XCTestCase {
         XCTAssertTrue(SegmentFileFormat.shouldRebalanceTail(
             targetConnections: 32,
             activeConnections: 24,
-            remainingBytesBySegment: Array(repeating: oneMiB, count: 24)
+            remainingBytesBySegment: Array(repeating: 2 * oneMiB, count: 24)
         ))
         XCTAssertFalse(SegmentFileFormat.shouldRebalanceTail(
             targetConnections: 32,
@@ -25,6 +60,62 @@ final class SegmentDynamicPlanTests: XCTestCase {
             activeConnections: 0,
             remainingBytesBySegment: [oneMiB]
         ))
+    }
+
+    func testTailRebalanceSkipsWhenCurrentWorkersWillFinishBeforeReconnectPaysBack() {
+        let plan = SegmentFileFormat.tailRebalancePlan(
+            targetConnections: 8,
+            activeConnections: 4,
+            remainingBytesBySegment: [2 * 1024 * 1024],
+            bytesPerSecond: 20 * 1024 * 1024,
+            connectionSetupSeconds: 0.75
+        )
+        XCTAssertNil(plan)
+    }
+
+    func testTailRebalanceUsesOnlyConnectionsWithEnoughWork() throws {
+        let plan = try XCTUnwrap(SegmentFileFormat.tailRebalancePlan(
+            targetConnections: 32,
+            activeConnections: 8,
+            remainingBytesBySegment: [40 * 1024 * 1024],
+            bytesPerSecond: 8 * 1024 * 1024,
+            connectionSetupSeconds: 0.75
+        ))
+        XCTAssertEqual(plan.desiredConnections, 16)
+        XCTAssertEqual(plan.minimumUsefulBytesPerConnection, 1_572_864)
+        XCTAssertEqual(plan.totalRemainingBytes, 40 * 1024 * 1024)
+        XCTAssertEqual(plan.estimatedSecondsRemaining ?? -1, 5, accuracy: 0.001)
+    }
+
+    func testTailRebalanceStopsBeforeBisectionCreatesTinyLeafRanges() throws {
+        let oneMiB = Int64(1024 * 1024)
+        let plan = try XCTUnwrap(SegmentFileFormat.tailRebalancePlan(
+            targetConnections: 8,
+            activeConnections: 2,
+            remainingBytesBySegment: [5 * oneMiB, oneMiB],
+            bytesPerSecond: 0
+        ))
+
+        XCTAssertEqual(
+            plan.minimumUsefulBytesPerConnection,
+            SegmentFileFormat.originalHTTPPlanningQuantumBytes * 4
+        )
+        XCTAssertEqual(plan.desiredConnections, 5)
+    }
+
+    func testTailRebalanceRequiresOneMiBPerNewWorkerBeforeSpeedIsKnown() {
+        XCTAssertNil(SegmentFileFormat.tailRebalancePlan(
+            targetConnections: 4,
+            activeConnections: 2,
+            remainingBytesBySegment: [3 * 1024 * 1024],
+            bytesPerSecond: 0
+        ))
+        XCTAssertEqual(SegmentFileFormat.tailRebalancePlan(
+            targetConnections: 4,
+            activeConnections: 2,
+            remainingBytesBySegment: [8 * 1024 * 1024],
+            bytesPerSecond: 0
+        )?.desiredConnections, 4)
     }
 
     func test4125ObservedPrefixProducesExactFixtureBoundary() {
@@ -64,6 +155,44 @@ final class SegmentDynamicPlanTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(segs.count, 1)
     }
 
+    func testDynamicPlanTreatsConnectionCountAsCeilingForSmallFiles() {
+        XCTAssertEqual(
+            SegmentFileFormat.planDynamicConnections(
+                totalBytes: 100_000,
+                connections: 32,
+                completedPrefixBytes: 25_000
+            ).count,
+            1
+        )
+        XCTAssertEqual(
+            SegmentFileFormat.planDynamicConnections(
+                totalBytes: 600_000,
+                connections: 32,
+                completedPrefixBytes: 150_000
+            ).count,
+            3
+        )
+    }
+
+    func testManualReplanDoesNotSplitTinyTailIntoManyConnections() {
+        let total: Int64 = 4 * 1024 * 1024
+        let existing = SegmentFileFormat.planEqualSegments(
+            totalBytes: total,
+            connections: 1
+        )
+        let remaining: Int64 = 128 * 1024
+        let replanned = SegmentFileFormat.replanConnections(
+            existing: existing,
+            totalBytes: total,
+            newConnections: 32,
+            completedByID: [0: total - remaining]
+        )
+
+        XCTAssertEqual(replanned.count, 2) // downloaded prefix + one useful tail
+        XCTAssertEqual(replanned.last?.length, remaining)
+        XCTAssertTrue(SegmentFileFormat.isValidResumePlan(replanned, totalBytes: total))
+    }
+
     func testReplanPreservesCompletedPrefix() {
         let total: Int64 = 1_000_000
         let existing = SegmentFileFormat.planEqualSegments(totalBytes: total, connections: 2)
@@ -91,5 +220,88 @@ final class SegmentDynamicPlanTests: XCTestCase {
             XCTAssertEqual(left.end + 1, right.start)
             XCTAssertEqual(left.nextId, Int32(right.segmentId))
         }
+    }
+
+    func testTailRollbackMergesOnlyFailedChildBackIntoItsParent() throws {
+        let total: Int64 = 2 * 1024 * 1024
+        let parent = SegmentRecord(
+            order: 0,
+            segmentId: 7,
+            nextId: SegmentRecord.endOfList,
+            start: 0,
+            end: total - 1
+        )
+        let children = SegmentFileFormat.replanConnections(
+            existing: [parent],
+            totalBytes: total,
+            newConnections: 3,
+            completedByID: [7: 0]
+        )
+        let failed = try XCTUnwrap(children.last)
+        let rollback = try XCTUnwrap(SegmentFileFormat.rollbackTailSplit(
+            existing: children,
+            failedSegmentID: failed.segmentId,
+            originalParent: parent
+        ))
+
+        XCTAssertEqual(rollback.records.count, children.count - 1)
+        XCTAssertFalse(rollback.records.contains { $0.segmentId == failed.segmentId })
+        let survivor = try XCTUnwrap(rollback.records.first {
+            $0.segmentId == rollback.survivorID
+        })
+        XCTAssertEqual(survivor.end, failed.end)
+        for (left, right) in zip(rollback.records, rollback.records.dropFirst()) {
+            XCTAssertEqual(left.end + 1, right.start)
+            XCTAssertEqual(left.nextId, Int32(right.segmentId))
+        }
+    }
+
+    func testTailRollbackRejectsOriginalOrUnrelatedSegment() {
+        let original = SegmentFileFormat.planEqualSegments(
+            totalBytes: 4 * 1024 * 1024,
+            connections: 2
+        )
+        XCTAssertNil(SegmentFileFormat.rollbackTailSplit(
+            existing: original,
+            failedSegmentID: original[0].segmentId,
+            originalParent: original[0]
+        ))
+        XCTAssertNil(SegmentFileFormat.rollbackTailSplit(
+            existing: original,
+            failedSegmentID: original[1].segmentId,
+            originalParent: original[0]
+        ))
+    }
+
+    func testResumePlanValidationRejectsAliasGapAndBrokenLink() {
+        let valid = SegmentFileFormat.planEqualSegments(
+            totalBytes: 1_048_576,
+            connections: 4
+        )
+        XCTAssertTrue(SegmentFileFormat.isValidResumePlan(
+            valid,
+            totalBytes: 1_048_576
+        ))
+
+        var duplicateID = valid
+        duplicateID[1].segmentId = duplicateID[0].segmentId
+        XCTAssertFalse(SegmentFileFormat.isValidResumePlan(
+            duplicateID,
+            totalBytes: 1_048_576
+        ))
+
+        var gap = valid
+        gap[1].start += 1
+        XCTAssertFalse(SegmentFileFormat.isValidResumePlan(
+            gap,
+            totalBytes: 1_048_576
+        ))
+
+        var brokenLink = valid
+        brokenLink[0].nextId = SegmentRecord.endOfList
+        XCTAssertFalse(SegmentFileFormat.isValidResumePlan(
+            brokenLink,
+            totalBytes: 1_048_576
+        ))
     }
 }

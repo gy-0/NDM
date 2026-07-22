@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import NDMCore
 import NDMEngine
 
@@ -31,16 +32,22 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     private let existingTasks: [DownloadTask]
     private let destinationDirectory: URL
     private let urlField = NSTextField(string: "")
+    private let urlShell = LinkInputShell()
+    private let clearButton = NSButton()
+    private let statusIcon = NSImageView()
     private let hintLabel = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
-    private let downloadButton = NSButton(title: L10n.linkLensContinue, target: nil, action: nil)
-    private let viewExistingButton = NSButton(title: L10n.linkLensViewExisting, target: nil, action: nil)
-    private let optionsButton = NSButton(title: L10n.linkLensOptions, target: nil, action: nil)
+    private let statusRow = NSStackView()
+    private let hintRow = NSStackView()
+    private let downloadButton = NewDownloadActionButton(title: L10n.linkLensContinue, style: .primary)
+    private let viewExistingButton = NewDownloadActionButton(title: L10n.linkLensViewExisting, style: .secondary)
+    private let optionsButton = NewDownloadActionButton(title: L10n.linkLensOptions, style: .secondary)
     private let identityView = LinkLensView()
     private var preflightTask: Task<Void, Never>?
     private var preparedResult: MediaPreflightResult?
     private var matchedTask: DownloadTask?
     private var readyChoice: ReadyChoice?
+    private var didNormalizeShareInput = false
     private var didFinish = false
 
     private static var active: NewDownloadWindowController?
@@ -54,8 +61,9 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         self.onFinish = onFinish
         self.existingTasks = existingTasks
         self.destinationDirectory = destinationDirectory
+        let hasInitialPreview = initialURL.flatMap(ClipboardLinks.resolution) != nil
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 382),
+            contentRect: NSRect(x: 0, y: 0, width: 610, height: hasInitialPreview ? 420 : 214),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -81,7 +89,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         destinationDirectory: URL,
         initialURL: String? = nil
     ) async -> Result {
-        let clip = initialURL ?? ClipboardLinks.firstDownloadableURL()
+        let clip = initialURL ?? ClipboardLinks.firstDownloadableInput()
         return await withCheckedContinuation { continuation in
             let wc = NewDownloadWindowController(
                 initialURL: clip,
@@ -113,98 +121,205 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
 
     private func buildUI(initialURL: String?) {
         guard let content = window?.contentView else { return }
+        content.wantsLayer = true
 
         let title = NSTextField(labelWithString: L10n.newDownload)
-        title.font = .systemFont(ofSize: 17, weight: .bold)
+        title.font = .systemFont(ofSize: 22, weight: .bold)
 
-        let lede = NSTextField(wrappingLabelWithString: L10n.newDownloadLede)
-        lede.font = .systemFont(ofSize: 12.5)
-        lede.textColor = .secondaryLabelColor
+        let headerIcon = NSImageView()
+        headerIcon.image = NDMChrome.symbol("arrow.down.circle.fill", pointSize: 22, weight: .semibold)
+        headerIcon.contentTintColor = NDMChrome.accent
+        headerIcon.imageScaling = .scaleProportionallyDown
+        headerIcon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            headerIcon.widthAnchor.constraint(equalToConstant: 26),
+            headerIcon.heightAnchor.constraint(equalToConstant: 26),
+        ])
+        let headingCopy = NSStackView(views: [title])
+        headingCopy.orientation = .vertical
+        headingCopy.alignment = .leading
+        headingCopy.spacing = 3
+        let header = NSStackView(views: [headerIcon, headingCopy])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 11
 
         urlField.tag = 1001
         urlField.placeholderString = "https://"
-        urlField.font = .systemFont(ofSize: 13)
+        urlField.font = .systemFont(ofSize: 13.5, weight: .medium)
         urlField.focusRingType = .none
         urlField.delegate = self
-        urlField.bezelStyle = .roundedBezel
+        urlField.isBordered = false
+        urlField.drawsBackground = false
         urlField.isEditable = true
         urlField.isSelectable = true
         urlField.usesSingleLineMode = true
         urlField.lineBreakMode = .byTruncatingMiddle
-        if let initialURL, !initialURL.isEmpty {
-            urlField.stringValue = initialURL
-            statusLabel.stringValue = L10n.clipboardURLFilled
-            statusLabel.textColor = NDMChrome.accent
-        } else {
-            statusLabel.stringValue = L10n.clipboardURLEmpty
-            statusLabel.textColor = .tertiaryLabelColor
+        urlField.translatesAutoresizingMaskIntoConstraints = false
+
+        let linkIcon = NSImageView()
+        linkIcon.image = NDMChrome.symbol("link", pointSize: 13, weight: .semibold)
+        linkIcon.contentTintColor = .secondaryLabelColor
+        linkIcon.imageScaling = .scaleProportionallyDown
+        linkIcon.translatesAutoresizingMaskIntoConstraints = false
+
+        clearButton.bezelStyle = .inline
+        clearButton.isBordered = false
+        clearButton.focusRingType = .none
+        clearButton.image = NDMChrome.symbol("xmark.circle.fill", pointSize: 13, weight: .medium)
+        clearButton.contentTintColor = .tertiaryLabelColor
+        clearButton.imageScaling = .scaleProportionallyDown
+        clearButton.target = self
+        clearButton.action = #selector(clearURLClicked)
+        clearButton.toolTip = L10n.t("Clear link", "清除链接")
+        clearButton.setAccessibilityLabel(L10n.t("Clear link", "清除链接"))
+        clearButton.translatesAutoresizingMaskIntoConstraints = false
+
+        urlShell.translatesAutoresizingMaskIntoConstraints = false
+        urlShell.onActivate = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.urlField)
         }
-        statusLabel.font = .systemFont(ofSize: 11)
+        urlShell.addSubview(linkIcon)
+        urlShell.addSubview(urlField)
+        urlShell.addSubview(clearButton)
+        NSLayoutConstraint.activate([
+            linkIcon.leadingAnchor.constraint(equalTo: urlShell.leadingAnchor, constant: 14),
+            linkIcon.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
+            linkIcon.widthAnchor.constraint(equalToConstant: 16),
+            linkIcon.heightAnchor.constraint(equalToConstant: 16),
+            urlField.leadingAnchor.constraint(equalTo: linkIcon.trailingAnchor, constant: 9),
+            urlField.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -4),
+            urlField.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: urlShell.trailingAnchor, constant: -7),
+            clearButton.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
+            clearButton.widthAnchor.constraint(equalToConstant: 30),
+            clearButton.heightAnchor.constraint(equalToConstant: 30),
+        ])
+
+        if let initialURL, !initialURL.isEmpty,
+           let resolution = ClipboardLinks.resolution(initialURL) {
+            // Show the useful result, not the noisy share command, while
+            // preserving the recognition state for reassuring feedback.
+            urlField.stringValue = resolution.urlString
+            didNormalizeShareInput = resolution.wasExtractedFromText
+            setStatus(
+                resolution.wasExtractedFromText ? L10n.shareTextLinkFound : L10n.clipboardURLFilled,
+                symbolName: resolution.wasExtractedFromText ? "wand.and.stars" : "doc.on.clipboard.fill",
+                color: NDMChrome.accent
+            )
+        } else if let initialURL, !initialURL.isEmpty {
+            urlField.stringValue = initialURL
+            setStatus(L10n.clipboardURLEdited, symbolName: "link", color: .tertiaryLabelColor)
+        } else {
+            setStatus(L10n.clipboardURLEmpty, symbolName: "doc.on.clipboard", color: .tertiaryLabelColor)
+        }
+        statusLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusIcon.imageScaling = .scaleProportionallyDown
+        statusIcon.translatesAutoresizingMaskIntoConstraints = false
+        statusRow.setViews([statusIcon, statusLabel], in: .leading)
+        statusRow.orientation = .horizontal
+        statusRow.alignment = .centerY
+        statusRow.spacing = 7
+        NSLayoutConstraint.activate([
+            statusIcon.widthAnchor.constraint(equalToConstant: 14),
+            statusIcon.heightAnchor.constraint(equalToConstant: 14),
+        ])
 
         if YtDlpTool.isAvailable {
             hintLabel.stringValue = L10n.ytdlpReadyHint
         } else {
             hintLabel.stringValue = L10n.ytdlpMissingHint
         }
-        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.font = .systemFont(ofSize: 11.5)
         hintLabel.textColor = .secondaryLabelColor
 
-        let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
-        NDMChrome.styleGhostButton(cancel)
+        let hintIcon = NSImageView()
+        hintIcon.image = NDMChrome.symbol("sparkles", pointSize: 11, weight: .medium)
+        hintIcon.contentTintColor = .secondaryLabelColor
+        hintIcon.imageScaling = .scaleProportionallyDown
+        hintRow.setViews([hintIcon, hintLabel], in: .leading)
+        hintRow.orientation = .horizontal
+        hintRow.alignment = .centerY
+        hintRow.spacing = 7
+        NSLayoutConstraint.activate([
+            hintIcon.widthAnchor.constraint(equalToConstant: 14),
+            hintIcon.heightAnchor.constraint(equalToConstant: 14),
+        ])
+
+        let cancel = NewDownloadActionButton(title: L10n.cancel, style: .secondary)
+        cancel.target = self
+        cancel.action = #selector(cancelClicked)
         cancel.keyEquivalent = "\u{1b}"
 
         downloadButton.target = self
         downloadButton.action = #selector(downloadClicked)
-        NDMChrome.styleMainButton(downloadButton)
         downloadButton.keyEquivalent = "\r"
         viewExistingButton.target = self
         viewExistingButton.action = #selector(viewExistingClicked)
-        NDMChrome.styleGhostButton(viewExistingButton)
         viewExistingButton.isHidden = true
         optionsButton.target = self
         optionsButton.action = #selector(optionsClicked)
-        NDMChrome.styleGhostButton(optionsButton)
         optionsButton.isHidden = true
         refreshDownloadEnabled()
-        refreshLinkIdentity()
+        refreshClearButton()
 
-        let actions = NSStackView(views: [NSView(), cancel, viewExistingButton, optionsButton, downloadButton])
+        let destinationIcon = NSImageView()
+        destinationIcon.image = NDMChrome.symbol("folder.fill", pointSize: 11.5, weight: .medium)
+        destinationIcon.contentTintColor = .secondaryLabelColor
+        destinationIcon.imageScaling = .scaleProportionallyDown
+        let destinationLabel = NSTextField(labelWithString: L10n.t(
+            "Saves to \(destinationDirectory.lastPathComponent)",
+            "保存到 \(destinationDirectory.lastPathComponent)"
+        ))
+        destinationLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        destinationLabel.textColor = .secondaryLabelColor
+        destinationLabel.lineBreakMode = .byTruncatingMiddle
+        destinationLabel.toolTip = destinationDirectory.path
+        let destination = NSStackView(views: [destinationIcon, destinationLabel])
+        destination.orientation = .horizontal
+        destination.alignment = .centerY
+        destination.spacing = 6
+        destination.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let actions = NSStackView(views: [destination, NSView(), cancel, viewExistingButton, optionsButton, downloadButton])
         actions.orientation = .horizontal
-        actions.spacing = 10
+        actions.spacing = 9
         actions.alignment = .centerY
 
-        let stack = NSStackView(views: [title, lede, urlField, identityView, statusLabel, hintLabel, actions])
+        let stack = NSStackView(views: [header, urlShell, identityView, statusRow, hintRow, actions])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.setCustomSpacing(4, after: title)
-        stack.setCustomSpacing(14, after: lede)
-        stack.setCustomSpacing(6, after: urlField)
-        stack.setCustomSpacing(6, after: identityView)
-        stack.setCustomSpacing(12, after: hintLabel)
+        stack.spacing = 9
+        stack.setCustomSpacing(16, after: header)
+        stack.setCustomSpacing(12, after: urlShell)
+        stack.setCustomSpacing(10, after: identityView)
+        stack.setCustomSpacing(5, after: statusRow)
+        stack.setCustomSpacing(15, after: hintRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            title.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            lede.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            urlField.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            urlField.heightAnchor.constraint(equalToConstant: 30),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 26),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            urlShell.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            urlShell.heightAnchor.constraint(equalToConstant: 46),
             identityView.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            identityView.heightAnchor.constraint(equalToConstant: 104),
-            statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            hintLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            identityView.heightAnchor.constraint(equalToConstant: 118),
+            statusRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            hintRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            cancel.heightAnchor.constraint(equalToConstant: 28),
-            viewExistingButton.heightAnchor.constraint(equalToConstant: 28),
-            optionsButton.heightAnchor.constraint(equalToConstant: 28),
-            downloadButton.heightAnchor.constraint(equalToConstant: 28),
-            downloadButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
+            cancel.heightAnchor.constraint(equalToConstant: 36),
+            viewExistingButton.heightAnchor.constraint(equalToConstant: 36),
+            optionsButton.heightAnchor.constraint(equalToConstant: 36),
+            downloadButton.heightAnchor.constraint(equalToConstant: 36),
+            downloadButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
         ])
+        refreshLinkIdentity()
     }
 
     private func refreshDownloadEnabled() {
@@ -213,20 +328,86 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        let typed = urlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typedResolution = ClipboardLinks.resolution(typed)
+        if let typedResolution, typedResolution.wasExtractedFromText {
+            // A pasted share message collapses into the clean actionable URL
+            // immediately. The Link Lens below carries the platform identity.
+            urlField.stringValue = typedResolution.urlString
+            didNormalizeShareInput = true
+        } else {
+            didNormalizeShareInput = false
+        }
         refreshDownloadEnabled()
+        refreshClearButton()
         refreshLinkIdentity()
         let raw = urlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolution = ClipboardLinks.resolution(raw)
         if let matchedTask {
             showDuplicateStatus(matchedTask)
         } else if let resolution {
-            statusLabel.stringValue = resolution.wasExtractedFromText
-                ? L10n.shareTextLinkFound
-                : L10n.urlReadyToDownload
-            statusLabel.textColor = NDMChrome.accent
+            let recognizedShare = didNormalizeShareInput || resolution.wasExtractedFromText
+            if recognizedShare {
+                setStatus(
+                    L10n.shareTextLinkFound,
+                    symbolName: "wand.and.stars",
+                    color: NDMChrome.accent
+                )
+            } else {
+                hideStatus()
+            }
         } else {
-            statusLabel.stringValue = L10n.clipboardURLEdited
-            statusLabel.textColor = .tertiaryLabelColor
+            hideStatus()
+        }
+    }
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        urlShell.isFocused = true
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        urlShell.isFocused = false
+    }
+
+    @objc private func clearURLClicked() {
+        urlField.stringValue = ""
+        didNormalizeShareInput = false
+        refreshDownloadEnabled()
+        refreshClearButton()
+        refreshLinkIdentity()
+        hideStatus()
+        window?.makeFirstResponder(urlField)
+    }
+
+    private func refreshClearButton() {
+        clearButton.isHidden = urlField.stringValue.isEmpty
+    }
+
+    private func setStatus(_ text: String, symbolName: String, color: NSColor) {
+        statusRow.isHidden = false
+        statusLabel.stringValue = text
+        statusLabel.textColor = color
+        statusIcon.image = NDMChrome.symbol(symbolName, pointSize: 11.5, weight: .semibold)
+        statusIcon.contentTintColor = color
+    }
+
+    private func hideStatus() {
+        statusRow.isHidden = true
+    }
+
+    private func setHint(_ text: String?) {
+        hintLabel.stringValue = text ?? ""
+        hintRow.isHidden = text == nil
+    }
+
+    private func setPreviewVisible(_ visible: Bool) {
+        let targetHeight: CGFloat = visible ? 420 : 214
+        guard let window, abs(window.contentLayoutRect.height - targetHeight) > 1 else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            window.animator().setContentSize(NSSize(width: 610, height: targetHeight))
         }
     }
 
@@ -238,13 +419,46 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         guard let resolution = ClipboardLinks.resolution(raw) else {
             refreshDuplicate(urlStrings: [])
             identityView.clear()
+            hideStatus()
+            setHint(nil)
+            setPreviewVisible(false)
             return
         }
+        setPreviewVisible(true)
         let urlString = resolution.urlString
         refreshDuplicate(urlStrings: [urlString])
+        let isMediaPage = MediaLinkClassifier.looksLikeMediaPage(urlString)
+        if !isMediaPage, let url = URL(string: urlString) {
+            setHint(nil)
+            identityView.showDirectFileEstimate(url: url)
+            preflightTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.identityView.showDirectFileLoading(url: url)
+                do {
+                    let preview = try await RemoteFilePreviewProbe.probe(url: url)
+                    guard !Task.isCancelled,
+                          ClipboardLinks.resolution(self.urlField.stringValue)?.urlString == urlString else { return }
+                    self.identityView.showDirectFilePreview(preview)
+                    self.refreshDuplicate(urlStrings: [
+                        urlString,
+                        preview.resolvedURL.absoluteString,
+                    ])
+                    if let matchedTask = self.matchedTask {
+                        self.showDuplicateStatus(matchedTask)
+                    }
+                } catch {
+                    guard !Task.isCancelled,
+                          ClipboardLinks.resolution(self.urlField.stringValue)?.urlString == urlString else { return }
+                    self.identityView.showDirectFileFallback(url: url)
+                }
+            }
+            return
+        }
+
         identityView.showIdentity(urlString: urlString)
-        guard YtDlpTool.isAvailable,
-              MediaLinkClassifier.looksLikeMediaPage(urlString) else { return }
+        setHint(YtDlpTool.isAvailable ? nil : L10n.ytdlpMissingHint)
+        guard YtDlpTool.isAvailable, isMediaPage else { return }
 
         preflightTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 320_000_000)
@@ -359,9 +573,12 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             return nil
         }
         let format = result.probe.formats[resolution.selectedFormatIndex]
+        let container: YtDlpContainerPreference = resolution.container == .compactMKV
+            ? .compactMKV
+            : .compatibleMP4
         let budget = StorageBudget.media(
-            sampleFinalBytes: format.approximateBytes,
-            sampleComponentBytes: format.componentBytes,
+            sampleFinalBytes: format.estimatedBytes(for: container),
+            sampleComponentBytes: format.estimatedComponentBytes(for: container),
             sampleDurationSeconds: result.probe.durationSeconds
         )
         let confidence = StorageConfidence(
@@ -371,9 +588,6 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         // Tight and unknown states still deserve the full Space Confidence row.
         guard confidence.level == .comfortable else { return nil }
 
-        let container: YtDlpContainerPreference = resolution.container == .compactMKV
-            ? .compactMKV
-            : .compatibleMP4
         return ReadyChoice(
             format: format,
             options: YtDlpDownloadOptions(
@@ -390,13 +604,178 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             : (pageTitle.flatMap { $0.isEmpty ? nil : $0 } ?? L10n.unknown)
         switch task.status {
         case .complete:
-            statusLabel.stringValue = L10n.linkLensExistingComplete(filename)
+            setStatus(
+                L10n.linkLensExistingComplete(filename),
+                symbolName: "checkmark.circle.fill",
+                color: NDMChrome.accent
+            )
         case .downloading, .waiting:
-            statusLabel.stringValue = L10n.linkLensExistingActive(filename)
+            setStatus(
+                L10n.linkLensExistingActive(filename),
+                symbolName: "arrow.down.circle.fill",
+                color: NDMChrome.accent
+            )
         case .paused, .incomplete, .error:
-            statusLabel.stringValue = L10n.linkLensExistingTask(filename)
+            setStatus(
+                L10n.linkLensExistingTask(filename),
+                symbolName: "clock.fill",
+                color: NDMChrome.accent
+            )
         }
-        statusLabel.textColor = NDMChrome.accent
+    }
+}
+
+@MainActor
+private final class LinkInputShell: NSView {
+    var onActivate: (() -> Void)?
+    var isFocused = false {
+        didSet { needsDisplay = true }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.cornerRadius = 11
+            layer?.backgroundColor = (isFocused
+                ? NDMChrome.searchSurfaceFocused
+                : NDMChrome.searchSurface).cgColor
+            layer?.borderWidth = isFocused ? 1.5 : 1
+            layer?.borderColor = (isFocused
+                ? NDMChrome.accent.withAlphaComponent(0.78)
+                : NDMChrome.hairline).cgColor
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+    }
+}
+
+@MainActor
+private final class NewDownloadActionButton: NSButton {
+    enum Style { case primary, secondary }
+
+    private let actionStyle: Style
+    private var isHovering = false
+    private var hoverTrackingArea: NSTrackingArea?
+
+    init(title: String, style: Style) {
+        self.actionStyle = style
+        super.init(frame: .zero)
+        self.title = title
+        bezelStyle = .inline
+        isBordered = false
+        focusRingType = .none
+        setButtonType(.momentaryChange)
+        font = .systemFont(ofSize: 12.5, weight: style == .primary ? .semibold : .medium)
+        contentTintColor = style == .primary ? .white : .labelColor
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.masksToBounds = true
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize {
+        let base = super.intrinsicContentSize
+        return NSSize(width: max(74, base.width + 28), height: 36)
+    }
+
+    override var isEnabled: Bool {
+        didSet {
+            if actionStyle == .secondary {
+                contentTintColor = isEnabled ? .labelColor : .tertiaryLabelColor
+            }
+            needsDisplay = true
+        }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        let keyboardFocused = window?.firstResponder === self
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            switch actionStyle {
+            case .primary:
+                let fill = isEnabled
+                    ? (isHovering ? NDMChrome.accent.withAlphaComponent(0.90) : NDMChrome.accent)
+                    : NDMChrome.accent.withAlphaComponent(0.34)
+                layer?.backgroundColor = fill.cgColor
+                layer?.borderWidth = keyboardFocused ? 1.5 : 0
+                layer?.borderColor = NSColor.white.withAlphaComponent(0.76).cgColor
+            case .secondary:
+                layer?.backgroundColor = (isHovering ? NDMChrome.track : NDMChrome.searchSurface).cgColor
+                layer?.borderWidth = keyboardFocused ? 1.5 : 1
+                layer?.borderColor = (keyboardFocused
+                    ? NDMChrome.accent.withAlphaComponent(0.65)
+                    : NDMChrome.hairline).cgColor
+            }
+            layer?.opacity = isEnabled ? 1 : 0.78
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return super.mouseDown(with: event) }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.08
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.allowsImplicitAnimation = true
+            self.layer?.setAffineTransform(CGAffineTransform(scaleX: 0.95, y: 0.95))
+        }
+        super.mouseDown(with: event)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
+            ctx.allowsImplicitAnimation = true
+            self.layer?.setAffineTransform(.identity)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+        needsDisplay = true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { needsDisplay = true }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { needsDisplay = true }
+        return resigned
     }
 }
 
@@ -420,10 +799,10 @@ private final class LinkLensView: NSView {
         siteLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
         siteLabel.textColor = NDMChrome.accent
         siteLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.maximumNumberOfLines = 2
         titleLabel.lineBreakMode = .byTruncatingTail
-        metaLabel.font = .systemFont(ofSize: 11)
+        metaLabel.font = .systemFont(ofSize: 11.5)
         metaLabel.textColor = .secondaryLabelColor
         metaLabel.lineBreakMode = .byTruncatingTail
 
@@ -442,11 +821,11 @@ private final class LinkLensView: NSView {
         addSubview(labels)
         addSubview(spinner)
         NSLayoutConstraint.activate([
-            coverView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            coverView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             coverView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            coverView.widthAnchor.constraint(equalToConstant: 112),
-            coverView.heightAnchor.constraint(equalToConstant: 76),
-            labels.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 13),
+            coverView.widthAnchor.constraint(equalToConstant: 126),
+            coverView.heightAnchor.constraint(equalToConstant: 84),
+            labels.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 14),
             labels.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -10),
             labels.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.widthAnchor.constraint(equalTo: labels.widthAnchor),
@@ -466,12 +845,10 @@ private final class LinkLensView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = 14
         layer?.borderWidth = 1
         layer?.borderColor = NDMChrome.hairline.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor
-            .withAlphaComponent(0.72)
-            .cgColor
+        layer?.backgroundColor = NDMChrome.searchSurface.cgColor
     }
 
     @available(*, unavailable)
@@ -497,13 +874,14 @@ private final class LinkLensView: NSView {
         titleLabel.stringValue = identity.detail
         metaLabel.stringValue = identity.meta
         spinner.stopAnimation(nil)
-        coverView.setImage(NSImage(
+        let symbol = NSImage(
             systemSymbolName: identity.fallbackSymbol,
             accessibilityDescription: identity.name
-        ), isArtwork: false)
+        )?.withSymbolConfiguration(.init(paletteColors: [identity.accentColor]))
+        coverView.setImage(symbol, isArtwork: false, accentColor: identity.accentColor)
 
         if let cached = Self.iconCache[host] {
-            coverView.setImage(cached, isArtwork: false)
+            coverView.setImage(cached, isArtwork: false, accentColor: identity.accentColor)
             return
         }
 
@@ -515,7 +893,7 @@ private final class LinkLensView: NSView {
                   representedHost == host else { return }
             image.isTemplate = false
             Self.iconCache[host] = image
-            coverView.setImage(image, isArtwork: false)
+            coverView.setImage(image, isArtwork: false, accentColor: identity.accentColor)
         }
     }
 
@@ -563,66 +941,215 @@ private final class LinkLensView: NSView {
         }
     }
 
+    func showDirectFileEstimate(url: URL) {
+        artworkTask?.cancel()
+        representedHost = url.host?.lowercased() ?? ""
+        isHidden = false
+        spinner.stopAnimation(nil)
+        let filename = DownloadFilename.resolve(url: url)
+        siteLabel.stringValue = Self.displayHost(url)
+        titleLabel.stringValue = filename
+        metaLabel.stringValue = [
+            Self.fileTypeDescription(filename: filename, mimeType: nil),
+            L10n.t("Checking size and server support…", "正在确认大小与服务器能力…"),
+        ].joined(separator: " · ")
+        coverView.setImage(
+            NDMChrome.fileIcon(filename: filename, pointSize: 48),
+            isArtwork: false,
+            accentColor: NDMChrome.accent
+        )
+    }
+
+    func showDirectFileLoading(url: URL) {
+        showDirectFileEstimate(url: url)
+        spinner.startAnimation(nil)
+    }
+
+    func showDirectFilePreview(_ preview: RemoteFilePreview) {
+        artworkTask?.cancel()
+        representedHost = preview.resolvedURL.host?.lowercased() ?? ""
+        isHidden = false
+        spinner.stopAnimation(nil)
+        siteLabel.stringValue = Self.displayHost(preview.resolvedURL)
+        titleLabel.stringValue = preview.filename
+        var metadata = [Self.fileTypeDescription(
+            filename: preview.filename,
+            mimeType: preview.mimeType
+        )]
+        if let bytes = preview.contentLength, bytes > 0 {
+            metadata.append(Self.byteCount(bytes))
+        } else {
+            metadata.append(L10n.t("Size unavailable", "大小待下载时确认"))
+        }
+        if preview.acceptsByteRanges {
+            metadata.append(L10n.t("Resumable · multi-connection ready", "支持断点续传与多连接"))
+        }
+        metaLabel.stringValue = metadata.joined(separator: " · ")
+        coverView.setImage(
+            NDMChrome.fileIcon(filename: preview.filename, pointSize: 48),
+            isArtwork: false,
+            accentColor: NDMChrome.accent
+        )
+    }
+
+    func showDirectFileFallback(url: URL) {
+        showDirectFileEstimate(url: url)
+        spinner.stopAnimation(nil)
+        let filename = DownloadFilename.resolve(url: url)
+        metaLabel.stringValue = Self.fileTypeDescription(filename: filename, mimeType: nil)
+    }
+
+    private static func displayHost(_ url: URL) -> String {
+        let host = url.host?.lowercased() ?? L10n.unknown
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    private static func fileTypeDescription(filename: String, mimeType: String?) -> String {
+        let type = UTType(filenameExtension: (filename as NSString).pathExtension)
+        return type?.localizedDescription
+            ?? mimeType?.split(separator: ";", maxSplits: 1).first.map(String.init)
+            ?? L10n.t("File", "文件")
+    }
+
+    private static func byteCount(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: bytes)
+    }
+
     private static func identity(
         host: String,
         url: URL
-    ) -> (name: String, detail: String, meta: String, fallbackSymbol: String, faviconURL: URL?) {
+    ) -> (
+        name: String,
+        detail: String,
+        meta: String,
+        fallbackSymbol: String,
+        faviconURL: URL?,
+        accentColor: NSColor
+    ) {
         let normalized = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         let isDirectFile = !url.pathExtension.isEmpty
-        let fallback = isDirectFile ? "doc.fill" : "play.rectangle.fill"
-        if normalized == "youtu.be" || normalized.hasSuffix("youtube.com") {
+        let fallback = isDirectFile ? "doc.fill" : "globe"
+        let mediaDetail = L10n.ytdlpRecognizedVideoLink
+        let continueMeta = L10n.linkLensContinueAnytime
+        switch SharedLinkResolver.source(forURLString: url.absoluteString) {
+        case .youtube:
             return (
                 "YouTube",
-                L10n.ytdlpRecognizedVideoLink,
-                L10n.linkLensContinueAnytime,
+                mediaDetail,
+                continueMeta,
                 "play.rectangle.fill",
-                URL(string: "https://www.youtube.com/favicon.ico")
+                URL(string: "https://www.youtube.com/favicon.ico"),
+                NSColor(calibratedRed: 0.96, green: 0.12, blue: 0.16, alpha: 1)
             )
-        }
-        if normalized == "b23.tv" || normalized.hasSuffix("bilibili.com") {
+        case .bilibili:
             return (
                 L10n.bilibiliName,
-                L10n.ytdlpRecognizedVideoLink,
-                L10n.linkLensContinueAnytime,
-                "play.rectangle.fill",
-                URL(string: "https://www.bilibili.com/favicon.ico")
+                mediaDetail,
+                continueMeta,
+                "play.tv.fill",
+                URL(string: "https://www.bilibili.com/favicon.ico"),
+                NSColor(calibratedRed: 0.98, green: 0.39, blue: 0.60, alpha: 1)
             )
-        }
-        if normalized.hasSuffix("douyin.com") || normalized.hasSuffix("iesdouyin.com") {
+        case .douyin:
             return (
                 L10n.douyinName,
-                L10n.ytdlpRecognizedVideoLink,
-                L10n.linkLensContinueAnytime,
-                "play.rectangle.fill",
-                URL(string: "https://www.douyin.com/favicon.ico")
+                mediaDetail,
+                continueMeta,
+                "music.note",
+                URL(string: "https://www.douyin.com/favicon.ico"),
+                NSColor(calibratedRed: 0.15, green: 0.84, blue: 0.91, alpha: 1)
             )
-        }
-        if normalized == "xhslink.com" || normalized.hasSuffix("xiaohongshu.com") {
+        case .xiaohongshu:
             return (
                 L10n.xiaohongshuName,
-                L10n.ytdlpRecognizedVideoLink,
-                L10n.linkLensContinueAnytime,
-                "play.rectangle.fill",
-                URL(string: "https://www.xiaohongshu.com/favicon.ico")
+                mediaDetail,
+                continueMeta,
+                "bookmark.fill",
+                URL(string: "https://www.xiaohongshu.com/favicon.ico"),
+                NSColor(calibratedRed: 0.96, green: 0.15, blue: 0.20, alpha: 1)
             )
-        }
-        if normalized.hasSuffix("tiktok.com") {
+        case .tiktok:
             return (
                 "TikTok",
-                L10n.ytdlpRecognizedVideoLink,
-                L10n.linkLensContinueAnytime,
-                "play.rectangle.fill",
-                URL(string: "https://www.tiktok.com/favicon.ico")
+                mediaDetail,
+                continueMeta,
+                "music.note",
+                URL(string: "https://www.tiktok.com/favicon.ico"),
+                NSColor(calibratedRed: 0.08, green: 0.79, blue: 0.86, alpha: 1)
+            )
+        case .kuaishou:
+            return (
+                L10n.t("Kuaishou", "快手"), mediaDetail, continueMeta,
+                "camera.aperture",
+                URL(string: "https://www.kuaishou.com/favicon.ico"),
+                NSColor(calibratedRed: 1.00, green: 0.43, blue: 0.12, alpha: 1)
+            )
+        case .weibo:
+            return (
+                L10n.t("Weibo", "微博"), mediaDetail, continueMeta,
+                "dot.radiowaves.left.and.right",
+                URL(string: "https://weibo.com/favicon.ico"),
+                NSColor(calibratedRed: 0.98, green: 0.42, blue: 0.12, alpha: 1)
+            )
+        case .instagram:
+            return (
+                "Instagram", mediaDetail, continueMeta,
+                "camera.fill",
+                URL(string: "https://www.instagram.com/favicon.ico"),
+                NSColor(calibratedRed: 0.82, green: 0.17, blue: 0.55, alpha: 1)
+            )
+        case .x:
+            return (
+                "X", mediaDetail, continueMeta,
+                "bubble.left.and.bubble.right.fill", nil,
+                NSColor(calibratedWhite: 0.70, alpha: 1)
+            )
+        case .facebook:
+            return (
+                "Facebook", mediaDetail, continueMeta,
+                "person.2.fill",
+                URL(string: "https://www.facebook.com/favicon.ico"),
+                NSColor(calibratedRed: 0.12, green: 0.40, blue: 0.88, alpha: 1)
+            )
+        case .vimeo:
+            return (
+                "Vimeo", mediaDetail, continueMeta,
+                "play.circle.fill",
+                URL(string: "https://vimeo.com/favicon.ico"),
+                NSColor(calibratedRed: 0.15, green: 0.65, blue: 0.91, alpha: 1)
+            )
+        case .twitch:
+            return (
+                "Twitch", mediaDetail, continueMeta,
+                "message.fill",
+                URL(string: "https://www.twitch.tv/favicon.ico"),
+                NSColor(calibratedRed: 0.56, green: 0.33, blue: 0.93, alpha: 1)
+            )
+        case .dailymotion:
+            return (
+                "Dailymotion", mediaDetail, continueMeta,
+                "play.square.fill",
+                URL(string: "https://www.dailymotion.com/favicon.ico"),
+                NSColor(calibratedRed: 0.20, green: 0.48, blue: 0.96, alpha: 1)
+            )
+        case .web:
+            let favicon = URL(string: "\(url.scheme ?? "https")://\(host)/favicon.ico")
+            return (
+                normalized,
+                isDirectFile ? L10n.directFileLink : L10n.ytdlpRecognizedPageLink,
+                isDirectFile
+                    ? L10n.t("Checking file details…", "正在读取文件信息…")
+                    : L10n.t("Checking for downloads…", "正在查找可下载内容…"),
+                fallback,
+                favicon,
+                NDMChrome.accent
             )
         }
-        let favicon = URL(string: "\(url.scheme ?? "https")://\(host)/favicon.ico")
-        return (
-            normalized,
-            isDirectFile ? L10n.directFileLink : L10n.ytdlpRecognizedPageLink,
-            isDirectFile ? L10n.urlReadyToDownload : L10n.linkLensContinueAnytime,
-            fallback,
-            favicon
-        )
     }
 }
 
@@ -630,25 +1157,27 @@ private final class LinkLensView: NSView {
 private final class LinkLensCoverView: NSView {
     private var image: NSImage?
     private var isArtwork = false
+    private var accentColor = NDMChrome.accent
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = 11
         layer?.masksToBounds = true
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func setImage(_ image: NSImage?, isArtwork: Bool) {
+    func setImage(_ image: NSImage?, isArtwork: Bool, accentColor: NSColor? = nil) {
         self.image = image
         self.isArtwork = isArtwork
+        if let accentColor { self.accentColor = accentColor }
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let background = NDMChrome.accent.withAlphaComponent(0.09)
+        let background = accentColor.withAlphaComponent(0.11)
         background.setFill()
         bounds.fill()
         guard let image else { return }
@@ -666,7 +1195,7 @@ private final class LinkLensCoverView: NSView {
             )
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
         } else {
-            let side = min(38, min(bounds.width, bounds.height) * 0.52)
+            let side = min(46, min(bounds.width, bounds.height) * 0.56)
             let rect = NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.92)
         }
@@ -695,14 +1224,14 @@ enum ClipboardLinks {
         SharedLinkResolver.resolve(raw)
     }
 
-    static func firstDownloadableURL() -> String? {
+    static func firstDownloadableInput() -> String? {
         let pasteboard = NSPasteboard.general
         guard let raw = pasteboard.string(forType: .string)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-              let resolution = resolution(raw) else {
+              resolution(raw) != nil else {
             return nil
         }
-        return resolution.urlString
+        return raw
     }
 
     static func looksLikeDownloadURL(_ raw: String) -> Bool {

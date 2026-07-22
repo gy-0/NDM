@@ -3,7 +3,29 @@ import Foundation
 /// Release builds ship the media toolchain inside the app. PATH lookups remain
 /// only as a developer fallback; end users never need Homebrew or Terminal.
 enum BundledToolLocator {
+    static func bundledExecutable(named names: [String]) -> URL? {
+        let roots = bundledRoots()
+        guard let path = find(
+            names,
+            bundledRoots: roots,
+            developerFallbacks: [],
+            allowDeveloperFallbacks: false
+        ) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
     static func find(_ names: [String], developerFallbacks: [String] = []) -> String? {
+        let roots = bundledRoots()
+
+        return find(
+            names,
+            bundledRoots: roots,
+            developerFallbacks: developerFallbacks,
+            allowDeveloperFallbacks: developerFallbacksEnabled
+        )
+    }
+
+    private static func bundledRoots() -> [URL] {
         var roots: [URL] = []
 #if DEBUG
         if let override = ProcessInfo.processInfo.environment["NDM_TOOL_DIR"], !override.isEmpty {
@@ -17,13 +39,7 @@ enum BundledToolLocator {
             Bundle.main.bundleURL
                 .appendingPathComponent("Contents/Resources/Tools", isDirectory: true)
         )
-
-        return find(
-            names,
-            bundledRoots: roots,
-            developerFallbacks: developerFallbacks,
-            allowDeveloperFallbacks: developerFallbacksEnabled
-        )
+        return roots
     }
 
     /// Explicit roots make the release contract testable without depending on

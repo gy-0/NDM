@@ -79,8 +79,24 @@ public enum MediaToolchain {
     }
 
     private static func runVersion(path: String, arguments: [String]) -> (ready: Bool, version: String?) {
+        guard let probe = ToolVersionProbe.run(toolAt: URL(fileURLWithPath: path), arguments: arguments) else {
+            return (false, nil)
+        }
+        return (probe.exitStatus == 0, probe.firstLine)
+    }
+}
+
+/// Shared sandboxed `--version`-style probe. The pipe is drained to EOF before
+/// waiting for exit so a chatty tool can never deadlock against a full pipe buffer.
+enum ToolVersionProbe {
+    struct Result {
+        let exitStatus: Int32
+        let firstLine: String?
+    }
+
+    static func run(toolAt tool: URL, arguments: [String]) -> Result? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
+        process.executableURL = tool
         process.arguments = arguments
         process.environment = [
             "HOME": FileManager.default.temporaryDirectory.path,
@@ -93,16 +109,16 @@ public enum MediaToolchain {
         process.standardError = output
         do {
             try process.run()
-            process.waitUntilExit()
             let data = output.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8) ?? ""
-            let version = text
+            process.waitUntilExit()
+            let firstLine = String(data: data, encoding: .utf8)?
                 .split(whereSeparator: { $0.isNewline })
                 .map(String.init)
-                .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-            return (process.terminationStatus == 0, version)
+                .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Result(exitStatus: process.terminationStatus, firstLine: firstLine)
         } catch {
-            return (false, nil)
+            return nil
         }
     }
 }

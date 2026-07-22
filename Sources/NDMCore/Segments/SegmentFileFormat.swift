@@ -42,6 +42,28 @@ public struct SegmentRecord: Equatable, Sendable {
     }
 }
 
+/// A bounded tail-steal plan. The configured connection count remains the
+/// ceiling; `desiredConnections` is the number that still has enough work to
+/// repay cancellation, TCP/TLS setup, and a fresh Range request near the end.
+public struct TailRebalancePlan: Equatable, Sendable {
+    public var desiredConnections: Int
+    public var totalRemainingBytes: Int64
+    public var minimumUsefulBytesPerConnection: Int64
+    public var estimatedSecondsRemaining: Double?
+
+    public init(
+        desiredConnections: Int,
+        totalRemainingBytes: Int64,
+        minimumUsefulBytesPerConnection: Int64,
+        estimatedSecondsRemaining: Double?
+    ) {
+        self.desiredConnections = desiredConnections
+        self.totalRemainingBytes = totalRemainingBytes
+        self.minimumUsefulBytesPerConnection = minimumUsefulBytesPerConnection
+        self.estimatedSecondsRemaining = estimatedSecondsRemaining
+    }
+}
+
 public enum SegmentFileFormat {
     public static func parse(_ data: Data) throws -> [SegmentRecord] {
         guard data.count % SegmentRecord.recordSize == 0 else {
@@ -74,41 +96,197 @@ public enum SegmentFileFormat {
         return data
     }
 
-    /// Minimum remaining bytes worth spinning a new connection (behavioural stand-in for G01).
-    public static let minSegmentBytes: Int64 = 256 * 1024
+    /// First-party NDM 1.3 scheduling constants recovered from the owned 2021
+    /// binary. `FUN_10005e1e0` uses 0x3A000 bytes as the normal HTTP planning
+    /// quantum; `FUN_10005e2b4` only selects a parent whose remaining interval is
+    /// greater than 0x32000 bytes. The alternate mode uses 0x88000 / 0x80000.
+    /// Modern NDM keeps these as the hard behavioural floor, then adds a live
+    /// connection-payback guard before recycling workers near completion.
+    public static let originalHTTPPlanningQuantumBytes: Int64 = 0x3A000
+    public static let originalHTTPSplitThresholdBytes: Int64 = 0x32000
+    public static let originalAlternatePlanningQuantumBytes: Int64 = 0x88000
+    public static let originalAlternateSplitThresholdBytes: Int64 = 0x80000
 
-    /// Decide whether a static Range round has entered its straggler tail.
+    /// Compatibility name used by the Swift planner and persisted-plan tests.
+    public static let minSegmentBytes = originalHTTPPlanningQuantumBytes
+
+    /// Direct Swift port of the original normal-HTTP worker-capacity estimate in
+    /// `FUN_10005e1e0`: every unfinished range keeps one worker and earns another
+    /// worker for each complete 0x3A000-byte quantum, capped by NDM's 32 sockets.
+    public static func originalHTTPWorkerCapacity(
+        remainingRanges: [Int64]
+    ) -> Int {
+        var workers = 0
+        for remaining in remainingRanges where remaining > 0 {
+            let contribution = remaining / originalHTTPPlanningQuantumBytes + 1
+            let available = Int64(max(0, 32 - workers))
+            workers += Int(min(available, contribution))
+            if workers >= 32 { return 32 }
+        }
+        return workers
+    }
+
+    /// Validate the persisted linked range plan before any `seg.xN` file is
+    /// trusted. A malformed plan must never be treated as resumable: duplicate
+    /// ids can alias two logical ranges to one file, while gaps/overlaps silently
+    /// corrupt the merged output.
+    public static func isValidResumePlan(
+        _ records: [SegmentRecord],
+        totalBytes: Int64
+    ) -> Bool {
+        guard totalBytes > 0, !records.isEmpty else { return false }
+        guard Set(records.map(\.segmentId)).count == records.count,
+              records.allSatisfy({
+                  $0.segmentId >= 0
+                      && $0.start >= 0
+                      && $0.end >= $0.start
+                      && $0.end < totalBytes
+              }) else {
+            return false
+        }
+
+        let sorted = records.sorted { lhs, rhs in
+            lhs.start == rhs.start ? lhs.end < rhs.end : lhs.start < rhs.start
+        }
+        guard sorted.first?.start == 0,
+              sorted.last?.end == totalBytes - 1 else {
+            return false
+        }
+        for (index, segment) in sorted.enumerated() {
+            let expectedNext = index == sorted.count - 1
+                ? SegmentRecord.endOfList
+                : Int32(sorted[index + 1].segmentId)
+            guard segment.nextId == expectedNext else { return false }
+            if index > 0, sorted[index - 1].end + 1 != segment.start {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Decide how many workers a straggler tail can still use profitably.
     ///
     /// The original engine keeps recycling idle sockets into unfinished ranges.
     /// URLSession cannot safely shorten an in-flight response, so the clean-room
-    /// engine rebalances in bounded rounds instead: once a quarter of the worker
-    /// pool has gone idle, cancel the remaining requests, preserve every written
-    /// prefix, split the holes again, and refill the pool. The byte guards avoid
-    /// spending more time reconnecting than downloading near the true end.
+    /// engine rebalances in bounded rounds instead: after enough workers become
+    /// idle, cancel the remaining requests, preserve every written prefix, split
+    /// the holes again, and refill only workers that still have enough data to
+    /// repay a new connection. Large pools use the original-like 75% threshold;
+    /// small pools wait until half are idle. Aggregate throughput makes the final
+    /// decision speed-aware: a fast transfer with a second left simply finishes
+    /// instead of throwing away live sockets for another TCP/TLS round.
+    public static func tailRebalancePlan(
+        targetConnections: Int,
+        activeConnections: Int,
+        remainingBytesBySegment: [Int64],
+        bytesPerSecond: Double,
+        connectionSetupSeconds: Double = 0.75
+    ) -> TailRebalancePlan? {
+        let target = max(1, min(targetConnections, 32))
+        guard target > 1,
+              activeConnections > 0,
+              activeConnections < target else {
+            return nil
+        }
+
+        let positive = remainingBytesBySegment.filter { $0 > 0 }
+        guard !positive.isEmpty else { return nil }
+
+        // The original 32-worker engine starts stealing again around 24 active
+        // sockets. Cancelling a small 4-worker round after the first completion
+        // is disproportionately expensive, so pools below 16 wait until half
+        // their workers are idle before considering a new round.
+        let idleThreshold = max(
+            1,
+            target >= 16 ? target * 3 / 4 : target / 2
+        )
+        guard activeConnections <= idleThreshold else { return nil }
+
+        let totalRemaining = positive.reduce(Int64(0), +)
+        let largestRemaining = positive.max() ?? 0
+        let setupSeconds = max(0.1, connectionSetupSeconds)
+        let speed = max(0, bytesPerSecond)
+        let estimatedSeconds = speed > 0 ? Double(totalRemaining) / speed : nil
+
+        // Cancelling healthy requests and reconnecting cannot win if the whole
+        // tail is already expected to finish within roughly two setup cycles.
+        if let estimatedSeconds, estimatedSeconds <= setupSeconds * 2 {
+            return nil
+        }
+
+        // Without a stable speed sample, require at least 1 MiB per worker.
+        // This deliberately favors finishing the current tail over speculative
+        // reconnects during the first sub-second progress window.
+        let conservativeUnknownSpeedFloor = minSegmentBytes * 4
+        let perActiveConnectionSpeed = speed > 0
+            ? speed / Double(max(1, activeConnections))
+            : 0
+        let speedPaybackBytes = Int64(
+            min(
+                Double(Int64.max / 2),
+                ceil(perActiveConnectionSpeed * setupSeconds * 2)
+            )
+        )
+        let minimumUsefulBytes = max(
+            conservativeUnknownSpeedFloor,
+            speedPaybackBytes
+        )
+        guard minimumUsefulBytes > 0 else { return nil }
+
+        // Aggregate bytes alone are not enough to choose a worker count. For
+        // example, 40 MiB / 1.5 MiB suggests 26 workers, but repeatedly bisecting
+        // that one straggler would create 1.25 MiB leaves that cannot repay setup.
+        // Simulate the exact largest-range bisection used by `replanConnections`
+        // and add a worker only when both children remain independently useful.
+        guard positive.count <= target else { return nil }
+        var profitableRanges = positive
+        let minimumSplittableBytes = max(
+            minimumUsefulBytes * 2,
+            originalHTTPSplitThresholdBytes + 1
+        )
+        while profitableRanges.count < target {
+            guard let index = profitableRanges.indices
+                .filter({ profitableRanges[$0] >= minimumSplittableBytes })
+                .max(by: { profitableRanges[$0] < profitableRanges[$1] }) else {
+                break
+            }
+            let original = profitableRanges[index]
+            let left = original / 2
+            let right = original - left
+            guard left >= minimumUsefulBytes,
+                  right >= minimumUsefulBytes else {
+                break
+            }
+            profitableRanges[index] = left
+            profitableRanges.append(right)
+        }
+
+        let desired = profitableRanges.count
+        guard desired > activeConnections,
+              largestRemaining >= minimumSplittableBytes else {
+            return nil
+        }
+
+        return TailRebalancePlan(
+            desiredConnections: desired,
+            totalRemainingBytes: totalRemaining,
+            minimumUsefulBytesPerConnection: minimumUsefulBytes,
+            estimatedSecondsRemaining: estimatedSeconds
+        )
+    }
+
+    /// Compatibility helper for callers that do not yet have a speed sample.
     public static func shouldRebalanceTail(
         targetConnections: Int,
         activeConnections: Int,
         remainingBytesBySegment: [Int64]
     ) -> Bool {
-        let target = max(1, min(targetConnections, 32))
-        guard target > 1,
-              activeConnections > 0,
-              activeConnections < target else {
-            return false
-        }
-
-        let positive = remainingBytesBySegment.filter { $0 > 0 }
-        guard !positive.isEmpty else { return false }
-
-        // A 32-worker round rebalances at 24 active workers. Smaller pools use
-        // the same ratio, with at least one live worker left to steal from.
-        let idleThreshold = max(1, target * 3 / 4)
-        guard activeConnections <= idleThreshold else { return false }
-
-        let totalRemaining = positive.reduce(Int64(0), +)
-        let largestRemaining = positive.max() ?? 0
-        return totalRemaining >= minSegmentBytes * Int64(target)
-            && largestRemaining >= minSegmentBytes * 2
+        tailRebalancePlan(
+            targetConnections: targetConnections,
+            activeConnections: activeConnections,
+            remainingBytesBySegment: remainingBytesBySegment,
+            bytesPerSecond: 0
+        ) != nil
     }
 
     /// Split total file size into `connections` contiguous inclusive ranges (original starts with 1 then grows).
@@ -118,11 +296,10 @@ public enum SegmentFileFormat {
         if n == 1 {
             return [SegmentRecord(order: 0, segmentId: 0, nextId: SegmentRecord.endOfList, start: 0, end: totalBytes - 1)]
         }
-        // Cap connections by min segment size (dynamic split threshold).
-        var effective = n
-        while effective > 1, totalBytes / Int64(effective) < minSegmentBytes {
-            effective -= 1
-        }
+        let effective = min(
+            n,
+            max(1, originalHTTPWorkerCapacity(remainingRanges: [totalBytes]))
+        )
         let part = totalBytes / Int64(effective)
         var segs: [SegmentRecord] = []
         for i in 0..<effective {
@@ -166,7 +343,11 @@ public enum SegmentFileFormat {
         completedPrefixBytes: Int64
     ) -> [SegmentRecord] {
         guard totalBytes > 0 else { return [] }
-        let target = max(1, min(connections, 32, Int(totalBytes)))
+        let byteLimitedWorkers = max(
+            1,
+            originalHTTPWorkerCapacity(remainingRanges: [totalBytes])
+        )
+        let target = max(1, min(connections, 32, byteLimitedWorkers))
         guard target > 1 else {
             return planEqualSegments(totalBytes: totalBytes, connections: 1)
         }
@@ -237,10 +418,13 @@ public enum SegmentFileFormat {
             return finalizeLinksPreservingIDs(fixed)
         }
 
-        let remainingBytes = holes.reduce(Int64(0)) { $0 + $1.length }
+        let byteLimitedWorkers = max(
+            1,
+            originalHTTPWorkerCapacity(remainingRanges: holes.map(\.length))
+        )
         let targetHoles = max(
             holes.count,
-            min(requestedWorkers, Int(min(remainingBytes, Int64(Int.max))))
+            min(requestedWorkers, byteLimitedWorkers)
         )
         while holes.count < targetHoles {
             guard let index = holes.indices
@@ -278,6 +462,41 @@ public enum SegmentFileFormat {
         return finalizeLinksPreservingIDs(result)
     }
 
+    /// Roll an automatically-created upper-half child back into the adjacent
+    /// lower range from which it was split. This mirrors the owned original
+    /// engine's `Segment Rolled Back ... Merged To Segment` recovery without
+    /// touching any other successfully downloaded child ranges.
+    public static func rollbackTailSplit(
+        existing: [SegmentRecord],
+        failedSegmentID: Int16,
+        originalParent: SegmentRecord
+    ) -> (records: [SegmentRecord], survivorID: Int16)? {
+        var sorted = existing.sorted { lhs, rhs in
+            lhs.start == rhs.start ? lhs.end < rhs.end : lhs.start < rhs.start
+        }
+        guard let failedIndex = sorted.firstIndex(where: {
+            $0.segmentId == failedSegmentID
+        }), failedIndex > 0 else {
+            return nil
+        }
+
+        let failed = sorted[failedIndex]
+        let survivorIndex = failedIndex - 1
+        let survivor = sorted[survivorIndex]
+        guard failed.start >= originalParent.start,
+              failed.end <= originalParent.end,
+              survivor.start >= originalParent.start,
+              survivor.end < originalParent.end,
+              survivor.end + 1 == failed.start else {
+            return nil
+        }
+
+        sorted[survivorIndex].end = failed.end
+        let survivorID = survivor.segmentId
+        sorted.remove(at: failedIndex)
+        return (finalizeLinksPreservingIDs(sorted), survivorID)
+    }
+
     private static func finalizeLinksPreservingIDs(_ segs: [SegmentRecord]) -> [SegmentRecord] {
         var sorted = segs.sorted { $0.start < $1.start }
         for i in 0..<sorted.count {
@@ -299,14 +518,19 @@ public enum SegmentFileFormat {
 
     /// Bytes already on disk for a segment (0 if missing / unreadable).
     public static func existingByteCount(for segment: SegmentRecord, in workDirectory: URL) -> Int64 {
+        min(rawExistingByteCount(for: segment, in: workDirectory), segment.length)
+    }
+
+    /// Unclamped size is required when validating resume and merge inputs.
+    /// `existingByteCount` intentionally clamps for progress calculations, but
+    /// an oversized part is evidence of a server ignoring Range or stale data.
+    public static func rawExistingByteCount(for segment: SegmentRecord, in workDirectory: URL) -> Int64 {
         let url = segmentFileURL(id: segment.segmentId, in: workDirectory)
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? NSNumber else {
             return 0
         }
-        let n = size.int64Value
-        // Clamp: never claim more than the segment length
-        return min(max(0, n), segment.length)
+        return max(0, size.int64Value)
     }
 
     /// Inclusive Range still needed, or `nil` if the segment file is complete.

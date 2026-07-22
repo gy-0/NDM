@@ -11,6 +11,7 @@ final class ClipboardDownloadOfferTests: XCTestCase {
         XCTAssertEqual(offer.source, .douyin)
         XCTAssertTrue(offer.wasExtractedFromText)
         XCTAssertEqual(offer.urlString, "https://v.douyin.com/abc123/")
+        XCTAssertEqual(offer.inputText, raw)
     }
 
     func testExistingTaskSuppressesClipboardOffer() {

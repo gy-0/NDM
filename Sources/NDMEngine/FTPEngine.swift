@@ -12,6 +12,8 @@ public actor FTPEngine {
     private let ftpProxy: ProxySettings?
     private let token = CancelToken()
     private var logHandle: FileHandle?
+    private var activeControl: FTPControlConnection?
+    private var activeData: FTPDataConnection?
 
     public init(
         taskID: Int64,
@@ -34,6 +36,8 @@ public actor FTPEngine {
 
     public func cancel() {
         token.cancel()
+        activeControl?.close()
+        activeData?.close()
         progress.status = .incomplete
         log("FTP Download Canceled By User.")
     }
@@ -42,6 +46,7 @@ public actor FTPEngine {
 
     @discardableResult
     public func start() async throws -> URL {
+        guard !Task.isCancelled else { throw EngineError.cancelled }
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         token.reset()
         openLog()
@@ -57,11 +62,24 @@ public actor FTPEngine {
         let user = request.username ?? request.url.user ?? "anonymous"
         let pass = request.password ?? request.url.password ?? "ndm@localhost"
 
+        let proxy = ftpProxy.flatMap { candidate in
+            candidate.enabled && !candidate.host.isEmpty ? candidate : nil
+        }
         let control: FTPControlConnection
-        if let proxy = ftpProxy, proxy.enabled, !proxy.host.isEmpty {
+        if let proxy {
             log("FTP via HTTP proxy \(proxy.host):\(proxy.port)")
             control = FTPControlConnection(host: proxy.host, port: proxy.port)
-            try await control.connect()
+        } else {
+            control = FTPControlConnection(host: host, port: UInt16(port))
+        }
+        activeControl = control
+        defer {
+            control.close()
+            if activeControl === control { activeControl = nil }
+        }
+        try await control.connect()
+        try checkCancel()
+        if let proxy {
             // HTTP CONNECT tunnel to origin FTP host
             var connect = "CONNECT \(host):\(port) HTTP/1.1\r\nHost: \(host):\(port)\r\n"
             if let u = proxy.username, let p = proxy.password {
@@ -72,11 +90,7 @@ public actor FTPEngine {
             try await control.sendRaw(Data(connect.utf8))
             let tunnel = try await control.readHTTPStatus()
             guard tunnel == 200 else { throw FTPError.proxyConnectFailed(tunnel) }
-        } else {
-            control = FTPControlConnection(host: host, port: UInt16(port))
-            try await control.connect()
         }
-        defer { control.close() }
 
         _ = try await control.readReply() // 220 welcome
         try checkCancel()
@@ -135,8 +149,13 @@ public actor FTPEngine {
         }
 
         let dataConn = FTPDataConnection(host: endpoint.host, port: endpoint.port)
+        activeData = dataConn
+        defer {
+            dataConn.close()
+            if activeData === dataConn { activeData = nil }
+        }
         try await dataConn.connect()
-        defer { dataConn.close() }
+        try checkCancel()
 
         log("Sending FTP Command : RETR \(remotePath)")
         try await control.sendCommand("RETR \(remotePath)")
@@ -177,6 +196,7 @@ public actor FTPEngine {
                 progress.bytesPerSecond = Double(completed - resumeOffset) / elapsed
             }
         }
+        try checkCancel()
 
         // Drain final control reply (226 Transfer complete)
         if let final = try? await control.readReply(timeout: 5) {

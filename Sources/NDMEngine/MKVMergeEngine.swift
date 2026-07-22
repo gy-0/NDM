@@ -15,6 +15,8 @@ public actor MKVMergeEngine {
     private let socksProxy: SocksProxySettings?
     private let globalBandwidthLimit: Int64
     private let token = CancelToken()
+    private var activeVideoEngine: DownloadEngine?
+    private var activeAudioEngine: DownloadEngine?
 
     public init(
         taskID: Int64,
@@ -40,10 +42,18 @@ public actor MKVMergeEngine {
         progress.status = .paused
     }
 
+    public func cancel() async {
+        token.cancel()
+        progress.status = .incomplete
+        await activeVideoEngine?.cancel()
+        await activeAudioEngine?.cancel()
+    }
+
     public func currentProgress() -> DownloadProgress { progress }
 
     @discardableResult
     public func start() async throws -> URL {
+        guard !Task.isCancelled else { throw EngineError.cancelled }
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         token.reset()
         progress.status = .downloading
@@ -76,6 +86,12 @@ public actor MKVMergeEngine {
             socksProxy: socksProxy,
             globalBandwidthLimit: globalBandwidthLimit
         )
+        activeVideoEngine = videoEngine
+        activeAudioEngine = audioEngine
+        defer {
+            activeVideoEngine = nil
+            activeAudioEngine = nil
+        }
 
         async let videoURL = videoEngine.start()
         async let audioURL = audioEngine.start()
@@ -107,9 +123,11 @@ public actor MKVMergeEngine {
         } catch {
             poll.cancel()
             if token.isPaused { throw EngineError.paused }
+            if token.isCancelled || Task.isCancelled { throw EngineError.cancelled }
             throw error
         }
         poll.cancel()
+        if token.isCancelled || Task.isCancelled { throw EngineError.cancelled }
 
         try FileManager.default.createDirectory(
             at: videoRequest.destinationDirectory,

@@ -7,13 +7,23 @@ public struct YtDlpFormat: Equatable, Sendable {
     public var id: String
     /// Display label like `1080p` / `Best`.
     public var label: String
-    /// Pixel height tier (0 = unknown / best).
+    /// User-facing quality tier (0 = unknown / best). This normally matches
+    /// pixel height, but cropped cinema video may be 3840x1920 in the 2160p tier.
     public var height: Int
     /// Rough total bytes (video + audio) when yt-dlp reports sizes.
     public var approximateBytes: Int64?
     /// Per-stream estimates in download order. Keeping video/audio separate lets
     /// the host replace estimates with real totals without a late 100% jump.
     public var componentBytes: [Int64]
+    /// Matching estimate for the space-efficient AV1 / VP9 path. Keeping the
+    /// two estimates separate prevents the picker from showing an H.264 size
+    /// while the eventual MKV download selects a different stream.
+    public var compactApproximateBytes: Int64?
+    public var compactComponentBytes: [Int64]
+    /// Exact selectors resolved during a single-video probe. These keep the
+    /// eventual download aligned with the row's quality and size estimate.
+    public var compatibleSelectorOverride: String?
+    public var compactSelectorOverride: String?
     /// Short container hint for UI (`MP4`).
     public var containerHint: String
     public var isVideo: Bool
@@ -24,6 +34,10 @@ public struct YtDlpFormat: Equatable, Sendable {
         height: Int = 0,
         approximateBytes: Int64? = nil,
         componentBytes: [Int64] = [],
+        compactApproximateBytes: Int64? = nil,
+        compactComponentBytes: [Int64] = [],
+        compatibleSelectorOverride: String? = nil,
+        compactSelectorOverride: String? = nil,
         containerHint: String = "MP4",
         isVideo: Bool = true
     ) {
@@ -32,6 +46,10 @@ public struct YtDlpFormat: Equatable, Sendable {
         self.height = height
         self.approximateBytes = approximateBytes
         self.componentBytes = componentBytes
+        self.compactApproximateBytes = compactApproximateBytes
+        self.compactComponentBytes = compactComponentBytes
+        self.compatibleSelectorOverride = compatibleSelectorOverride
+        self.compactSelectorOverride = compactSelectorOverride
         self.containerHint = containerHint
         self.isVideo = isVideo
     }
@@ -40,15 +58,49 @@ public struct YtDlpFormat: Equatable, Sendable {
     public var note: String { containerHint }
 
     public var sizeText: String? {
-        guard let approximateBytes, approximateBytes > 0 else { return nil }
-        return "≈ " + TaskPresentationFormatting.byteCount(approximateBytes)
+        sizeText(for: .compatibleMP4)
+    }
+
+    public func estimatedBytes(for preference: YtDlpContainerPreference) -> Int64? {
+        switch preference {
+        case .compatibleMP4:
+            return approximateBytes
+        case .compactMKV:
+            return compactApproximateBytes ?? approximateBytes
+        }
+    }
+
+    public func estimatedComponentBytes(for preference: YtDlpContainerPreference) -> [Int64] {
+        switch preference {
+        case .compatibleMP4:
+            return componentBytes
+        case .compactMKV:
+            return compactComponentBytes.isEmpty ? componentBytes : compactComponentBytes
+        }
+    }
+
+    public func sizeText(for preference: YtDlpContainerPreference) -> String? {
+        guard let bytes = estimatedBytes(for: preference), bytes > 0 else { return nil }
+        return "≈ " + TaskPresentationFormatting.byteCount(bytes)
     }
 
     public func selector(for preference: YtDlpContainerPreference) -> String {
+        switch preference {
+        case .compatibleMP4:
+            if let compatibleSelectorOverride { return compatibleSelectorOverride }
+        case .compactMKV:
+            if let compactSelectorOverride { return compactSelectorOverride }
+        }
+        return collectionSelector(for: preference)
+    }
+
+    /// Collection entries do not necessarily share yt-dlp format IDs, so a
+    /// portable height-bounded selector is required instead of probe overrides.
+    public func collectionSelector(for preference: YtDlpContainerPreference) -> String {
         let limit = height > 0 ? "[height<=\(height)]" : ""
         switch preference {
         case .compatibleMP4:
-            return "bestvideo\(limit)[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best\(limit)[ext=mp4]/\(id)"
+            return "bestvideo\(limit)[ext=mp4]+bestaudio[acodec^=mp4a]/bestvideo\(limit)+bestaudio/best\(limit)[ext=mp4]/\(id)"
         case .compactMKV:
             return "bestvideo\(limit)[vcodec^=av01]+bestaudio/bestvideo\(limit)[vcodec^=vp9]+bestaudio/\(id)"
         }
@@ -68,6 +120,13 @@ public enum YtDlpContainerPreference: String, Codable, Sendable, Equatable {
 public enum YtDlpCookieSource: Codable, Sendable, Equatable {
     case browser(String)
     case file(String)
+}
+
+/// Product-facing classification for failures that can be recovered by
+/// continuing from a browser. Raw resolver output never needs to reach UI.
+public enum YtDlpAccessIssue: Equatable, Sendable {
+    case browserSessionRequired
+    case browserDataUnavailable
 }
 
 public struct YtDlpSubtitleTrack: Codable, Sendable, Equatable {
@@ -169,7 +228,19 @@ public struct YtDlpProbe: Equatable, Sendable {
 }
 
 public enum YtDlpTool {
+    /// Must match the support root the site-compatibility updater installs
+    /// into. The app sets this once at launch (QA previews use an isolated
+    /// root); the default covers tests and headless tools.
+    public static var siteCompatibilitySupportRoot: URL = DownloadStore.defaultSupportDirectory
+
     public static func find() -> String? {
+        if let configuration = SiteCompatibilityConfiguration.fromBundle(),
+           let refreshed = SiteCompatibilityToolStore.activeTool(
+            configuration: configuration,
+            supportRoot: siteCompatibilitySupportRoot
+           ) {
+            return refreshed.url.path
+        }
         if let bundled = BundledToolLocator.find(
             ["yt-dlp", "yt-dlp_macos"],
             developerFallbacks: [
@@ -187,9 +258,9 @@ public enum YtDlpTool {
         proc.standardOutput = out
         proc.standardError = Pipe()
         try? proc.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         guard proc.terminationStatus == 0 else { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
         let path = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return path.isEmpty ? nil : path
@@ -383,7 +454,7 @@ public enum YtDlpTool {
         let automatic = (json["automatic_captions"] as? [String: Any]) ?? [:]
         let codes = Set(manual.keys).union(automatic.keys)
         let locale = Locale.current
-        return codes.map { code in
+        let tracks = codes.map { code in
             let base = code.split(separator: "-").first.map(String.init) ?? code
             let localized = locale.localizedString(forLanguageCode: base) ?? code
             return YtDlpSubtitleTrack(
@@ -392,14 +463,59 @@ public enum YtDlpTool {
                 isAutomatic: manual[code] == nil
             )
         }
-        .sorted { a, b in
-            let preferred = Locale.preferredLanguages.first?.split(separator: "-").first.map(String.init)
-            let aPreferred = preferred.map { a.code.hasPrefix($0) } ?? false
-            let bPreferred = preferred.map { b.code.hasPrefix($0) } ?? false
-            if aPreferred != bPreferred { return aPreferred }
+        return tracks.sorted { a, b in
+            let aRank = subtitlePreferenceRank(code: a.code, preferredLanguages: Locale.preferredLanguages)
+            let bRank = subtitlePreferenceRank(code: b.code, preferredLanguages: Locale.preferredLanguages)
+            if aRank != bRank { return aRank < bRank }
             if a.isAutomatic != b.isAutomatic { return !a.isAutomatic }
             return a.displayName.localizedStandardCompare(b.displayName) == .orderedAscending
         }
+    }
+
+    /// Pick a sensible first-use language without silently enabling subtitles.
+    /// Exact system-language matches win, followed by the same base language,
+    /// then English. An uncommon alphabetical first item must never become the
+    /// apparent default merely because yt-dlp returned an unordered dictionary.
+    public static func preferredSubtitleIndex(
+        in tracks: [YtDlpSubtitleTrack],
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> Int? {
+        guard let index = tracks.indices.min(by: { lhs, rhs in
+            let left = subtitlePreferenceRank(
+                code: tracks[lhs].code,
+                preferredLanguages: preferredLanguages
+            )
+            let right = subtitlePreferenceRank(
+                code: tracks[rhs].code,
+                preferredLanguages: preferredLanguages
+            )
+            if left != right { return left < right }
+            if tracks[lhs].isAutomatic != tracks[rhs].isAutomatic {
+                return !tracks[lhs].isAutomatic
+            }
+            return tracks[lhs].displayName.localizedStandardCompare(tracks[rhs].displayName) == .orderedAscending
+        }) else { return nil }
+        return subtitlePreferenceRank(
+            code: tracks[index].code,
+            preferredLanguages: preferredLanguages
+        ) < 20_000 ? index : nil
+    }
+
+    private static func subtitlePreferenceRank(
+        code: String,
+        preferredLanguages: [String]
+    ) -> Int {
+        let normalized = code.replacingOccurrences(of: "_", with: "-").lowercased()
+        let base = normalized.split(separator: "-").first.map(String.init) ?? normalized
+        for (index, rawPreference) in preferredLanguages.enumerated() {
+            let preference = rawPreference.replacingOccurrences(of: "_", with: "-").lowercased()
+            let preferredBase = preference.split(separator: "-").first.map(String.init) ?? preference
+            if normalized == preference { return index * 4 }
+            if base == preferredBase { return index * 4 + 1 }
+        }
+        if base == "en" { return 10_000 }
+        if base == "zh" { return 10_001 }
+        return 20_000
     }
 
     private static func pickThumbnailURL(from json: [String: Any]) -> String? {
@@ -422,13 +538,51 @@ public enum YtDlpTool {
         try await probe(url: url).formats
     }
 
+    public static func accessIssue(error: Error) -> YtDlpAccessIssue? {
+        accessIssue(in: error.localizedDescription)
+    }
+
+    static func accessIssue(in rawOutput: String) -> YtDlpAccessIssue? {
+        let text = rawOutput.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        let browserDataMarkers = [
+            "could not copy", "cookie database", "cookies could not be loaded",
+            "failed to decrypt", "permission denied", "database is locked",
+            "keyring", "keychain", "dpapi", "secretstorage",
+        ]
+        if text.contains("cookie"), browserDataMarkers.contains(where: text.contains) {
+            return .browserDataUnavailable
+        }
+
+        let sessionMarkers = [
+            "fresh cookies", "cookies are needed", "cookies-from-browser",
+            "sign in to confirm", "sign in to view", "sign in required",
+            "login required", "log in to", "authentication required",
+            "account required", "confirm your age", "age-restricted",
+            "age restricted", "only available to registered users",
+            "members-only", "members only", "premium-only", "premium only",
+            "subscriber-only", "subscriber only", "this video is private",
+            "private video", "not available in your country",
+            "not available in your region", "geo-restricted", "geo restricted",
+            // Major supported sites frequently return localized access text.
+            "请登录", "需要登录", "登录后", "账号登录", "仅限会员",
+            "会员专享", "私密视频", "年龄限制", "地区限制", "所在地区不可用",
+            "ログイン", "サインイン", "非公開", "メンバー限定", "年齢制限",
+            "로그인", "비공개", "회원 전용", "연령 제한",
+            "inicia sesión", "iniciar sesión", "vídeo privado",
+            "connexion requise", "connectez-vous", "vidéo privée",
+            "anmelden", "privates video",
+        ]
+        if sessionMarkers.contains(where: text.contains) {
+            return .browserSessionRequired
+        }
+        return nil
+    }
+
     public static func requiresCookies(error: Error) -> Bool {
-        let text = error.localizedDescription.lowercased()
-        return text.contains("fresh cookies")
-            || text.contains("cookies are needed")
-            || text.contains("cookies-from-browser")
-            || text.contains("sign in to confirm")
-            || text.contains("login required")
+        accessIssue(error: error) != nil
     }
 
     static func cookieArguments(_ source: YtDlpCookieSource?) -> [String] {
@@ -450,24 +604,32 @@ public enum YtDlpTool {
         for fmt in formats {
             let vcodec = (fmt["vcodec"] as? String) ?? "none"
             guard vcodec != "none" else { continue }
-            if let h = fmt["height"] as? Int, h > 0 { heights.insert(h) }
+            let h = qualityHeight(of: fmt)
+            if h > 0 { heights.insert(h) }
         }
 
         let ladder = [2160, 1440, 1080, 720, 480, 360, 240]
-        var picked: [Int] = []
-        for h in ladder where heights.contains(where: { $0 >= h }) {
-            if heights.contains(h) || heights.contains(where: { $0 > h }) {
-                if !picked.contains(h) { picked.append(h) }
-            }
-            if picked.count >= 4 { break }
-        }
+        var picked = ladder.filter(heights.contains)
         if picked.isEmpty {
             picked = Array(heights.sorted(by: >).prefix(4))
+        } else if picked.count < 4 {
+            for height in heights.sorted(by: >) where !picked.contains(height) {
+                picked.append(height)
+                if picked.count == 4 { break }
+            }
+            picked.sort(by: >)
         }
         if picked.isEmpty {
-            let video = bestVideo(in: formats, maxHeight: nil)
-            let audio = needsSeparateAudio(video) ? bestAudio(in: formats) : nil
+            let video = bestCompatibleVideo(in: formats, maxHeight: nil)
+            let audio = needsSeparateAudio(video) ? bestCompatibleAudio(in: formats) : nil
             let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
+            let compactVideo = bestCompactVideo(in: formats, maxHeight: nil)
+            let compactAudio = needsSeparateAudio(compactVideo) ? bestAudio(in: formats) : nil
+            let compactComponents = estimateComponentBytes(
+                video: compactVideo,
+                audio: compactAudio,
+                duration: duration
+            )
             return [
                 YtDlpFormat(
                     id: "bv*+ba/b",
@@ -475,6 +637,8 @@ public enum YtDlpTool {
                     height: 0,
                     approximateBytes: components.isEmpty ? nil : components.reduce(0, +),
                     componentBytes: components,
+                    compactApproximateBytes: compactComponents.isEmpty ? nil : compactComponents.reduce(0, +),
+                    compactComponentBytes: compactComponents,
                     containerHint: "MP4",
                     isVideo: true
                 ),
@@ -482,10 +646,19 @@ public enum YtDlpTool {
         }
 
         return picked.map { h in
-            let video = bestVideo(in: formats, maxHeight: h)
-            let audio = needsSeparateAudio(video) ? bestAudio(in: formats) : nil
+            let video = bestCompatibleVideo(in: formats, maxHeight: h)
+            let audio = needsSeparateAudio(video) ? bestCompatibleAudio(in: formats) : nil
             let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
             let bytes = components.isEmpty ? nil : components.reduce(0, +)
+            let compactVideo = bestCompactVideo(in: formats, maxHeight: h)
+            let compactAudio = needsSeparateAudio(compactVideo) ? bestAudio(in: formats) : nil
+            let compactComponents = estimateComponentBytes(
+                video: compactVideo,
+                audio: compactAudio,
+                duration: duration
+            )
+            let compatibleSelector = exactSelector(video: video, audio: audio)
+            let compactSelector = exactSelector(video: compactVideo, audio: compactAudio)
             let id = "bestvideo[height<=\(h)]+bestaudio/best[height<=\(h)]/best"
             return YtDlpFormat(
                 id: id,
@@ -493,18 +666,103 @@ public enum YtDlpTool {
                 height: h,
                 approximateBytes: bytes,
                 componentBytes: components,
+                compactApproximateBytes: compactComponents.isEmpty ? nil : compactComponents.reduce(0, +),
+                compactComponentBytes: compactComponents,
+                compatibleSelectorOverride: compatibleSelector,
+                compactSelectorOverride: compactSelector,
                 containerHint: "MP4",
                 isVideo: true
             )
         }
     }
 
-    private static func bestVideo(in formats: [[String: Any]], maxHeight: Int?) -> [String: Any]? {
+    private static func bestCompatibleVideo(
+        in formats: [[String: Any]],
+        maxHeight: Int?
+    ) -> [String: Any]? {
+        let topTier = formatsAtBestQuality(in: formats, maxHeight: maxHeight)
+        return bestVideo(in: topTier, maxHeight: nil, codecPrefixes: ["avc1"])
+            ?? bestVideo(in: topTier, maxHeight: nil, extensions: ["mp4"])
+            ?? bestVideo(in: topTier, maxHeight: nil)
+    }
+
+    private static func bestCompactVideo(
+        in formats: [[String: Any]],
+        maxHeight: Int?
+    ) -> [String: Any]? {
+        let topTier = formatsAtBestQuality(in: formats, maxHeight: maxHeight)
+        return bestVideo(in: topTier, maxHeight: nil, codecPrefixes: ["av01"])
+            ?? bestVideo(in: topTier, maxHeight: nil, codecPrefixes: ["vp9", "vp09"])
+            ?? bestVideo(in: topTier, maxHeight: nil)
+    }
+
+    private static func formatsAtBestQuality(
+        in formats: [[String: Any]],
+        maxHeight: Int?
+    ) -> [[String: Any]] {
+        let candidates = formats.filter { format in
+            let vcodec = (format["vcodec"] as? String) ?? "none"
+            guard vcodec != "none" else { return false }
+            let height = qualityHeight(of: format)
+            guard height > 0 else { return false }
+            return maxHeight.map { height <= $0 } ?? true
+        }
+        guard let bestHeight = candidates.map(qualityHeight(of:)).max() else { return [] }
+        return candidates.filter { qualityHeight(of: $0) == bestHeight }
+    }
+
+    /// YouTube and other platforms name cinematic/cropped streams by their
+    /// standard quality tier. For example 3840x1920 is still the 2160p tier.
+    /// Falling back to the physical height keeps generic sites working.
+    private static func qualityHeight(of format: [String: Any]) -> Int {
+        if let note = format["format_note"] as? String,
+           let match = note.range(of: #"\b\d{3,4}p"#, options: .regularExpression) {
+            let digits = note[match].dropLast()
+            if let tier = Int(digits), tier > 0 { return tier }
+        }
+        return format["height"] as? Int ?? 0
+    }
+
+    private static func exactSelector(
+        video: [String: Any]?,
+        audio: [String: Any]?
+    ) -> String? {
+        guard let video,
+              let videoID = video["format_id"] as? String,
+              !videoID.isEmpty else { return nil }
+        guard needsSeparateAudio(video) else { return videoID }
+        guard let audioID = audio?["format_id"] as? String,
+              !audioID.isEmpty else { return videoID }
+        return "\(videoID)+\(audioID)"
+    }
+
+    private static func bestCompatibleAudio(in formats: [[String: Any]]) -> [String: Any]? {
+        let mp4Audio = formats.filter {
+            let vcodec = ($0["vcodec"] as? String) ?? "none"
+            let acodec = ($0["acodec"] as? String) ?? "none"
+            return vcodec == "none" && acodec.hasPrefix("mp4a")
+        }
+        return mp4Audio.isEmpty ? bestAudio(in: formats) : bestAudio(in: mp4Audio)
+    }
+
+    private static func bestVideo(
+        in formats: [[String: Any]],
+        maxHeight: Int?,
+        codecPrefixes: [String] = [],
+        extensions: [String] = []
+    ) -> [String: Any]? {
         let candidates = formats.filter { fmt in
             let vcodec = (fmt["vcodec"] as? String) ?? "none"
             guard vcodec != "none" else { return false }
-            guard let h = fmt["height"] as? Int, h > 0 else { return false }
-            if let maxHeight { return h <= maxHeight }
+            let h = qualityHeight(of: fmt)
+            guard h > 0 else { return false }
+            if let maxHeight, h > maxHeight { return false }
+            if !codecPrefixes.isEmpty,
+               !codecPrefixes.contains(where: vcodec.hasPrefix) { return false }
+            if !extensions.isEmpty {
+                let ext = (fmt["ext"] as? String) ?? ""
+                if !extensions.contains(ext) { return false }
+            }
             return true
         }
         // A `bestvideo+bestaudio/best` selector prefers video-only streams.
@@ -788,10 +1046,13 @@ public enum YtDlpTool {
             args.append(contentsOf: ["--concurrent-fragments", "\(n)"])
             // For ordinary HTTP media, aria2c supplies real range connections.
             if let aria2cPath {
+                // aria2c hard-caps --max-connection-per-server at 16 and exits
+                // with code 28 for anything higher, before downloading a byte.
+                let a = min(n, 16)
                 args.append(contentsOf: [
                     "--downloader", aria2cPath,
                     "--downloader-args",
-                    "aria2c:-x\(n) -s\(n) -k1M --file-allocation=none --summary-interval=1 --console-log-level=warn",
+                    "aria2c:-x\(a) -s\(a) -k1M --file-allocation=none --summary-interval=1 --console-log-level=warn",
                 ])
             }
         }
@@ -806,8 +1067,18 @@ public enum YtDlpTool {
             .replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty { return "video" }
-        if cleaned.count > 120 { return String(cleaned.prefix(120)) }
-        return cleaned
+        // APFS caps filenames at 255 UTF-8 bytes; CJK titles reach that long
+        // before 120 characters (120 × 3 bytes ≈ 360). Cap by bytes, leaving
+        // headroom for quality suffixes and the extension.
+        var stemOut = ""
+        var usedBytes = 0
+        for character in cleaned {
+            let width = String(character).utf8.count
+            if usedBytes + width > 180 || stemOut.count >= 120 { break }
+            stemOut.append(character)
+            usedBytes += width
+        }
+        return stemOut.isEmpty ? "video" : stemOut
     }
 
     /// Parse yt-dlp progress-template lines or classic `[download] xx% …` output.
@@ -1124,8 +1395,17 @@ public enum YtDlpTool {
                         return
                     }
                     if proc.terminationStatus != 0 {
-                        let msg = stderr.split(separator: "\n").last.map(String.init)
-                            ?? stdout.split(separator: "\n").last.map(String.init)
+                        let stderrLines = stderr.split(separator: "\n").map(String.init)
+                        let stdoutLines = stdout.split(separator: "\n").map(String.init)
+                        // Access guidance is often followed by a generic final
+                        // "unable to download" line. Preserve the actionable line
+                        // so browser handoff classification remains reliable.
+                        let accessLine = stderrLines.reversed().first {
+                            accessIssue(in: $0) != nil
+                        }
+                        let msg = accessLine
+                            ?? stderrLines.last
+                            ?? stdoutLines.last
                             ?? "yt-dlp failed"
                         cont.resume(throwing: EngineError.mergeFailed(msg))
                     } else {

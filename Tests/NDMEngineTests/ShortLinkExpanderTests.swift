@@ -1,13 +1,24 @@
 import XCTest
+@testable import NDMCore
 @testable import NDMEngine
 
 final class ShortLinkExpanderTests: XCTestCase {
+    /// The resolver's ranking list and the expander's allowlist describe the
+    /// same product capability; if one gains a host the other must too, or
+    /// short links from that host silently skip expansion.
+    func testShortLinkHostsStayInLockstepWithResolver() {
+        XCTAssertEqual(SharedLinkResolver.shortLinkHosts, ShortLinkExpander.exactHosts)
+    }
+
     func testRecognizesKnownShortLinkHosts() {
         XCTAssertTrue(ShortLinkExpander.shouldExpand("https://v.douyin.com/abc/"))
         XCTAssertTrue(ShortLinkExpander.shouldExpand("https://xhslink.com/a/abc"))
         XCTAssertTrue(ShortLinkExpander.shouldExpand("https://b23.tv/abc"))
         XCTAssertTrue(ShortLinkExpander.shouldExpand("https://youtu.be/abc"))
         XCTAssertTrue(ShortLinkExpander.shouldExpand("https://vm.tiktok.com/abc"))
+        XCTAssertTrue(ShortLinkExpander.shouldExpand("https://v.kuaishou.com/abc"))
+        XCTAssertTrue(ShortLinkExpander.shouldExpand("https://fb.watch/abc"))
+        XCTAssertTrue(ShortLinkExpander.shouldExpand("https://dai.ly/abc"))
     }
 
     func testLeavesFullAndDirectURLsAlone() {

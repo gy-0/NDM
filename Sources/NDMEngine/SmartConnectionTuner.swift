@@ -36,6 +36,27 @@ public enum SmartConnectionTuner {
     /// A doubling must deliver at least this much to count as a win.
     public static let minGain = 1.25
 
+    /// Conservative setup estimate from recent response-header latencies.
+    ///
+    /// Tail stealing pays for a fresh TCP/TLS/proxy round. A fixed desktop-LAN
+    /// constant makes the final seconds worse on slow origins, while the 75th
+    /// percentile follows the slower useful samples without allowing one
+    /// extreme timeout to dominate every later decision.
+    public static func connectionSetupSeconds(
+        samples: [Double],
+        fallback: Double = 0.75
+    ) -> Double {
+        let valid = samples
+            .filter { $0.isFinite && $0 > 0 }
+            .map { min(10, max(0.05, $0)) }
+            .sorted()
+        guard !valid.isEmpty else {
+            return min(10, max(0.1, fallback))
+        }
+        let rank = max(1, Int(ceil(Double(valid.count) * 0.75)))
+        return valid[min(valid.count - 1, rank - 1)]
+    }
+
     /// The next connection count to try, or nil when probing should stop
     /// (cap reached, or the last doubling didn't pay off).
     public static func nextConnections(cap: Int, steps: [ConnectionTuning.Step]) -> Int? {

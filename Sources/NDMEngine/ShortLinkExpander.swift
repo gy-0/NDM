@@ -20,13 +20,18 @@ public struct ExpandedShortLink: Equatable, Sendable {
 public enum ShortLinkExpander {
     typealias RequestResolver = @Sendable (URLRequest) async throws -> URL?
 
-    private static let exactHosts: Set<String> = [
+    /// Internal for the cross-module test that keeps this list in lockstep
+    /// with `SharedLinkResolver.shortLinkHosts`.
+    static let exactHosts: Set<String> = [
         "b23.tv",
         "youtu.be",
         "v.douyin.com",
         "xhslink.com",
         "vm.tiktok.com",
         "vt.tiktok.com",
+        "v.kuaishou.com",
+        "fb.watch",
+        "dai.ly",
     ]
 
     public static func shouldExpand(_ raw: String) -> Bool {

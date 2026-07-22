@@ -5,12 +5,13 @@ import NDMCore
 /// outcome (or explicitly opens it from the menu), and leads with that outcome
 /// instead of a dense, generic feature comparison.
 @MainActor
-final class UpgradeWindowController: NSWindowController {
+final class UpgradeWindowController: NSWindowController, NSWindowDelegate {
     private static var active: UpgradeWindowController?
 
     private let features: [ProFeature]
     private let purchaseURL: URL?
     var onActivated: (() -> Void)?
+    private var isDismissing = false
 
     private var primaryFeature: ProFeature? { features.first }
 
@@ -44,7 +45,7 @@ final class UpgradeWindowController: NSWindowController {
         self.features = features
         self.purchaseURL = PurchaseConfiguration.purchaseURL()
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 450),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: true
@@ -53,14 +54,8 @@ final class UpgradeWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         NDMChrome.applySheetChrome(window)
         super.init(window: window)
+        window.delegate = self
         buildUI()
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in Self.active = nil }
-        }
     }
 
     @available(*, unavailable)
@@ -72,49 +67,64 @@ final class UpgradeWindowController: NSWindowController {
         let contextCard = makeContextCard()
         let benefits = makeBenefitsCard()
 
-        let ctaTitle: String
+        let cancel = NSButton(title: L10n.proNotNow, target: self, action: #selector(cancelClicked))
+        NDMChrome.styleGhostButton(cancel)
+        cancel.keyEquivalent = "\u{1b}"
+
+        let primary: NSButton
         if purchaseURL == nil {
-            ctaTitle = L10n.proPurchaseUnavailableCTA
+            primary = NSButton(
+                title: L10n.proEnterLicense,
+                target: self,
+                action: #selector(enterLicenseClicked)
+            )
         } else {
-            ctaTitle = "\(L10n.proPurchaseCTA) · \(L10n.proProPrice)"
+            primary = NSButton(
+                title: "\(L10n.proPurchaseCTA) · \(L10n.proProPrice)",
+                target: self,
+                action: #selector(purchaseClicked)
+            )
         }
-        let cta = NSButton(title: ctaTitle, target: self, action: #selector(purchaseClicked))
-        NDMChrome.styleMainButton(cta)
-        cta.controlSize = .large
-        cta.keyEquivalent = purchaseURL == nil ? "" : "\r"
-        cta.isEnabled = purchaseURL != nil
+        NDMChrome.styleMainButton(primary)
+        primary.controlSize = .large
+        primary.keyEquivalent = "\r"
+
+        var footerViews: [NSView] = [cancel]
+        if purchaseURL != nil {
+            let enterLicense = NSButton(
+                title: L10n.proEnterLicense,
+                target: self,
+                action: #selector(enterLicenseClicked)
+            )
+            enterLicense.isBordered = false
+            enterLicense.font = .systemFont(ofSize: 12, weight: .medium)
+            enterLicense.contentTintColor = NDMChrome.accent
+            footerViews.append(enterLicense)
+        }
+        footerViews.append(NSView())
+        footerViews.append(makeFinePrint())
+        let footer = NSStackView(views: footerViews)
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 10
 
         let purchaseNote = NSTextField(
             wrappingLabelWithString: purchaseURL == nil
                 ? L10n.proPurchaseUnavailableBody
                 : L10n.proSubline
         )
-        purchaseNote.font = .systemFont(ofSize: 10.5)
+        purchaseNote.font = .systemFont(ofSize: 12)
         purchaseNote.textColor = .secondaryLabelColor
         purchaseNote.alignment = .center
         purchaseNote.maximumNumberOfLines = 2
 
-        let enterLicense = NSButton(
-            title: L10n.proEnterLicense,
-            target: self,
-            action: #selector(enterLicenseClicked)
-        )
-        enterLicense.isBordered = false
-        enterLicense.font = .systemFont(ofSize: 12, weight: .medium)
-        enterLicense.contentTintColor = NDMChrome.accent
-
-        let footer = NSStackView(views: [enterLicense, NSView(), makeFinePrint()])
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.spacing = 10
-
-        let stack = NSStackView(views: [contextCard, benefits, cta, purchaseNote, footer])
+        let stack = NSStackView(views: [contextCard, benefits, primary, purchaseNote, footer])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(14, after: contextCard)
         stack.setCustomSpacing(16, after: benefits)
-        stack.setCustomSpacing(5, after: cta)
+        stack.setCustomSpacing(5, after: primary)
         stack.setCustomSpacing(8, after: purchaseNote)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
@@ -125,10 +135,11 @@ final class UpgradeWindowController: NSWindowController {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
             contextCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             benefits.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            benefits.heightAnchor.constraint(equalToConstant: 144),
-            cta.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            cta.heightAnchor.constraint(equalToConstant: 38),
+            benefits.heightAnchor.constraint(equalToConstant: 152),
+            primary.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            primary.heightAnchor.constraint(equalToConstant: 38),
             purchaseNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            cancel.heightAnchor.constraint(equalToConstant: 30),
             footer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
@@ -142,23 +153,14 @@ final class UpgradeWindowController: NSWindowController {
         icon.contentTintColor = NDMChrome.accent
         icon.imageScaling = .scaleProportionallyDown
 
-        let iconWell = ChromeBox(
-            fill: NDMChrome.accent.withAlphaComponent(0.10),
-            cornerRadius: 14
-        )
         icon.translatesAutoresizingMaskIntoConstraints = false
-        iconWell.addSubview(icon)
         NSLayoutConstraint.activate([
-            iconWell.widthAnchor.constraint(equalToConstant: 48),
-            iconWell.heightAnchor.constraint(equalToConstant: 48),
-            icon.centerXAnchor.constraint(equalTo: iconWell.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconWell.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 25),
-            icon.heightAnchor.constraint(equalToConstant: 25),
+            icon.widthAnchor.constraint(equalToConstant: 30),
+            icon.heightAnchor.constraint(equalToConstant: 30),
         ])
 
         let eyebrow = NSTextField(labelWithString: L10n.proContextEyebrow)
-        eyebrow.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        eyebrow.font = .systemFont(ofSize: 12, weight: .semibold)
         eyebrow.textColor = NDMChrome.accent
 
         let title = NSTextField(wrappingLabelWithString: L10n.proContextTitle(primaryFeature))
@@ -174,7 +176,7 @@ final class UpgradeWindowController: NSWindowController {
         var textViews: [NSView] = [eyebrow, title, body]
         if let extra = L10n.proAlsoUnlocks(features) {
             let extraLabel = NSTextField(labelWithString: extra)
-            extraLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
+            extraLabel.font = .systemFont(ofSize: 12, weight: .medium)
             extraLabel.textColor = NDMChrome.accent
             textViews.append(extraLabel)
         }
@@ -184,28 +186,17 @@ final class UpgradeWindowController: NSWindowController {
         text.spacing = 4
         text.setCustomSpacing(6, after: title)
 
-        let row = NSStackView(views: [iconWell, text])
+        let row = NSStackView(views: [icon, text])
         row.orientation = .horizontal
         row.alignment = .top
         row.spacing = 14
         row.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 18)
         row.translatesAutoresizingMaskIntoConstraints = false
 
-        let card = ChromeBox(
-            fill: NDMChrome.accent.withAlphaComponent(0.055),
-            borderColor: NDMChrome.accent.withAlphaComponent(0.22),
-            cornerRadius: 14,
-            borderWidth: 1
-        )
-        card.addSubview(row)
         NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: card.topAnchor),
-            row.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            row.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             text.widthAnchor.constraint(equalTo: row.widthAnchor, constant: -78),
         ])
-        return card
+        return row
     }
 
     private func makeBenefitsCard() -> NSView {
@@ -239,9 +230,9 @@ final class UpgradeWindowController: NSWindowController {
         stack.alignment = .leading
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 15, right: 16)
-        stack.cornerRadius = 13
-        stack.fill = NDMChrome.dockFill
-        stack.cardBorderColor = NDMChrome.hairline
+        stack.cornerRadius = 0
+        stack.fill = nil
+        stack.cardBorderColor = nil
         columns.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
         return stack
     }
@@ -252,11 +243,11 @@ final class UpgradeWindowController: NSWindowController {
         icon.imageScaling = .scaleProportionallyDown
 
         let titleLabel = NSTextField(wrappingLabelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
         titleLabel.maximumNumberOfLines = 2
 
         let bodyLabel = NSTextField(wrappingLabelWithString: body)
-        bodyLabel.font = .systemFont(ofSize: 10.5)
+        bodyLabel.font = .systemFont(ofSize: 12)
         bodyLabel.textColor = .secondaryLabelColor
         bodyLabel.maximumNumberOfLines = 3
 
@@ -273,7 +264,7 @@ final class UpgradeWindowController: NSWindowController {
 
     private func makeFinePrint() -> NSTextField {
         let fine = NSTextField(labelWithString: L10n.proFine)
-        fine.font = .systemFont(ofSize: 10.5)
+        fine.font = .systemFont(ofSize: 12)
         fine.textColor = .tertiaryLabelColor
         return fine
     }
@@ -294,6 +285,7 @@ final class UpgradeWindowController: NSWindowController {
     }
 
     @objc private func enterLicenseClicked() {
+        guard let window else { return }
         let alert = NSAlert()
         alert.messageText = L10n.proEnterLicense
         alert.informativeText = L10n.proLicensePrompt
@@ -304,26 +296,63 @@ final class UpgradeWindowController: NSWindowController {
         alert.accessoryView = field
         alert.layout()
         alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let confirmation = NSAlert()
-        do {
-            let license = try LicenseStore.activate(field.stringValue)
-            confirmation.messageText = L10n.proActivated(license.email)
-            confirmation.runModal()
-            let continuation = onActivated
-            dismiss()
-            continuation?()
-        } catch LicenseError.expired {
-            confirmation.messageText = L10n.proExpiredKey
-            confirmation.runModal()
-        } catch {
-            confirmation.messageText = L10n.proInvalidKey
-            confirmation.runModal()
+        alert.beginSheetModal(for: window) { [weak self, weak field] response in
+            guard response == .alertFirstButtonReturn,
+                  let self,
+                  let key = field?.stringValue else { return }
+            Task { @MainActor in self.activate(key) }
         }
     }
 
-    private func dismiss() {
+    private func activate(_ key: String) {
+        let confirmation = NSAlert()
+        do {
+            let license = try LicenseStore.activate(key)
+            guard LicenseStore.isPro else {
+                confirmation.messageText = L10n.proInvalidKey
+                showConfirmation(confirmation)
+                return
+            }
+            confirmation.messageText = L10n.proActivated(license.email)
+            guard let window else { return }
+            confirmation.beginSheetModal(for: window) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let continuation = self.onActivated
+                    self.dismiss(after: continuation)
+                }
+            }
+        } catch LicenseError.expired {
+            confirmation.messageText = L10n.proExpiredKey
+            showConfirmation(confirmation)
+        } catch {
+            confirmation.messageText = L10n.proInvalidKey
+            showConfirmation(confirmation)
+        }
+    }
+
+    private func showConfirmation(_ alert: NSAlert) {
+        guard let window else { return }
+        alert.beginSheetModal(for: window)
+    }
+
+    @objc private func cancelClicked() {
+        dismiss()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard !isDismissing else { return true }
+        dismiss()
+        return false
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        Self.active = nil
+    }
+
+    private func dismiss(after continuation: (() -> Void)? = nil) {
+        guard !isDismissing else { return }
+        isDismissing = true
         guard let window else { return }
         if let parent = window.sheetParent {
             parent.endSheet(window)
@@ -332,5 +361,6 @@ final class UpgradeWindowController: NSWindowController {
         } else {
             window.close()
         }
+        DispatchQueue.main.async { continuation?() }
     }
 }

@@ -20,6 +20,7 @@ public enum LicenseError: Error, Equatable {
     case invalidFormat
     case badSignature
     case expired
+    case persistenceFailed
 }
 
 /// Offline-verifiable license keys (Ed25519-signed), persisted locally.
@@ -28,12 +29,12 @@ public enum LicenseError: Error, Equatable {
 /// payload: `{"email":"…","exp":"2027-07-16"}` (`exp` optional = perpetual).
 /// The signing private key lives with the vendor (never in the app or repo).
 public enum LicenseStore {
+    public static let didChangeNotification = Notification.Name("NDMProLicenseDidChange")
     /// Production license verification key (Ed25519 public key).
     public static let productionPublicKeyBase64 = "fXaJf4nrGzOrrGapr6P7m6KEJZd2PlW/Zsl8tpRbbeA="
 
     public static let keyPrefix = "NDMP1"
     private static let defaultsKey = "ProLicenseKey"
-    private static let suiteName = "dev.ndm.open"
 
     // MARK: - Feature gates
 
@@ -98,19 +99,46 @@ public enum LicenseStore {
     // MARK: - Persistence
 
     public static func activate(_ key: String) throws -> License {
-        let license = try parse(key: key)
-        defaults?.set(license.raw, forKey: defaultsKey)
+        guard let defaults else { throw LicenseError.persistenceFailed }
+        return try activate(
+            key,
+            publicKeyBase64: productionPublicKeyBase64,
+            defaults: defaults
+        )
+    }
+
+    static func activate(
+        _ key: String,
+        publicKeyBase64: String,
+        defaults: UserDefaults
+    ) throws -> License {
+        let license = try parse(key: key, publicKeyBase64: publicKeyBase64)
+        defaults.set(license.raw, forKey: defaultsKey)
+        // The quality picker may continue on the very next main-loop turn.
+        // Force this tiny preference write through before announcing success so
+        // a newly activated 1440p/4K choice cannot immediately hit the gate again.
+        defaults.synchronize()
+        guard defaults.string(forKey: defaultsKey) == license.raw else {
+            throw LicenseError.persistenceFailed
+        }
+        NotificationCenter.default.post(name: didChangeNotification, object: license)
         return license
     }
 
     public static func deactivate() {
         defaults?.removeObject(forKey: defaultsKey)
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     /// The persisted license, re-validated on every load.
     public static func current() -> License? {
-        guard let raw = defaults?.string(forKey: defaultsKey) else { return nil }
-        return try? parse(key: raw)
+        guard let defaults else { return nil }
+        return current(publicKeyBase64: productionPublicKeyBase64, defaults: defaults)
+    }
+
+    static func current(publicKeyBase64: String, defaults: UserDefaults) -> License? {
+        guard let raw = defaults.string(forKey: defaultsKey) else { return nil }
+        return try? parse(key: raw, publicKeyBase64: publicKeyBase64)
     }
 
     public static var isPro: Bool { current() != nil }
@@ -123,7 +151,10 @@ public enum LicenseStore {
     }
 
     private static var defaults: UserDefaults? {
-        UserDefaults(suiteName: suiteName)
+        // The app's bundle identifier is already the standard defaults domain.
+        // Passing that same identifier to `suiteName:` is rejected by macOS and
+        // made successful activations disappear on the next read.
+        .standard
     }
 
     private static let dayFormatter: DateFormatter = {

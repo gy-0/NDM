@@ -8,6 +8,7 @@ enum RangeStreamDownloader {
         var httpStatus: Int
         var contentLengthHint: Int64?
         var wwwAuthenticate: String?
+        var responseHeaderLatencySeconds: Double
     }
 
     static func download(
@@ -52,7 +53,10 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
     private var lastReported: Int64 = 0
     private var status = 0
     private var contentLengthHint: Int64?
+    private var expectedResponseBytes: Int64?
     private var wwwAuthenticate: String?
+    private var startedAt = Date()
+    private var responseHeaderLatencySeconds: Double = 0.75
     private var finished = false
     private let finishLock = NSLock()
     private var cancellationHandlerIDs: [(CancelToken, UUID)] = []
@@ -83,6 +87,7 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 
     func start() {
+        startedAt = Date()
         let task = session.dataTask(with: request)
         dataTask = task
         cancellationHandlerIDs = cancellationTokens.map { token in
@@ -104,6 +109,10 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
         didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        responseHeaderLatencySeconds = max(
+            0.001,
+            Date().timeIntervalSince(startedAt)
+        )
         if isCancelled() {
             completionHandler(.cancel)
             finish(.failure(EngineError.cancelled))
@@ -128,6 +137,33 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
             completionHandler(.cancel)
             finish(.failure(EngineError.httpStatus(status)))
             return
+        }
+
+        if let requestedRange = Self.requestedByteRange(from: request) {
+            // A 200 response to a Range request means the server ignored Range.
+            // Appending that full body to a partial segment would silently corrupt
+            // the finished file, so let the engine restart once as a clean GET.
+            guard status == 206 else {
+                completionHandler(.cancel)
+                finish(.failure(EngineError.notResumable))
+                return
+            }
+            guard let responseRange = Self.contentRange(from: http),
+                  responseRange.start == requestedRange.start,
+                  requestedRange.end.map({ $0 == responseRange.end }) ?? true,
+                  responseRange.end >= responseRange.start else {
+                completionHandler(.cancel)
+                finish(.failure(EngineError.invalidResponse))
+                return
+            }
+            let expectedBytes = responseRange.end - responseRange.start + 1
+            expectedResponseBytes = expectedBytes
+            if http.expectedContentLength > 0,
+               http.expectedContentLength != expectedBytes {
+                completionHandler(.cancel)
+                finish(.failure(EngineError.invalidResponse))
+                return
+            }
         }
         if let cr = http.value(forHTTPHeaderField: "Content-Range"),
            let total = cr.split(separator: "/").last,
@@ -192,11 +228,16 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
             }
             return
         }
+        if let expectedResponseBytes, written != expectedResponseBytes {
+            finish(.failure(EngineError.invalidResponse))
+            return
+        }
         finish(.success(RangeStreamDownloader.Result(
             bytesWritten: written,
             httpStatus: status,
             contentLengthHint: contentLengthHint,
-            wwwAuthenticate: wwwAuthenticate
+            wwwAuthenticate: wwwAuthenticate,
+            responseHeaderLatencySeconds: responseHeaderLatencySeconds
         )))
     }
 
@@ -222,5 +263,45 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
         handle = nil
         session.invalidateAndCancel()
         continuation?.resume(with: result)
+    }
+
+    private static func requestedByteRange(from request: URLRequest) -> (start: Int64, end: Int64?)? {
+        guard let value = request.value(forHTTPHeaderField: "Range")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              value.lowercased().hasPrefix("bytes=") else {
+            return nil
+        }
+        let bounds = String(value.dropFirst("bytes=".count))
+            .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard bounds.count == 2,
+              let start = Int64(bounds[0]), start >= 0 else {
+            return nil
+        }
+        if bounds[1].isEmpty { return (start, nil) }
+        guard let end = Int64(bounds[1]), end >= start else { return nil }
+        return (start, end)
+    }
+
+    private static func contentRange(from response: HTTPURLResponse) -> (start: Int64, end: Int64)? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              value.lowercased().hasPrefix("bytes ") else {
+            return nil
+        }
+        let rangeAndTotal = value.dropFirst("bytes ".count)
+            .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let boundsText = rangeAndTotal.first else { return nil }
+        let bounds = boundsText.split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard bounds.count == 2,
+              let start = Int64(bounds[0]),
+              let end = Int64(bounds[1]),
+              start >= 0, end >= start else {
+            return nil
+        }
+        return (start, end)
     }
 }

@@ -17,3 +17,4 @@ NeatDownloadManager.app/
 # Large reverse-engineering dumps / extracted binaries
 reverse/dumps/
 reverse/bin/
+.claude/worktrees/

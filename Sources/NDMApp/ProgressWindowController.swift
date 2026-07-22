@@ -35,8 +35,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let sizeCaptionLabel = NSTextField(labelWithString: "")
     private let resumeCaptionLabel = NSTextField(labelWithString: "")
     private let overallProgress = ThinProgressView()
+    private let speedSparkline = SpeedSparklineView()
     private let segmentsCaption = NSTextField(labelWithString: L10n.segments)
     private let segmentStrip = SegmentStripView()
+    private var segmentBlock: NSView?
     private let pauseButton = NSButton(title: L10n.pause, target: nil, action: nil)
     private let cancelButton = NSButton(title: L10n.close, target: nil, action: nil)
     private let openButton = NSButton(title: L10n.open, target: nil, action: nil)
@@ -50,15 +52,11 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let renewButton = NSButton(title: L10n.renewURLEllipsis, target: nil, action: nil)
     private let optionsNote = NSTextField(wrappingLabelWithString: L10n.optionsNote)
     private let connectionsCaptionLabel = NSTextField(labelWithString: "")
-    private let smartlineBox = ChromeBox(
-        fill: NDMChrome.accent.withAlphaComponent(0.07),
-        borderColor: NDMChrome.accent.withAlphaComponent(0.20),
-        cornerRadius: 8,
-        borderWidth: 1
-    )
     private let smartlineLabel = NSTextField(wrappingLabelWithString: "")
     private let completionStackView = CompletionStackView()
-    private let deliveryRecipesView = DeliveryRecipesView()
+    private let audioExtraction = AudioExtractionCoordinator()
+    private let audioStatusView = AudioExtractionStatusView()
+    private let moreActionsButton = NSButton(title: "", target: nil, action: nil)
 
     // Connections tab
     private let connectionScrollView = NSScrollView()
@@ -67,9 +65,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var displayedConnectionIDs: [Int] = []
 
     private var downloadPane: NSView!
+    private weak var downloadStack: NSStackView?
     private var optionsPane: NSView!
     private var connectionsPane: NSView!
-    private var statsCard: NSView?
     private var pollTask: Task<Void, Never>?
     private var lastStatus: DownloadStatus = .waiting
     private var completionStackApplied = false
@@ -98,6 +96,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
         window.delegate = self
         buildUI()
+        audioExtraction.onStateChange = { [weak self] state in
+            self?.audioStatusView.apply(state)
+            self?.resizeDownloadPaneToFit(animate: true)
+        }
         NotificationCenter.default.addObserver(
             forName: L10n.didChangeNotification,
             object: nil,
@@ -119,8 +121,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let oldTop = frame.maxY
         if expanded {
             let requested = completionStackView.expansionHeight
-            let maximum = window.screen?.visibleFrame.height ?? (frame.height + requested)
-            let added = min(requested, max(0, maximum - 24 - frame.height))
+            let visibleFrame = window.screen?.visibleFrame
+                ?? NSRect(x: frame.minX, y: 0, width: frame.width, height: frame.maxY)
+            let availableBelowTop = max(0, oldTop - visibleFrame.minY - 24)
+            let added = min(requested, max(0, availableBelowTop - frame.height))
             completionExpansionAddedHeight = added
             frame.size.height += added
         } else {
@@ -173,22 +177,28 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         ])
     }
 
+    private let progressRing = ProgressRingView()
+
     private func makeDownloadPane() -> NSView {
-        // Quiet Finder: hero percentage leads the progress window.
-        percentLabel.font = .monospacedDigitSystemFont(ofSize: 44, weight: .bold)
+        percentLabel.font = .monospacedDigitSystemFont(ofSize: 36, weight: .light)
         percentLabel.textColor = .labelColor
-        nameLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        percentLabel.alignment = .center
+        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        nameLabel.textColor = .tertiaryLabelColor
         nameLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nameLabel.alignment = .center
         nameLabel.stringValue = filename
 
+        progressRing.translatesAutoresizingMaskIntoConstraints = false
         overallProgress.progress = 0
         NDMChrome.styleMainButton(pauseButton)
         NDMChrome.styleGhostButton(cancelButton)
         NDMChrome.styleMainButton(openButton)
         NDMChrome.styleGhostButton(revealActionButton)
 
-        segmentsCaption.font = .systemFont(ofSize: 11, weight: .semibold)
-        segmentsCaption.textColor = .secondaryLabelColor
+        segmentsCaption.font = .systemFont(ofSize: 12, weight: .semibold)
+        segmentsCaption.textColor = .tertiaryLabelColor
         segmentStrip.translatesAutoresizingMaskIntoConstraints = false
 
         styleValue(sizeValue)
@@ -197,10 +207,29 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         styleValue(etaValue)
         styleValue(resumeValue)
 
-        let header = NSStackView(views: [percentLabel, nameLabel, statusPill])
-        header.orientation = .vertical
-        header.alignment = .leading
-        header.spacing = 4
+        // One hero element, not two: the numeral lives inside the ring, so a
+        // single glance reads progress instead of parsing ring + digits + bar.
+        progressRing.showsCheckmark = false
+        let heroRing = NSView()
+        heroRing.translatesAutoresizingMaskIntoConstraints = false
+        heroRing.addSubview(progressRing)
+        percentLabel.translatesAutoresizingMaskIntoConstraints = false
+        heroRing.addSubview(percentLabel)
+        let heroStack = NSStackView(views: [heroRing, nameLabel])
+        heroStack.orientation = .vertical
+        heroStack.alignment = .centerX
+        heroStack.spacing = 10
+        let header = heroStack
+        NSLayoutConstraint.activate([
+            heroRing.widthAnchor.constraint(equalToConstant: 132),
+            heroRing.heightAnchor.constraint(equalToConstant: 132),
+            progressRing.leadingAnchor.constraint(equalTo: heroRing.leadingAnchor),
+            progressRing.trailingAnchor.constraint(equalTo: heroRing.trailingAnchor),
+            progressRing.topAnchor.constraint(equalTo: heroRing.topAnchor),
+            progressRing.bottomAnchor.constraint(equalTo: heroRing.bottomAnchor),
+            percentLabel.centerXAnchor.constraint(equalTo: heroRing.centerXAnchor),
+            percentLabel.centerYAnchor.constraint(equalTo: heroRing.centerYAnchor),
+        ])
 
         let card = makeStatsCard()
 
@@ -209,25 +238,35 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         pauseButton.keyEquivalent = "\r"
         pauseButton.target = self
         pauseButton.action = #selector(pauseClicked)
-        pauseButton.controlSize = .large
+        pauseButton.controlSize = .regular
 
         openButton.bezelStyle = .rounded
         openButton.target = self
         openButton.action = #selector(openClicked)
-        openButton.controlSize = .large
+        openButton.controlSize = .regular
         openButton.keyEquivalent = ""
         openButton.isHidden = true
 
         revealActionButton.bezelStyle = .rounded
         revealActionButton.target = self
         revealActionButton.action = #selector(revealClicked)
-        revealActionButton.controlSize = .large
+        revealActionButton.controlSize = .regular
         revealActionButton.isHidden = true
+
+        moreActionsButton.isBordered = false
+        moreActionsButton.bezelStyle = .inline
+        moreActionsButton.image = NDMChrome.symbol("ellipsis", pointSize: 12, weight: .semibold)
+        moreActionsButton.imagePosition = .imageOnly
+        moreActionsButton.target = self
+        moreActionsButton.action = #selector(showMoreActions(_:))
+        moreActionsButton.toolTip = L10n.moreActions
+        moreActionsButton.setAccessibilityLabel(L10n.moreActions)
+        moreActionsButton.isHidden = true
 
         cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
-        cancelButton.controlSize = .large
+        cancelButton.controlSize = .regular
         cancelButton.keyEquivalent = "\u{1b}"
 
         revealButton.bezelStyle = .flexiblePush
@@ -236,44 +275,60 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         revealButton.action = #selector(revealClicked)
         revealButton.toolTip = L10n.showInFinder
 
-        let actions = NSStackView(views: [pauseButton, openButton, revealActionButton, cancelButton])
+        // Right-aligned macOS action row: ghost actions lead, the single
+        // accent primary sits at the trailing edge. The spacer absorbs the
+        // row width so buttons keep their natural size instead of one of
+        // them stretching into a banner.
+        let actionSpacer = NSView()
+        actionSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        // Dismissive action first, primary at the trailing edge — 关闭 must
+        // never sit between two file actions.
+        let actions = NSStackView(views: [
+            moreActionsButton, actionSpacer,
+            cancelButton, revealActionButton, openButton, pauseButton,
+        ])
         actions.orientation = .horizontal
-        actions.spacing = 10
-        actions.distribution = .fillEqually
+        actions.spacing = 8
+        actions.distribution = .fill
+        for button in [pauseButton, openButton, revealActionButton, cancelButton] {
+            button.setContentHuggingPriority(.required, for: .horizontal)
+        }
         actionsStack = actions
 
         let stripBlock = NSStackView(views: [segmentsCaption, segmentStrip])
         stripBlock.orientation = .vertical
         stripBlock.alignment = .leading
         stripBlock.spacing = 6
+        // A single segment repeats the overall bar exactly — the strip only
+        // earns its row when it can show real parallelism.
+        stripBlock.isHidden = true
+        segmentBlock = stripBlock
 
         // Smartline — the tuner narrating "why this connection count".
+        // A quiet caption, not a tinted callout box.
         smartlineLabel.font = .systemFont(ofSize: 11)
-        smartlineLabel.textColor = .labelColor
+        smartlineLabel.textColor = .secondaryLabelColor
         smartlineLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let smartStack = NSStackView(views: [smartlineLabel])
-        smartStack.orientation = .vertical
-        smartStack.alignment = .leading
-        smartStack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        smartStack.translatesAutoresizingMaskIntoConstraints = false
-        smartlineBox.translatesAutoresizingMaskIntoConstraints = false
-        smartlineBox.addSubview(smartStack)
-        smartlineBox.isHidden = true
+        smartlineLabel.isHidden = true
+
+        speedSparkline.translatesAutoresizingMaskIntoConstraints = false
 
         let stack = NSStackView(views: [
             header,
             card,
+            speedSparkline,
             overallProgress,
             stripBlock,
-            smartlineBox,
+            smartlineLabel,
             completionStackView,
-            deliveryRecipesView,
+            audioStatusView,
             actions,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
         stack.translatesAutoresizingMaskIntoConstraints = false
+        downloadStack = stack
 
         let pane = NSView()
         pane.addSubview(stack)
@@ -282,27 +337,31 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: pane.bottomAnchor),
-            smartlineBox.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            smartlineLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             completionStackView.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            deliveryRecipesView.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            smartStack.topAnchor.constraint(equalTo: smartlineBox.topAnchor),
-            smartStack.leadingAnchor.constraint(equalTo: smartlineBox.leadingAnchor),
-            smartStack.trailingAnchor.constraint(equalTo: smartlineBox.trailingAnchor),
-            smartStack.bottomAnchor.constraint(equalTo: smartlineBox.bottomAnchor),
-            smartlineLabel.widthAnchor.constraint(equalTo: smartStack.widthAnchor, constant: -20),
+            audioStatusView.widthAnchor.constraint(equalTo: stack.widthAnchor),
             card.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            speedSparkline.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            speedSparkline.heightAnchor.constraint(equalToConstant: 40),
             overallProgress.widthAnchor.constraint(equalTo: stack.widthAnchor),
             overallProgress.heightAnchor.constraint(equalToConstant: 4),
             segmentStrip.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            segmentStrip.heightAnchor.constraint(equalToConstant: 18),
+            segmentStrip.heightAnchor.constraint(equalToConstant: 8),
+            nameLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pauseButton.heightAnchor.constraint(equalToConstant: 32),
+            pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108),
             openButton.heightAnchor.constraint(equalToConstant: 32),
+            openButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108),
             revealActionButton.heightAnchor.constraint(equalToConstant: 32),
+            moreActionsButton.widthAnchor.constraint(equalToConstant: 32),
+            moreActionsButton.heightAnchor.constraint(equalToConstant: 32),
             cancelButton.heightAnchor.constraint(equalToConstant: 32),
+            cancelButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 72),
         ])
         completionStackView.apply(nil)
-        deliveryRecipesView.apply(input: nil)
+        audioStatusView.apply(.unavailable)
         return pane
     }
 
@@ -314,8 +373,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         percentLabel.stringValue = "100%"
         window?.title = L10n.doneTitle(filename)
         overallProgress.progress = 1
+        progressRing.progress = 1
         statusPill.setStatus(.complete, error: nil)
-        smartlineBox.isHidden = true
+        celebratePercentLabel()
+        smartlineLabel.isHidden = true
         smartlineLabel.stringValue = ""
         speedValue.stringValue = L10n.emDash
         etaValue.stringValue = L10n.emDash
@@ -328,6 +389,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let total = max(0, task.fileSize)
         segmentStrip.update(segments: [], totalBytes: total, forceFilled: true)
         segmentsCaption.stringValue = L10n.segments
+        segmentBlock?.isHidden = true
+        speedSparkline.isHidden = true
         lastStatus = .complete
         applyCompletionStack(for: task)
         configureActionButtons(for: .complete, task: task)
@@ -341,7 +404,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     /// URL / size details. One sweep of the eyes answers "how is it going".
     private func makeStatsCard() -> NSView {
         func statCell(_ cap: NSTextField, _ value: NSView) -> NSView {
-            cap.font = .systemFont(ofSize: 9.5, weight: .semibold)
+            cap.font = .systemFont(ofSize: 12, weight: .semibold)
             cap.textColor = .tertiaryLabelColor
             if let field = value as? NSTextField {
                 field.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
@@ -365,7 +428,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let statusCell: NSView = {
-            statusCaptionLabel.font = .systemFont(ofSize: 9.5, weight: .semibold)
+            statusCaptionLabel.font = .systemFont(ofSize: 12, weight: .semibold)
             statusCaptionLabel.textColor = .tertiaryLabelColor
             let cell = NSStackView(views: [statusCaptionLabel, statusPill])
             cell.orientation = .vertical
@@ -385,7 +448,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         ])
         gridRow.orientation = .horizontal
         gridRow.alignment = .centerY
-        gridRow.spacing = 12
+        gridRow.spacing = 16
         gridRow.distribution = .fill
 
         let divider = ChromeBox(fill: NDMChrome.hairline)
@@ -425,19 +488,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         urlRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
         metaRow.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true
 
-        let card = AppearanceAwareCardView()
-        card.wantsLayer = true
-        card.layer?.cornerRadius = 10
-        card.layer?.borderWidth = 1
-        card.refreshChrome()
-        statsCard = card
+        // Open composition — typography and hairlines carry the structure;
+        // no boxed-in gray card.
+        let card = NSView()
         grid.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(grid)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
-            grid.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-            grid.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            grid.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
+            grid.topAnchor.constraint(equalTo: card.topAnchor),
+            grid.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            grid.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            grid.bottomAnchor.constraint(equalTo: card.bottomAnchor),
         ])
 
         return card
@@ -502,7 +562,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         renewButton.title = L10n.renewURLEllipsis
         optionsNote.stringValue = L10n.optionsNote
         completionStackView.relocalize()
-        deliveryRecipesView.relocalize()
+        moreActionsButton.toolTip = L10n.moreActions
+        moreActionsButton.setAccessibilityLabel(L10n.moreActions)
         switch lastStatus {
         case .error: pauseButton.title = L10n.retry
         case .paused, .incomplete: pauseButton.title = L10n.resume
@@ -549,9 +610,18 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func showTab(_ index: Int) {
+        let panes = [downloadPane!, optionsPane!, connectionsPane!]
+        let changed = panes.enumerated().contains { $0.element.isHidden == ($0.offset == index) }
         downloadPane.isHidden = index != 0
         optionsPane.isHidden = index != 1
         connectionsPane.isHidden = index != 2
+        if changed, window?.isVisible == true {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.15
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            tabContainer.layer?.add(fade, forKey: "tab")
+        }
     }
 
     @objc private func tabChanged() {
@@ -566,8 +636,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
             resumeValue.stringValue = task.resumable ? L10n.yes : L10n.no
-            resumeValue.textColor = task.resumable ? .systemGreen : .secondaryLabelColor
-            let n = max(1, min(32, task.connections))
+            resumeValue.textColor = .secondaryLabelColor
+            // Media-page tasks download through aria2c, which hard-caps
+            // connections per server at 16 — don't offer values the engine
+            // would silently clamp.
+            if task.linkType.lowercased() == "ytdlp" {
+                while connectionsPopup.numberOfItems > 16 {
+                    connectionsPopup.removeItem(at: connectionsPopup.numberOfItems - 1)
+                }
+            }
+            let n = max(1, min(connectionsPopup.numberOfItems, task.connections))
             connectionsPopup.selectItem(at: n - 1)
             sizeValue.stringValue = task.fileSize > 0
                 ? TaskPresentationFormatting.byteCount(task.fileSize)
@@ -581,8 +659,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         pollTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refresh()
-                // ~20 fps — smooth enough for the strip; higher mainly burns CPU.
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                // ~20 fps while bytes are moving — smooth enough for the
+                // strip. Paused/queued tasks change rarely; polling them at
+                // full rate only burns CPU.
+                let interval: UInt64 = self.lastStatus == .downloading
+                    ? 50_000_000
+                    : 500_000_000
+                try? await Task.sleep(nanoseconds: interval)
             }
         }
     }
@@ -594,7 +677,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
             resumeValue.stringValue = task.resumable ? L10n.yes : L10n.no
-            resumeValue.textColor = task.resumable ? .systemGreen : .secondaryLabelColor
+            resumeValue.textColor = .secondaryLabelColor
             if task.fileSize > 0 {
                 sizeValue.stringValue = task.linkType.lowercased() == "ytdlp" && task.status != .complete
                     ? L10n.estimatedSize(task.fileSize)
@@ -632,11 +715,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         percentLabel.stringValue = "\(pct)%"
         if progress.status == .complete {
             window?.title = L10n.doneTitle(filename)
+        } else if progress.status == .downloading, progress.bytesPerSecond > 0 {
+            let speed = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: .downloading)
+            window?.title = "\(pct)% \(filename) — \(speed)"
         } else {
             window?.title = "\(pct)% \(filename)"
         }
 
         overallProgress.progress = fraction
+        overallProgress.isActive = progress.status == .downloading
+        progressRing.progress = fraction
         statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
 
         let isYtDlp = task?.linkType.lowercased() == "ytdlp"
@@ -665,6 +753,14 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         speedValue.stringValue = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: progress.status)
         etaValue.stringValue = TaskPresentationFormatting.eta(progress.remainingTime, status: progress.status)
 
+        if progress.status == .downloading {
+            speedSparkline.addSample(progress.bytesPerSecond)
+            speedSparkline.isHidden = false
+        } else {
+            // Paused/queued included: a frozen (or empty) speed curve is noise.
+            speedSparkline.isHidden = true
+        }
+
         let segments: [SegmentState]
         if isYtDlp, total > 0 {
             segments = [SegmentState(
@@ -681,6 +777,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         segmentsCaption.stringValue = segments.isEmpty
             ? L10n.segments
             : L10n.segmentsCount(segments.count)
+        segmentBlock?.isHidden = segments.count <= 1
         // On complete, always solid-fill: live Range snapshots can lag behind merge.
         if isYtDlp {
             segmentStrip.updateUnified(progress: fraction, forceFilled: forceFilled)
@@ -696,10 +793,33 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         } else if progress.status != .complete, completionStackApplied {
             completionStackApplied = false
             completionStackView.apply(nil)
-            deliveryRecipesView.apply(input: nil)
+            audioExtraction.apply(sourceURL: nil)
+            moreActionsButton.isHidden = true
         }
 
-        if let phase = progress.phase, progress.status != .complete {
+        smartlineLabel.textColor = .secondaryLabelColor
+        smartlineLabel.toolTip = nil
+        smartlineLabel.setAccessibilityLabel(L10n.status)
+        smartlineLabel.setAccessibilityValue(nil)
+
+        if progress.status == .error {
+            let storedError = progress.errorDescription ?? task?.errorText
+            let diagnostic = DownloadDiagnostic.fromStoredErrorText(storedError)
+            let reason: String
+            if let diagnostic {
+                reason = "\(diagnostic.title). \(diagnostic.message)"
+            } else {
+                reason = storedError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? storedError!
+                    : L10n.t("The download failed. Retry to continue from the saved data.", "下载失败。重试可从已保存的数据继续。")
+            }
+            smartlineLabel.stringValue = reason
+            smartlineLabel.textColor = .secondaryLabelColor
+            smartlineLabel.toolTip = reason
+            smartlineLabel.setAccessibilityLabel(L10n.failed)
+            smartlineLabel.setAccessibilityValue(reason)
+            smartlineLabel.isHidden = false
+        } else if let phase = progress.phase, progress.status != .complete {
             switch phase {
             case .preparing:
                 smartlineLabel.stringValue = L10n.ytdlpPreparingDownload
@@ -712,13 +832,30 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             case .finalizing:
                 smartlineLabel.stringValue = L10n.ytdlpFinalizing
             }
-            smartlineBox.isHidden = false
+            smartlineLabel.isHidden = false
         } else if let tuning = progress.tuning, progress.status != .complete {
             smartlineLabel.stringValue = tuning.summaryLine
-            smartlineBox.isHidden = false
+            smartlineLabel.isHidden = false
         } else {
-            smartlineBox.isHidden = true
+            smartlineLabel.isHidden = true
         }
+
+        sizeWindowToFitInitially()
+    }
+
+    private func celebratePercentLabel() {
+        percentLabel.wantsLayer = true
+        guard let layer = percentLabel.layer else { return }
+        let spring = CASpringAnimation(keyPath: "transform.scale")
+        spring.fromValue = 1.0
+        spring.toValue = 1.08
+        spring.mass = 1
+        spring.stiffness = 300
+        spring.damping = 12
+        spring.initialVelocity = 8
+        spring.autoreverses = true
+        spring.duration = spring.settlingDuration / 2
+        layer.add(spring, forKey: "celebrate")
     }
 
     private func applyCompletionStack(for task: DownloadTask) {
@@ -726,22 +863,54 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         completionStackApplied = true
         let result = SmartFinalize.completionStack(primary: task.destinationFileURL)
         completionStackView.apply(result)
-        deliveryRecipesView.apply(input: task.destinationFileURL)
-        let hasSidecars = !(result?.sidecars.isEmpty ?? true)
-        let hasRecipes = !deliveryRecipesView.isHidden
-        guard (hasSidecars || hasRecipes), let window else { return }
+        audioExtraction.apply(sourceURL: task.destinationFileURL)
+        moreActionsButton.isHidden = !SmartFinalize.supportsDeliveryRecipes(
+            input: task.destinationFileURL
+        )
+        resizeDownloadPaneToFit(animate: true)
+    }
 
-        // Completion gains a little breathing room only when there is something
-        // meaningful to expand. Preserve the window's top edge while growing.
-        let desiredHeight: CGFloat = hasRecipes ? 690 : 620
-        let screenLimit = (window.screen?.visibleFrame.height ?? desiredHeight) - 24
-        let targetHeight = min(desiredHeight, screenLimit)
+    private var didSizeToFitInitially = false
+
+    /// First presentation only: shrink the fixed launch height down to the
+    /// actual content, so a compact state doesn't open with a slab of dead
+    /// space under the buttons. Later growth still goes through
+    /// `resizeDownloadPaneToFit`, and user resizes are never fought.
+    private func sizeWindowToFitInitially() {
+        guard !didSizeToFitInitially, let window, let downloadStack else { return }
+        didSizeToFitInitially = true
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard let contentView = window.contentView else { return }
+        let targetContent = max(
+            downloadStack.fittingSize.height + 58,
+            window.minSize.height - (window.frame.height - contentView.frame.height)
+        )
+        let delta = targetContent - contentView.frame.height
+        guard delta < -1 else { return }
+        var frame = window.frame
+        let top = frame.maxY
+        frame.size.height += delta
+        frame.origin.y = top - frame.height
+        window.setFrame(frame, display: true, animate: false)
+    }
+
+    private func resizeDownloadPaneToFit(animate: Bool) {
+        guard let window, let downloadStack else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let chromeHeight: CGFloat = 58
+        let contentHeight = downloadStack.fittingSize.height + chromeHeight
+        let minimum = window.minSize.height
+        let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maximum = max(minimum, (visibleFrame?.height ?? contentHeight) - 24)
+        let targetHeight = min(max(minimum, contentHeight), maximum)
+        // Completion may grow a compact window, but never shrinks a size the
+        // user chose while monitoring the transfer.
         guard window.frame.height < targetHeight else { return }
         var frame = window.frame
         let top = frame.maxY
         frame.size.height = targetHeight
         frame.origin.y = top - targetHeight
-        window.setFrame(frame, display: true, animate: true)
+        window.setFrame(frame, display: true, animate: animate)
     }
 
     private func configureActionButtons(for status: DownloadStatus, task: DownloadTask?) {
@@ -762,10 +931,14 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             openButton.keyEquivalent = "\r"
             revealActionButton.isHidden = false
             revealActionButton.isEnabled = fileExists || task?.destinationFileURL != nil
+            moreActionsButton.isHidden = !SmartFinalize.supportsDeliveryRecipes(
+                input: task?.destinationFileURL
+            )
         case .paused, .incomplete, .error:
             pauseButton.isHidden = false
             openButton.isHidden = true
             revealActionButton.isHidden = true
+            moreActionsButton.isHidden = true
             pauseButton.title = status == .error ? L10n.retry : L10n.resume
             pauseButton.isEnabled = true
             pauseButton.keyEquivalent = "\r"
@@ -774,6 +947,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             pauseButton.isHidden = false
             openButton.isHidden = true
             revealActionButton.isHidden = true
+            moreActionsButton.isHidden = true
             pauseButton.title = L10n.pause
             pauseButton.isEnabled = true
             pauseButton.keyEquivalent = "\r"
@@ -854,6 +1028,47 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    @objc private func showMoreActions(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        switch audioExtraction.state {
+        case .unavailable:
+            return
+        case .ready, .failed:
+            let item = NSMenuItem(title: L10n.extractAudio, action: #selector(extractAudioClicked), keyEquivalent: "")
+            item.image = NDMChrome.symbol("waveform", pointSize: 13, weight: .medium)
+            item.target = self
+            item.isEnabled = true
+            menu.addItem(item)
+        case .running:
+            let item = NSMenuItem(title: L10n.extractingAudio, action: nil, keyEquivalent: "")
+            item.image = NDMChrome.symbol("waveform", pointSize: 13, weight: .medium)
+            item.isEnabled = false
+            menu.addItem(item)
+        case .succeeded:
+            let reveal = NSMenuItem(title: L10n.showAudioInFinder, action: #selector(revealExtractedAudio), keyEquivalent: "")
+            reveal.image = NDMChrome.symbol("folder", pointSize: 13, weight: .medium)
+            reveal.target = self
+            reveal.isEnabled = true
+            menu.addItem(reveal)
+            menu.addItem(.separator())
+            let again = NSMenuItem(title: L10n.extractAudioAgain, action: #selector(extractAudioClicked), keyEquivalent: "")
+            again.image = NDMChrome.symbol("waveform", pointSize: 13, weight: .medium)
+            again.target = self
+            again.isEnabled = true
+            menu.addItem(again)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 3), in: sender)
+    }
+
+    @objc private func extractAudioClicked() {
+        audioExtraction.extract()
+    }
+
+    @objc private func revealExtractedAudio() {
+        audioExtraction.revealResult()
+    }
+
     @objc private func applyConnections() {
         let n = connectionsPopup.indexOfSelectedItem + 1
         let cap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
@@ -923,29 +1138,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         pollTask?.cancel()
         pollTask = nil
+        audioExtraction.cancel()
         onWindowClose?()
         onWindowClose = nil
-    }
-}
-
-// MARK: - Stats card chrome
-
-/// Soft surface that refreshes when System / Light / Dark changes.
-private final class AppearanceAwareCardView: NSView {
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        refreshChrome()
-    }
-
-    func refreshChrome() {
-        wantsLayer = true
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        layer?.backgroundColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.06)
-            : NSColor.black.withAlphaComponent(0.03)).cgColor
-        layer?.borderColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.10)
-            : NSColor.black.withAlphaComponent(0.08)).cgColor
     }
 }
 
@@ -966,7 +1161,7 @@ private final class SegmentStripView: NSView {
         layer?.cornerRadius = 4
         layer?.masksToBounds = true
         unifiedFillLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
-        unifiedFillLayer.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor
+        unifiedFillLayer.backgroundColor = NDMChrome.accent.withAlphaComponent(0.9).cgColor
         unifiedFillLayer.isHidden = true
         layer?.addSublayer(unifiedFillLayer)
     }
@@ -1030,7 +1225,7 @@ private final class SegmentStripView: NSView {
         track.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
 
-        let fill = NSColor.systemGreen.withAlphaComponent(0.9)
+        let fill = NDMChrome.accent.withAlphaComponent(0.9)
         fill.setFill()
 
         // Completed downloads must read as fully filled — last Range snapshots
@@ -1072,6 +1267,9 @@ private final class StatusPillView: NSView {
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        label.setAccessibilityElement(false)
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
@@ -1096,20 +1294,20 @@ private final class StatusPillView: NSView {
         switch status {
         case .downloading:
             title = L10n.downloading
-            fg = .controlAccentColor
-            bg = NSColor.controlAccentColor.withAlphaComponent(0.12)
+            fg = NDMChrome.accent
+            bg = NDMChrome.accent.withAlphaComponent(0.12)
         case .paused:
             title = L10n.paused
             fg = .secondaryLabelColor
             bg = track
         case .complete:
             title = L10n.completed
-            fg = .secondaryLabelColor
-            bg = track
+            fg = NSColor.systemGreen.blended(withFraction: 0.35, of: .labelColor) ?? .systemGreen
+            bg = NDMChrome.okSoft
         case .error:
             title = L10n.failed
-            fg = .labelColor
-            bg = track
+            fg = NSColor.systemRed.blended(withFraction: 0.25, of: .labelColor) ?? .systemRed
+            bg = NDMChrome.dangerSoft
         case .waiting:
             title = L10n.queued
             fg = .secondaryLabelColor
@@ -1123,6 +1321,8 @@ private final class StatusPillView: NSView {
         label.textColor = fg
         layer?.backgroundColor = bg.cgColor
         toolTip = error
+        setAccessibilityLabel(title)
+        setAccessibilityValue(error)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -1236,21 +1436,21 @@ private final class ConnectionProgressRowView: NSView {
         let statusColor: NSColor
         if state.isFinished || fraction >= 1 {
             status = L10n.complete
-            statusColor = .systemGreen
+            statusColor = .tertiaryLabelColor
         } else {
             switch downloadStatus {
             case .paused:
                 status = L10n.paused
-                statusColor = .systemOrange
+                statusColor = .secondaryLabelColor
             case .error:
                 status = L10n.error
-                statusColor = .systemRed
+                statusColor = .secondaryLabelColor
             case .waiting:
                 status = L10n.waiting
                 statusColor = .secondaryLabelColor
             default:
                 status = state.completed > 0 ? L10n.downloading : L10n.waiting
-                statusColor = state.completed > 0 ? .controlAccentColor : .secondaryLabelColor
+                statusColor = state.completed > 0 ? .labelColor : .secondaryLabelColor
             }
         }
         stateLabel.stringValue = "\(status) · \(percent)%"

@@ -3,6 +3,31 @@ import CryptoKit
 @testable import NDMCore
 
 final class LicenseStoreTests: XCTestCase {
+    func testActivationPersistsAndCanBeReadImmediately() throws {
+        let signer = Curve25519.Signing.PrivateKey()
+        let publicKeyBase64 = signer.publicKey.rawRepresentation.base64EncodedString()
+        let key = try LicenseStore.makeKey(
+            email: "buyer@example.com",
+            expiry: nil,
+            privateKey: signer
+        )
+        let suite = "dev.ndm.open.license-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let activated = try LicenseStore.activate(
+            key,
+            publicKeyBase64: publicKeyBase64,
+            defaults: defaults
+        )
+
+        XCTAssertEqual(activated.email, "buyer@example.com")
+        XCTAssertEqual(
+            LicenseStore.current(publicKeyBase64: publicKeyBase64, defaults: defaults),
+            activated
+        )
+    }
+
     private let signer = Curve25519.Signing.PrivateKey()
     private var publicKeyBase64: String {
         signer.publicKey.rawRepresentation.base64EncodedString()

@@ -5,6 +5,7 @@ final class SettingsStoreTests: XCTestCase {
     func testNewSettingsFollowSystemAppearanceAndLanguage() {
         let settings = AppSettings()
         XCTAssertEqual(settings.appearanceMode, .system)
+        XCTAssertEqual(settings.accentTheme, .classicBlue)
         XCTAssertEqual(settings.languageMode, .system)
         XCTAssertTrue(settings.smartConnectionsEnabled)
         XCTAssertTrue(settings.clipboardWatchEnabled)
@@ -19,6 +20,8 @@ final class SettingsStoreTests: XCTestCase {
         s.useCategoryFolders = false
         s.downloadDirectory = URL(fileURLWithPath: "/tmp/ndm-test-dl")
         s.appearanceMode = .dark
+        s.accentTheme = .custom
+        s.customAccentHex = "#2C7A6B"
         s.languageMode = .simplifiedChinese
         SettingsStore.save(s, defaults: defaults)
         let loaded = SettingsStore.load(defaults: defaults)
@@ -26,6 +29,8 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.useCategoryFolders, false)
         XCTAssertEqual(loaded.downloadDirectory.path, "/tmp/ndm-test-dl")
         XCTAssertEqual(loaded.appearanceMode, .dark)
+        XCTAssertEqual(loaded.accentTheme, .custom)
+        XCTAssertEqual(loaded.customAccentHex, "#2C7A6B")
         XCTAssertEqual(loaded.languageMode, .simplifiedChinese)
     }
 
@@ -35,6 +40,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(L10n.pause, "暂停")
         XCTAssertEqual(L10n.settings, "设置")
         XCTAssertEqual(L10n.share, "分享")
+        XCTAssertEqual(L10n.quickLook, "快速查看")
         XCTAssertEqual(L10n.moreActions, "更多操作")
         XCTAssertFalse(L10n.finalizeKeptTS.lowercased().contains("ffmpeg"))
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))
@@ -61,6 +67,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(L10n.usesChinese)
         XCTAssertEqual(L10n.pause, "Pause")
         XCTAssertEqual(L10n.share, "Share")
+        XCTAssertEqual(L10n.quickLook, "Quick Look")
         XCTAssertEqual(L10n.moreActions, "More Actions")
         XCTAssertFalse(L10n.finalizeKeptTS.lowercased().contains("ffmpeg"))
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))

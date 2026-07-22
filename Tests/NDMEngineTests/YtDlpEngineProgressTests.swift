@@ -43,6 +43,54 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertEqual(streamsComplete.phase, .finalizing)
     }
 
+    func testEarlySubtitlePostprocessDoesNotJumpJourney() async {
+        let engine = YtDlpEngine(
+            taskID: 9,
+            estimatedBytes: 1_100,
+            estimatedComponentBytes: [900, 200]
+        )
+        // yt-dlp converts subtitles as soon as they are written — before the
+        // video transfer starts. The 0.985 subtitle floor must not apply yet,
+        // or the journey jumps to 98% at the start and the ratchet keeps it.
+        await engine.apply(report: .init(
+            componentID: "SubtitlesConvertor",
+            status: "started",
+            phase: .subtitles
+        ))
+        let beforeTransfer = await engine.currentProgress()
+        XCTAssertLessThan(beforeTransfer.fractionCompleted, 0.05)
+
+        await engine.apply(report: .init(
+            downloadedBytes: 90,
+            totalBytes: 900,
+            componentID: "video-1080",
+            status: "downloading"
+        ))
+        let earlyTransfer = await engine.currentProgress()
+        XCTAssertLessThan(earlyTransfer.fractionCompleted, 0.2)
+
+        // Once both streams finished, the merge floor applies as designed.
+        await engine.apply(report: .init(
+            downloadedBytes: 900,
+            totalBytes: 900,
+            componentID: "video-1080",
+            status: "finished"
+        ))
+        await engine.apply(report: .init(
+            downloadedBytes: 200,
+            totalBytes: 200,
+            componentID: "audio-best",
+            status: "finished"
+        ))
+        await engine.apply(report: .init(
+            componentID: "Merger",
+            status: "started",
+            phase: .merging
+        ))
+        let merging = await engine.currentProgress()
+        XCTAssertGreaterThanOrEqual(merging.fractionCompleted, 0.972)
+    }
+
     func testSingleStreamReportKeepsKnownCombinedEstimate() async {
         let engine = YtDlpEngine(taskID: 2, estimatedBytes: 1_000)
         await engine.apply(report: .init(downloadedBytes: 500, totalBytes: 800))
@@ -143,7 +191,10 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertTrue(args.contains("32"))
         XCTAssertTrue(args.contains("--force-overwrites"))
         XCTAssertTrue(args.contains("/opt/homebrew/bin/aria2c"))
-        XCTAssertTrue(args.contains(where: { $0.contains("-x32") && $0.contains("-s32") }))
+        // aria2c rejects --max-connection-per-server above 16 (exit code 28),
+        // so 32 requested connections must be capped in the downloader args.
+        XCTAssertTrue(args.contains(where: { $0.contains("-x16") && $0.contains("-s16") }))
+        XCTAssertFalse(args.contains(where: { $0.contains("-x32") }))
         XCTAssertTrue(args.contains(where: { $0.hasPrefix("postprocess:NDM_POST|") }))
     }
 
@@ -177,6 +228,32 @@ final class YtDlpEngineProgressTests: XCTestCase {
         ])
         XCTAssertEqual(tracks.first(where: { $0.code == "en" })?.isAutomatic, false)
         XCTAssertEqual(tracks.first(where: { $0.code == "zh-Hans" })?.isAutomatic, true)
+    }
+
+    func testFirstUseSubtitleFollowsSystemLanguageThenEnglishInsteadOfAlphabeticalTrack() {
+        let tracks = [
+            YtDlpSubtitleTrack(code: "bo", displayName: "Tibetan", isAutomatic: false),
+            YtDlpSubtitleTrack(code: "en", displayName: "English", isAutomatic: true),
+            YtDlpSubtitleTrack(code: "zh-Hans", displayName: "Chinese", isAutomatic: true),
+        ]
+        XCTAssertEqual(
+            YtDlpTool.preferredSubtitleIndex(in: tracks, preferredLanguages: ["zh-Hans"]),
+            2
+        )
+        XCTAssertEqual(
+            YtDlpTool.preferredSubtitleIndex(in: tracks, preferredLanguages: ["fr-FR"]),
+            1
+        )
+    }
+
+    func testFirstUseSubtitleLeavesNoArbitraryDefaultWhenOnlyUnrelatedTracksExist() {
+        let tracks = [
+            YtDlpSubtitleTrack(code: "bo", displayName: "Tibetan", isAutomatic: false),
+            YtDlpSubtitleTrack(code: "eu", displayName: "Basque", isAutomatic: false),
+        ]
+        XCTAssertNil(
+            YtDlpTool.preferredSubtitleIndex(in: tracks, preferredLanguages: ["fr-FR"])
+        )
     }
 
     func testDownloadedSubtitleIsRenamedToMatchVideoExactly() throws {
@@ -226,8 +303,61 @@ final class YtDlpEngineProgressTests: XCTestCase {
 
     func testFormatSelectorReflectsHighLevelPreference() {
         let format = YtDlpFormat(id: "fallback", label: "1080p", height: 1080)
-        XCTAssertTrue(format.selector(for: .compatibleMP4).contains("vcodec^=avc1"))
+        XCTAssertTrue(format.selector(for: .compatibleMP4).contains("ext=mp4"))
         XCTAssertTrue(format.selector(for: .compactMKV).contains("vcodec^=av01"))
+    }
+
+    func testCollectionSelectorDoesNotReuseSingleVideoFormatIDs() {
+        let format = YtDlpFormat(
+            id: "fallback",
+            label: "2160p",
+            height: 2160,
+            compatibleSelectorOverride: "401+140",
+            compactSelectorOverride: "401+251"
+        )
+        XCTAssertEqual(format.selector(for: .compatibleMP4), "401+140")
+        XCTAssertNotEqual(format.collectionSelector(for: .compatibleMP4), "401+140")
+        XCTAssertTrue(format.collectionSelector(for: .compatibleMP4).contains("height<=2160"))
+    }
+
+    func testCinematicYouTubeFormatsUseStandardQualityTiersAndExactSizes() {
+        let formats: [[String: Any]] = [
+            [
+                "format_id": "137", "width": 1920, "height": 960,
+                "format_note": "1080p", "vcodec": "avc1.640028", "acodec": "none",
+                "ext": "mp4", "filesize": 115_328_849, "tbr": 1_923.57,
+            ],
+            [
+                "format_id": "399", "width": 1920, "height": 960,
+                "format_note": "1080p", "vcodec": "av01.0.08M.08", "acodec": "none",
+                "ext": "mp4", "filesize": 30_073_689, "tbr": 501.599,
+            ],
+            [
+                "format_id": "400", "width": 2560, "height": 1280,
+                "format_note": "1440p", "vcodec": "av01.0.12M.08", "acodec": "none",
+                "ext": "mp4", "filesize": 69_745_585, "tbr": 1_163.286,
+            ],
+            [
+                "format_id": "401", "width": 3840, "height": 1920,
+                "format_note": "2160p60 HDR", "vcodec": "av01.0.12M.08", "acodec": "none",
+                "ext": "mp4", "filesize": 124_635_395, "tbr": 2_078.794,
+            ],
+            [
+                "format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2",
+                "ext": "m4a", "filesize": 7_764_529, "abr": 129.0,
+            ],
+        ]
+
+        let tiers = YtDlpTool.buildTiers(from: formats, duration: 480)
+
+        XCTAssertEqual(tiers.map(\.label), ["2160p", "1440p", "1080p"])
+        XCTAssertEqual(tiers.map(\.height), [2160, 1440, 1080])
+        XCTAssertEqual(tiers.map { $0.selector(for: .compatibleMP4) }, [
+            "401+140", "400+140", "137+140",
+        ])
+        XCTAssertEqual(tiers.map { $0.estimatedBytes(for: .compatibleMP4) }, [
+            132_399_924, 77_510_114, 123_093_378,
+        ])
     }
 
     func testProgressiveTierDoesNotDoubleCountSeparateAudio() {
@@ -251,5 +381,28 @@ final class YtDlpEngineProgressTests: XCTestCase {
         let tier = YtDlpTool.buildTiers(from: formats, duration: 10).first
         XCTAssertEqual(tier?.componentBytes, [1_000])
         XCTAssertEqual(tier?.approximateBytes, 1_000)
+    }
+
+    func testTierEstimatesMatchTheSelectedContainerCodecFamily() {
+        let formats: [[String: Any]] = [
+            ["height": 1440, "vcodec": "avc1.640033", "acodec": "none", "filesize": 2_000, "tbr": 2_000.0],
+            ["height": 1440, "vcodec": "av01.0.12M.08", "acodec": "none", "filesize": 1_200, "tbr": 1_200.0],
+            ["vcodec": "none", "acodec": "mp4a.40.2", "filesize": 200, "abr": 128.0],
+        ]
+        let tier = YtDlpTool.buildTiers(from: formats, duration: 10).first
+        XCTAssertEqual(tier?.height, 1440)
+        XCTAssertEqual(tier?.estimatedBytes(for: .compatibleMP4), 2_200)
+        XCTAssertEqual(tier?.estimatedBytes(for: .compactMKV), 1_400)
+    }
+
+    func testTierCatalogNeverInventsAnUnavailableResolutionLabel() {
+        let formats: [[String: Any]] = [
+            ["height": 2160, "vcodec": "vp9", "acodec": "none", "filesize": 4_000],
+            ["height": 1080, "vcodec": "vp9", "acodec": "none", "filesize": 2_000],
+            ["vcodec": "none", "acodec": "opus", "filesize": 200],
+        ]
+        let tiers = YtDlpTool.buildTiers(from: formats, duration: 10)
+        XCTAssertEqual(tiers.map(\.height), [2160, 1080])
+        XCTAssertFalse(tiers.contains(where: { $0.label == "1440p" }))
     }
 }

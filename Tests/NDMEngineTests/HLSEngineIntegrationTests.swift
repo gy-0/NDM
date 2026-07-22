@@ -127,7 +127,7 @@ final class HLSEngineIntegrationTests: XCTestCase {
             "-y",
             "-f", "lavfi", "-i", "testsrc=duration=1:size=128x72:rate=10",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
-            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:v", "h264_videotoolbox", "-allow_sw", "1",
             "-c:a", "aac",
             "-f", "mpegts", tsURL.path,
         ]
@@ -137,7 +137,7 @@ final class HLSEngineIntegrationTests: XCTestCase {
         gen.waitUntilExit()
         guard gen.terminationStatus == 0,
               let tsData = try? Data(contentsOf: tsURL), !tsData.isEmpty else {
-            throw XCTSkip("local ffmpeg can't encode the test stream (missing libx264/aac)")
+            throw XCTSkip("local ffmpeg can't encode the test stream (missing VideoToolbox H.264/AAC)")
         }
 
         let playlist = """

@@ -32,4 +32,19 @@ final class BridgeProtocolTests: XCTestCase {
         XCTAssertEqual(BridgeConstants.subprotocol, "neatextension.v1")
         XCTAssertEqual(BridgeConstants.waiting, "waiting")
     }
+
+    func testParseFirstClassMediaPageRoute() throws {
+        let raw = [
+            "1:GET",
+            "2:https://x.com/example/status/123",
+            "6:media-page",
+            "4:Download with NDM",
+            "Referer: https://x.com/home",
+            "",
+        ].joined(separator: "\r\n")
+
+        let message = try BridgeMessageParser.parse(raw)
+        XCTAssertEqual(message.url, "https://x.com/example/status/123")
+        XCTAssertEqual(message.ltype, "media-page")
+    }
 }
