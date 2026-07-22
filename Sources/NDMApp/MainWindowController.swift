@@ -21,7 +21,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private var allTasks: [DownloadTask] = []
     private var progressByID: [Int64: DownloadProgress] = [:]
     private var displayedRows: [TaskRowPresentation] = []
-    private var selectedFilter: SidebarFilter = .all
+    private var selectedFilter: SidebarFilter = QAPreviewOverrides.initialFilter ?? .all
     private var searchQuery = ""
     private var selectedTaskID: Int64?
     /// Establish a useful launch focus once, without re-selecting after the
@@ -523,7 +523,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             headerTitle: searchQuery.isEmpty
                 ? selectedFilter.title
                 : L10n.searchResultsTitle,
-            headerMeta: L10n.headerTaskCount(displayedRows.count)
+            headerMeta: L10n.headerTaskCount(displayedRows.count),
+            // Media filters open as a poster wall; general files stay a list.
+            preferGallery: selectedFilter == .video || selectedFilter == .image
         )
         updateInspector()
         updateToolbarEnablement()
@@ -1932,7 +1934,8 @@ private final class TaskListTableView: NSTableView {
 }
 
 @MainActor
-private final class TaskListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+private final class TaskListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate,
+    NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
     var onSelectTaskID: ((Int64?) -> Void)?
     var onActivateTaskID: ((Int64) -> Void)?
     var onContextAction: ((TaskListContextAction, Int64) -> Void)?
@@ -1949,6 +1952,17 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     // display type, not with a bare file list.
     private let headerTitleLabel = NSTextField(labelWithString: "")
     private let headerMetaLabel = NSTextField(labelWithString: "")
+    // Poster-wall gallery — the media view of the same rows. List stays the
+    // backbone for general files; video/image filters prefer the wall.
+    private let galleryScroll = NSScrollView()
+    private let galleryView = GalleryCollectionView()
+    private let galleryLayout = NSCollectionViewFlowLayout()
+    private let listModeButton = NSButton()
+    private let gridModeButton = NSButton()
+    private var preferGallery = false
+    /// User toggle; nil follows the filter's preference. Reset on filter switch.
+    private var galleryOverride: Bool?
+    private var isGalleryActive: Bool { galleryOverride ?? preferGallery }
     private let emptyLabel = NSTextField(labelWithString: "")
     private let emptySubtitleLabel = NSTextField(labelWithString: "")
     private let emptyStack = NSStackView()
@@ -1992,6 +2006,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             return true
         }
         tableView.menu = makeContextMenu()
+        galleryView.menu = tableView.menu
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("task"))
         tableView.addTableColumn(col)
 
@@ -2079,10 +2094,39 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         headerMetaLabel.textColor = .tertiaryLabelColor
         headerMetaLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        configureModeButton(listModeButton, symbol: "list.bullet", tooltip: L10n.listViewTooltip, action: #selector(chooseListMode))
+        configureModeButton(gridModeButton, symbol: "square.grid.2x2", tooltip: L10n.galleryViewTooltip, action: #selector(chooseGalleryMode))
+
+        galleryLayout.minimumInteritemSpacing = 16
+        galleryLayout.minimumLineSpacing = 22
+        galleryLayout.sectionInset = NSEdgeInsets(top: 8, left: 20, bottom: 24, right: 20)
+        galleryView.collectionViewLayout = galleryLayout
+        galleryView.dataSource = self
+        galleryView.delegate = self
+        galleryView.isSelectable = true
+        galleryView.allowsMultipleSelection = false
+        galleryView.allowsEmptySelection = true
+        galleryView.backgroundColors = [NDMChrome.contentSurface]
+        galleryView.register(GalleryCardItem.self, forItemWithIdentifier: GalleryCardItem.identifier)
+        galleryView.onRightClickItem = { [weak self] index in
+            self?.selectGalleryItem(at: index)
+        }
+        galleryScroll.documentView = galleryView
+        galleryScroll.hasVerticalScroller = true
+        galleryScroll.autohidesScrollers = true
+        galleryScroll.borderType = .noBorder
+        galleryScroll.drawsBackground = true
+        galleryScroll.backgroundColor = NDMChrome.contentSurface
+        galleryScroll.translatesAutoresizingMaskIntoConstraints = false
+        galleryScroll.isHidden = true
+
         view.addSubview(headerTitleLabel)
         view.addSubview(headerMetaLabel)
+        view.addSubview(listModeButton)
+        view.addSubview(gridModeButton)
         view.addSubview(heroView)
         view.addSubview(scrollView)
+        view.addSubview(galleryScroll)
         view.addSubview(emptyStack)
         view.addSubview(batchBar)
         NSLayoutConstraint.activate([
@@ -2090,11 +2134,23 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             headerTitleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             headerTitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerMetaLabel.leadingAnchor, constant: -12),
             headerMetaLabel.firstBaselineAnchor.constraint(equalTo: headerTitleLabel.firstBaselineAnchor),
-            headerMetaLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            headerMetaLabel.trailingAnchor.constraint(equalTo: listModeButton.leadingAnchor, constant: -14),
+            listModeButton.centerYAnchor.constraint(equalTo: headerTitleLabel.centerYAnchor),
+            listModeButton.trailingAnchor.constraint(equalTo: gridModeButton.leadingAnchor, constant: -2),
+            gridModeButton.centerYAnchor.constraint(equalTo: headerTitleLabel.centerYAnchor),
+            gridModeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            listModeButton.widthAnchor.constraint(equalToConstant: 28),
+            listModeButton.heightAnchor.constraint(equalToConstant: 24),
+            gridModeButton.widthAnchor.constraint(equalToConstant: 28),
+            gridModeButton.heightAnchor.constraint(equalToConstant: 24),
             heroView.topAnchor.constraint(equalTo: headerTitleLabel.bottomAnchor, constant: 12),
             heroView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             heroView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             heroHeight,
+            galleryScroll.topAnchor.constraint(equalTo: heroView.bottomAnchor),
+            galleryScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            galleryScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            galleryScroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             scrollView.topAnchor.constraint(equalTo: heroView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -2132,6 +2188,118 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         )
     }
 
+    // MARK: - Gallery mode
+
+    private func configureModeButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.image = NDMChrome.symbol(symbol, pointSize: 13, weight: .medium)
+        button.imagePosition = .imageOnly
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(tooltip)
+        button.target = self
+        button.action = action
+        button.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    @objc private func chooseListMode() {
+        galleryOverride = false
+        applyViewMode()
+    }
+
+    @objc private func chooseGalleryMode() {
+        galleryOverride = true
+        applyViewMode()
+        galleryView.reloadData()
+        syncGallerySelection()
+    }
+
+    private var listIsEmpty = false
+
+    /// Visibility + toggle tints only — reloads are the callers' business.
+    private func applyViewMode() {
+        let gallery = isGalleryActive
+        scrollView.isHidden = gallery || listIsEmpty
+        galleryScroll.isHidden = !gallery || listIsEmpty
+        listModeButton.contentTintColor = gallery ? .tertiaryLabelColor : NDMChrome.accent
+        gridModeButton.contentTintColor = gallery ? NDMChrome.accent : .tertiaryLabelColor
+    }
+
+    private func selectGalleryItem(at index: Int) {
+        guard index < rows.count else { return }
+        galleryView.selectionIndexPaths = [IndexPath(item: index, section: 0)]
+        selectedTaskID = rows[index].taskID
+        onSelectTaskID?(selectedTaskID)
+    }
+
+    private func syncGallerySelection() {
+        guard let selectedTaskID,
+              let index = rows.firstIndex(where: { $0.taskID == selectedTaskID }) else {
+            galleryView.selectionIndexPaths = []
+            return
+        }
+        galleryView.selectionIndexPaths = [IndexPath(item: index, section: 0)]
+    }
+
+    func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
+
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
+        rows.count
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        itemForRepresentedObjectAt indexPath: IndexPath
+    ) -> NSCollectionViewItem {
+        let item = collectionView.makeItem(withIdentifier: GalleryCardItem.identifier, for: indexPath)
+        guard let card = item as? GalleryCardItem, indexPath.item < rows.count else { return item }
+        let row = rows[indexPath.item]
+        let cover = CoverArtCache.shared.image(for: row.taskID)
+        if cover == nil {
+            CoverArtCache.shared.ensureCover(
+                taskID: row.taskID,
+                remoteURL: nil,
+                localFile: row.localFileURL
+            )
+        }
+        card.apply(row, cover: cover)
+        card.onActivate = { [weak self] taskID in
+            self?.onActivateTaskID?(taskID)
+        }
+        return item
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        layout collectionViewLayout: NSCollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> NSSize {
+        let insets = galleryLayout.sectionInset
+        let available = collectionView.bounds.width - insets.left - insets.right
+        guard available > 100 else { return NSSize(width: 220, height: 180) }
+        let columns = max(2, Int(available / 250))
+        let width = floor((available - galleryLayout.minimumInteritemSpacing * CGFloat(columns - 1)) / CGFloat(columns))
+        return NSSize(width: width, height: floor(width * 9 / 16) + 58)
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
+        guard let index = indexPaths.first?.item, index < rows.count else { return }
+        selectedTaskID = rows[index].taskID
+        onSelectTaskID?(selectedTaskID)
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
+        if collectionView.selectionIndexPaths.isEmpty {
+            selectedTaskID = nil
+            onSelectTaskID?(nil)
+        }
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        galleryLayout.invalidateLayout()
+    }
+
     /// The list only reports which action was tapped; `MainWindowController`
     /// owns confirmation dialogs and the actual engine calls, same split as
     /// `onContextAction` for single-row actions.
@@ -2164,6 +2332,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     func relocalizeChrome() {
         tableView.menu = makeContextMenu()
+        galleryView.menu = tableView.menu
     }
 
     /// Zoom task content while the titlebar, toolbar, sidebar, inspector, and
@@ -2193,10 +2362,16 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptySubtitle: String,
         emptyShowsActions: Bool = false,
         headerTitle: String = "",
-        headerMeta: String = ""
+        headerMeta: String = "",
+        preferGallery: Bool = false
     ) {
         headerTitleLabel.stringValue = headerTitle
         headerMetaLabel.stringValue = headerMeta
+        if self.preferGallery != preferGallery {
+            // Filter context changed — the manual toggle was about the old one.
+            self.preferGallery = preferGallery
+            galleryOverride = nil
+        }
 #if DEBUG
         let signpostID = NDMPerformance.begin("TaskListUpdate")
         defer { NDMPerformance.end("TaskListUpdate", id: signpostID) }
@@ -2217,6 +2392,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptyActionsRow?.isHidden = !emptyShowsActions
         let wasEmpty = !emptyStack.isHidden
         let isEmpty = rows.isEmpty && heroTaskID == nil
+        listIsEmpty = isEmpty
         if wasEmpty != isEmpty {
             emptyStack.isHidden = !isEmpty
             tableView.isHidden = isEmpty
@@ -2278,6 +2454,24 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         // back to one row every second.
         if tableView.selectedRowIndexes.count <= 1 {
             applyTableSelection(to: selectedTaskID)
+        }
+
+        applyViewMode()
+        // Keep the poster wall live without structural churn: same IDs →
+        // refresh visible cards in place; new/removed IDs → full reload.
+        if isGalleryActive, !isEmpty {
+            if previousIDs != nextIDs || galleryView.numberOfItems(inSection: 0) != rows.count {
+                galleryView.reloadData()
+                syncGallerySelection()
+            } else {
+                for indexPath in galleryView.indexPathsForVisibleItems() {
+                    let index = indexPath.item
+                    guard index < rows.count, index < previousRows.count,
+                          previousRows[index] != rows[index],
+                          let card = galleryView.item(at: indexPath) as? GalleryCardItem else { continue }
+                    card.apply(rows[index], cover: CoverArtCache.shared.image(for: rows[index].taskID))
+                }
+            }
         }
     }
 
@@ -2376,6 +2570,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     private func refreshCover(for taskID: Int64?) {
         heroView.refreshCover(with: rows)
+        if isGalleryActive {
+            for indexPath in galleryView.indexPathsForVisibleItems() {
+                let index = indexPath.item
+                guard index < rows.count,
+                      taskID == nil || rows[index].taskID == taskID,
+                      let card = galleryView.item(at: indexPath) as? GalleryCardItem else { continue }
+                card.apply(rows[index], cover: CoverArtCache.shared.image(for: rows[index].taskID))
+            }
+        }
         for row in 0..<rows.count {
             if let taskID, rows[row].taskID != taskID { continue }
             if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView {

@@ -116,6 +116,12 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_PROGRESS"] == "1"
     }
 
+    /// Launch with a sidebar filter preselected, e.g. `NDM_QA_FILTER=video`.
+    static var initialFilter: SidebarFilter? {
+        guard isEnabled, let raw = environment["NDM_QA_FILTER"] else { return nil }
+        return SidebarFilter(rawValue: raw)
+    }
+
     static var showMediaPreparation: Bool {
         isEnabled && environment["NDM_QA_SHOW_MEDIA_PREPARATION"] == "1"
     }
@@ -158,6 +164,8 @@ enum QAPreviewOverrides {
     static let showSettings = false
     static let settingsSection: String? = nil
     static let showNewDownload = false
+    static let showProgress = false
+    static let initialFilter: SidebarFilter? = nil
     static let showMediaPreparation = false
     static let includeFailure = false
     static let mediaAccessURL = "https://www.douyin.com/video/7480000000000000000"

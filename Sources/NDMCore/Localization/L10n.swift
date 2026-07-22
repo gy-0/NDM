@@ -1311,6 +1311,8 @@ public enum L10n: Sendable {
     }
     public static var nowDownloading: String { t("NOW DOWNLOADING", "正在下载") }
     public static var searchResultsTitle: String { t("Search Results", "搜索结果") }
+    public static var listViewTooltip: String { t("List view", "列表视图") }
+    public static var galleryViewTooltip: String { t("Gallery view", "画廊视图") }
     public static func headerTaskCount(_ count: Int) -> String {
         t("\(count) items", "\(count) 个任务")
     }
