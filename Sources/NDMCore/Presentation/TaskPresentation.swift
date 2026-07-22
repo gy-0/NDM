@@ -382,8 +382,13 @@ public struct TaskRowPresentation: Equatable, Sendable {
             isFailed: task.status == .error,
             isQueued: task.status == .waiting,
             speedBytesPerSecond: task.status == .downloading ? speed : 0,
+            // Finishing tail: an explicit post-process phase, or the byte-gap
+            // stretch of a yt-dlp download after the video stream is down
+            // (journeyFraction is monotonic, so ≥0.82 latches). Regular HTTP
+            // downloads have smooth byte progress and never enter this state.
             isFinalizing: task.status == .downloading
-                && [.merging, .subtitles, .finalizing].contains(progress?.phase)
+                && ([.merging, .subtitles, .finalizing].contains(progress?.phase)
+                    || (isYtDlp && fraction >= 0.82))
         )
     }
 }

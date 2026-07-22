@@ -198,16 +198,18 @@ final class NowDownloadingHeroView: NSView {
         currentTaskID = primary.taskID
 
         nameLabel.stringValue = primary.filename
-        metaLabel.stringValue = primary.statusDetail
         percentLabel.stringValue = primary.progressText
 
-        // Byte-less post-processing: no bytes move, so the big speed numeral
-        // would read a frozen "0". Show the phase word breathing instead —
-        // "正在合并音视频…" — so it reads as active work, not a stall.
+        // Finishing tail: no bytes move in bursts, so the big speed numeral
+        // would read a frozen "0". Show a stable breathing "即将完成…" instead
+        // of a flickering byte/phase line — it reads as active work, not a stall.
         if primary.isFinalizing {
+            metaLabel.stringValue = ""
             eyebrowLabel.stringValue = L10n.finishingUp
-            speedLabel.stringValue = primary.statusDetail
-            speedLabel.font = .systemFont(ofSize: 18, weight: .medium)
+            // A stable line — no flickering byte counts or bouncing phase text
+            // during the lumpy tail. metaLabel below still carries any detail.
+            speedLabel.stringValue = L10n.almostDone
+            speedLabel.font = .systemFont(ofSize: 22, weight: .medium)
             unitLabel.stringValue = ""
             startFinalizePulse()
             segmentStrip.isHidden = true
@@ -223,6 +225,7 @@ final class NowDownloadingHeroView: NSView {
             return
         }
         stopFinalizePulse()
+        metaLabel.stringValue = primary.statusDetail
         eyebrowLabel.stringValue = L10n.nowDownloading
         speedLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .light)
 

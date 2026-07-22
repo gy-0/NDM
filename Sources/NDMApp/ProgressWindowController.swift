@@ -712,13 +712,14 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// Compact pill text for a post-processing phase.
+    /// Compact pill text for the finishing tail. A specific post-process phase
+    /// names itself; the byte-gap tail before it reads "即将完成".
     private static func phaseLabel(_ phase: DownloadPhase?) -> String {
         switch phase {
         case .merging: return L10n.t("Merging", "合并中")
         case .subtitles: return L10n.t("Subtitles", "字幕整理")
         case .finalizing: return L10n.t("Finishing", "整理中")
-        default: return L10n.downloading
+        default: return L10n.t("Almost done", "即将完成")
         }
     }
 
@@ -736,11 +737,18 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             window?.title = "\(pct)% \(filename)"
         }
 
-        // Byte-less post-processing (merge / subtitles / finalize): the ring
-        // spins as an indeterminate "working" indicator instead of freezing at
-        // ~98%, and the speed line reads "—" rather than a misleading 0 KB/s.
+        // The yt-dlp finishing tail: after the video stream is down (~82% of
+        // the journey), the remaining audio-stream/merge/subtitle steps report
+        // in lumpy bursts with gaps, so the bar looks frozen at an arbitrary %
+        // (87/90/93 — wherever the last report landed) while still saying
+        // "downloading" and a stale speed balloons the ETA. journeyFraction is
+        // monotonic, so this threshold latches on its own: from here we show
+        // one stable "即将完成" state (spinner, no ETA) instead of flickering
+        // between download and post-process labels.
+        let isYtDlpTask = task?.linkType.lowercased() == "ytdlp"
         let isPostProcessing = progress.status == .downloading
-            && [.merging, .subtitles, .finalizing].contains(progress.phase)
+            && ([.merging, .subtitles, .finalizing].contains(progress.phase)
+                || (isYtDlpTask && progress.fractionCompleted >= 0.82))
         overallProgress.progress = fraction
         overallProgress.isActive = progress.status == .downloading && !isPostProcessing
         progressRing.isWorking = isPostProcessing
@@ -847,6 +855,20 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             smartlineLabel.toolTip = reason
             smartlineLabel.setAccessibilityLabel(L10n.failed)
             smartlineLabel.setAccessibilityValue(reason)
+            smartlineLabel.isHidden = false
+        } else if isPostProcessing {
+            // One stable line for the whole finishing tail. A real post-process
+            // phase names the step; the byte-gap tail before it stays calm
+            // rather than flickering back to "downloading video and audio".
+            switch progress.phase {
+            case .merging: smartlineLabel.stringValue = L10n.ytdlpMerging
+            case .subtitles: smartlineLabel.stringValue = L10n.ytdlpPreparingSubtitles
+            case .finalizing: smartlineLabel.stringValue = L10n.ytdlpFinalizing
+            default: smartlineLabel.stringValue = L10n.t(
+                "Almost done — assembling the final file…",
+                "即将完成 —— 正在拼装最终文件…"
+            )
+            }
             smartlineLabel.isHidden = false
         } else if let phase = progress.phase, progress.status != .complete {
             switch phase {
