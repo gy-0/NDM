@@ -9,10 +9,7 @@ final class CompletionStackView: NSView {
     var onExpansionChanged: ((Bool) -> Void)?
 
     private let shell = ChromeBox(
-        fill: NDMChrome.dockFill,
-        borderColor: NDMChrome.hairline,
-        cornerRadius: 9,
-        borderWidth: 1
+        fill: .clear
     )
     private let toggleButton = NSButton(title: "", target: nil, action: nil)
     private let summaryLabel = NSTextField(labelWithString: "")
@@ -43,7 +40,7 @@ final class CompletionStackView: NSView {
         guard !isHidden else {
             return NSSize(width: NSView.noIntrinsicMetric, height: 0)
         }
-        let collapsedHeight = 36 * layoutScale
+        let collapsedHeight = 30 * layoutScale
         return NSSize(
             width: NSView.noIntrinsicMetric,
             height: collapsedHeight + (expanded ? expansionHeight : 0)
@@ -84,7 +81,7 @@ final class CompletionStackView: NSView {
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
         contentStack.spacing = 8
-        contentStack.edgeInsets = NSEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
+        contentStack.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.addArrangedSubview(header)
         contentStack.addArrangedSubview(rowsStack)
@@ -101,8 +98,8 @@ final class CompletionStackView: NSView {
             contentStack.leadingAnchor.constraint(equalTo: shell.leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: shell.trailingAnchor),
             contentStack.bottomAnchor.constraint(equalTo: shell.bottomAnchor),
-            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -22),
-            rowsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -22),
+            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            rowsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
         isHidden = true
         updateDisclosure()
@@ -144,10 +141,10 @@ final class CompletionStackView: NSView {
         summaryLabel.font = .systemFont(ofSize: 11 * contentScale)
         contentStack.spacing = 8 * layoutScale
         contentStack.edgeInsets = NSEdgeInsets(
-            top: 9 * layoutScale,
-            left: 11 * layoutScale,
-            bottom: 9 * layoutScale,
-            right: 11 * layoutScale
+            top: 6 * layoutScale,
+            left: 0,
+            bottom: 6 * layoutScale,
+            right: 0
         )
         rebuildRows()
         updateDisclosure()

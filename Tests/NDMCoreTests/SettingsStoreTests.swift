@@ -66,6 +66,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(L10n.share, "分享")
         XCTAssertEqual(L10n.quickLook, "快速查看")
         XCTAssertEqual(L10n.moreActions, "更多操作")
+        XCTAssertEqual(L10n.readyToPlay, "下载好了")
         XCTAssertFalse(L10n.finalizeKeptTS.lowercased().contains("ffmpeg"))
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))
         XCTAssertEqual(L10n.ytdlpEntireCollection(12), "整个合集 · 12 项")

@@ -1009,37 +1009,16 @@ public enum L10n: Sendable {
 
     public static var downloadComplete: String { t("Download Complete", "下载完成") }
     public static var ready: String { t("Ready", "已就绪") }
-    public static var readyToPlay: String { t("Ready to play", "可以直接播放了") }
+    public static var readyToPlay: String { t("Ready to play", "下载好了") }
     public static var play: String { t("Play", "播放") }
 
-    // Smart Finalize — what happened after the bytes landed.
-    public static var finalizeSectionTitle: String { t("Smart Finalize", "Smart Finalize") }
-    public static var finalizeMergedSegments: String {
-        t("All stream segments merged into one file", "已合并全部流分段")
-    }
-    public static var finalizeMergedTracks: String {
-        t("Video and audio tracks merged", "已合并音视频轨")
-    }
-    public static var finalizeRemuxedMP4: String {
-        t("Repackaged as MP4 — lossless, plays anywhere", "已无损转封装为 MP4，随处可播、可直接分享")
-    }
+    // Completion details — normal finishing stays silent; only exceptions
+    // need an explanation in the everyday completion window.
     public static var finalizeKeptTS: String {
         t("Original stream kept safely — the finishing component is temporarily unavailable", "已安全保留原始流文件——成品整理组件暂时不可用")
     }
     public static var finalizeAudioSidecar: String {
         t("Audio kept safely alongside the video — finishing is temporarily unavailable", "音轨已安全保存在视频旁边——成品整理暂时不可用")
-    }
-    public static func finalizeNamed(_ name: String) -> String {
-        t("Named from the page: \(name)", "已按页面标题命名：\(name)")
-    }
-    public static var finalizeCoverReady: String {
-        t("Preview thumbnail ready", "已生成预览封面")
-    }
-    public static var finalizePlayableMedia: String {
-        t("Playable media file prepared", "已准备好可直接播放的媒体文件")
-    }
-    public static var finalizeSubtitleReady: String {
-        t("Subtitle named to match the video", "字幕已与视频同名，播放器可自动识别")
     }
     public static var finalizeSharePresets: String {
         t("Export for WeChat / Telegram", "导出适合微信 / Telegram 的体积")

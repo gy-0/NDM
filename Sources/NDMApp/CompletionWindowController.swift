@@ -5,39 +5,58 @@ import NDMEngine
 import QuickLookThumbnailing
 
 /// Non-modal completion panel — used only when no progress window is open.
+///
+/// Cinema layout: a full-bleed dark hero carries the finished file's own
+/// artwork with the "Download Complete" headline and an accent underline laid
+/// over it; a clean light deck below holds the file identity, the optional
+/// sidecar disclosure, and one confident action row.
 @MainActor
 final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private let task: DownloadTask
     private let onDismiss: () -> Void
     private let completionStack: CompletionStack?
-    private var collapsedWindowHeight: CGFloat = 340
+    private var collapsedWindowHeight: CGFloat = 300
     private let completionStackView = CompletionStackView()
     private let audioExtraction = AudioExtractionCoordinator()
     private let audioStatusView = AudioExtractionStatusView()
-    private let scribeStudioCard = ScribeStudioActionCard()
     private let fileSharePresenter = FileSharePresenter()
     private var completionExpansionAddedHeight: CGFloat = 0
     private weak var metaLabel: NSTextField?
-    private weak var rootStack: NSStackView?
+    private weak var deckStack: NSStackView?
+    private var hero: CompletionCinemaHero?
+    private weak var openButton: InspectorActionButton?
+    private weak var revealButton: InspectorActionButton?
+    private weak var shareButton: InspectorActionButton?
+    private weak var moreButton: InspectorActionButton?
+    private weak var noticeLabel: NSTextField?
+    /// Resolved asynchronously and folded into the meta line; kept so the line
+    /// can be rebuilt in place on a language switch without losing the runtime.
+    private var durationText: String?
+    private var languageObserver: NSObjectProtocol?
+
+    /// The hero holds a fixed cinematic band; only the deck below it grows.
+    private let heroHeight: CGFloat = 208
 
     init(task: DownloadTask, onDismiss: @escaping () -> Void = {}) {
         self.task = task
         self.onDismiss = onDismiss
         self.completionStack = SmartFinalize.completionStack(primary: task.destinationFileURL)
         let window = NSWindow(
-            contentRect: NSRect(
-                x: 0,
-                y: 0,
-                width: 440,
-                height: collapsedWindowHeight
-            ),
-            styleMask: [.titled, .closable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 452, height: collapsedWindowHeight),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
         window.title = L10n.downloadComplete
-        window.minSize = NSSize(width: 440, height: 300)
         NDMChrome.applyWindowChrome(window)
+        // The hero runs edge to edge under a transparent titlebar; a custom
+        // close puck in the hero replaces the traffic lights.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         super.init(window: window)
         completionStackView.onExpansionChanged = { [weak self] expanded in
             self?.resizeForCompletionStack(expanded: expanded)
@@ -51,6 +70,14 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         resizeToFitContent(animate: false)
         window.center()
         window.delegate = self
+        // Relocalize this panel in place when the language switches live.
+        languageObserver = NotificationCenter.default.addObserver(
+            forName: L10n.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.relocalize() }
+        }
     }
 
     @available(*, unavailable)
@@ -76,60 +103,37 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true, animate: true)
     }
 
-    /// Smart Finalize summary derived from what the engine actually produced.
-    /// Returns nil for plain downloads — the card stays quiet for those.
-    private func finalizeSteps() -> [String]? {
+    /// Successful finishing work stays silent. Only surface a result when the
+    /// user received something other than the usual ready-to-use file.
+    private func deliveryNotice() -> String? {
         let ext = (task.filename as NSString).pathExtension.lowercased()
-        var steps: [String] = []
         switch task.linkType.lowercased() {
         case "hls", "m3u8":
-            steps = [
-                L10n.finalizeMergedSegments,
-                ext == "mp4" ? L10n.finalizeRemuxedMP4 : L10n.finalizeKeptTS,
-            ]
+            return ext == "mp4" ? nil : L10n.finalizeKeptTS
         case "mkv", "mkva", "mkvv":
-            steps = [L10n.finalizeMergedTracks]
-            if ext == "mp4" {
-                steps.append(L10n.finalizeRemuxedMP4)
-            } else {
-                steps.append(L10n.finalizeAudioSidecar)
-            }
-        case "ytdlp":
-            steps = [L10n.finalizePlayableMedia]
+            return ext == "mp4" ? nil : L10n.finalizeAudioSidecar
         default:
-            guard task.category == .video || task.category == .audio else { return nil }
-            steps = [L10n.finalizePlayableMedia]
+            return nil
         }
-        if SmartFinalize.filenameReflectsPageTitle(task.filename, pageTitle: task.pageTitle) {
-            let actualStem = (task.filename as NSString).deletingPathExtension
-            steps.append(L10n.finalizeNamed(actualStem))
-        }
-        if completionStack?.artifacts.contains(where: { $0.kind == .subtitle }) == true {
-            steps.append(L10n.finalizeSubtitleReady)
-        }
-        if completionStack?.artifacts.contains(where: { $0.kind == .cover }) == true {
-            steps.append(L10n.finalizeCoverReady)
-        }
-        return steps
     }
 
-    private func makeStepRow(_ text: String, pending: Bool = false) -> NSView {
-        let check = NSImageView()
-        let symbol = pending ? "circle.dashed" : "checkmark.circle.fill"
-        check.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        check.contentTintColor = pending ? .tertiaryLabelColor : NDMChrome.accent
-        check.translatesAutoresizingMaskIntoConstraints = false
-        check.setAccessibilityElement(false)
+    private func makeDeliveryNotice(_ text: String) -> NSView {
+        let icon = NSImageView()
+        icon.image = NDMChrome.symbol("info.circle", pointSize: 13, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.setAccessibilityElement(false)
         let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = pending ? .secondaryLabelColor : .labelColor
-        let row = NSStackView(views: [check, label])
+        label.font = .systemFont(ofSize: 11.5)
+        label.textColor = .secondaryLabelColor
+        noticeLabel = label
+        let row = NSStackView(views: [icon, label])
         row.orientation = .horizontal
         row.alignment = .firstBaseline
         row.spacing = 7
         NSLayoutConstraint.activate([
-            check.widthAnchor.constraint(equalToConstant: 15),
-            check.heightAnchor.constraint(equalToConstant: 15),
+            icon.widthAnchor.constraint(equalToConstant: 15),
+            icon.heightAnchor.constraint(equalToConstant: 15),
         ])
         return row
     }
@@ -137,98 +141,88 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private func buildUI() {
         guard let content = window?.contentView else { return }
 
-        let steps = finalizeSteps()
-        let isMedia = steps != nil
+        let isMedia = task.category == .video || task.category == .audio
+        let notice = deliveryNotice()
 
-        // A small green "done" check leads the headline — the completion
-        // moment earns a beat of success color, not flat label ink.
-        let checkBadge = NSImageView()
-        checkBadge.image = NDMChrome.symbol("checkmark.circle.fill", pointSize: 20, weight: .semibold)
-        checkBadge.contentTintColor = .systemGreen
-        checkBadge.translatesAutoresizingMaskIntoConstraints = false
-        checkBadge.setAccessibilityElement(false)
-        let titleText = NSTextField(labelWithString: isMedia ? L10n.readyToPlay : L10n.ready)
-        titleText.font = .systemFont(ofSize: 24, weight: .bold)
-        let title = NSStackView(views: [checkBadge, titleText])
-        title.orientation = .horizontal
-        title.alignment = .centerY
-        title.spacing = 8
+        // MARK: Hero band — dark, edge to edge, thumbnail as backdrop.
+        let hero = CompletionCinemaHero(
+            title: L10n.downloadComplete,
+            filename: task.filename
+        )
+        hero.translatesAutoresizingMaskIntoConstraints = false
+        hero.onClose = { [weak self] in self?.closeClicked() }
+        self.hero = hero
+        loadThumbnail(into: hero)
+
+        // MARK: File identity card.
+        let tile = FileGlyphTile(filename: task.filename)
+        tile.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            checkBadge.widthAnchor.constraint(equalToConstant: 22),
-            checkBadge.heightAnchor.constraint(equalToConstant: 22),
+            tile.widthAnchor.constraint(equalToConstant: 46),
+            tile.heightAnchor.constraint(equalToConstant: 46),
         ])
 
-        let name = NSTextField(wrappingLabelWithString: task.filename.isEmpty ? L10n.download : task.filename)
-        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        let name = NSTextField(labelWithString: task.filename.isEmpty ? L10n.download : task.filename)
+        name.font = .systemFont(ofSize: 14.5, weight: .semibold)
         name.lineBreakMode = .byTruncatingMiddle
-        name.maximumNumberOfLines = 2
+        name.maximumNumberOfLines = 1
+        name.toolTip = task.filename
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // A generous 16:9 hero: a real Quick Look thumbnail for media, or a
-        // large category-tinted type glyph on a tinted plate for everything
-        // else — no more stamp-sized gray file icon.
-        let thumb = CompletionHeroView(filename: task.filename)
-        thumb.translatesAutoresizingMaskIntoConstraints = false
-        thumb.setAccessibilityElement(false)
-        NSLayoutConstraint.activate([
-            thumb.widthAnchor.constraint(equalToConstant: 168),
-            thumb.heightAnchor.constraint(equalToConstant: 104),
-        ])
-        loadThumbnail(into: thumb.imageView)
-
-        let sizeText = task.fileSize > 0
-            ? TaskPresentationFormatting.byteCount(task.fileSize)
-            : ""
-        let typeText = L10n.fileTypeDisplay(ext: (task.filename as NSString).pathExtension)
-        let meta = NSTextField(labelWithString: [sizeText, typeText].filter { !$0.isEmpty }.joined(separator: "  ·  "))
+        let meta = NSTextField(labelWithString: "")
         meta.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         meta.textColor = .secondaryLabelColor
         meta.lineBreakMode = .byTruncatingTail
         metaLabel = meta
+        updateMetaLabel()
         loadMediaDuration()
 
-        let open = InspectorActionButton(title: isMedia ? L10n.play : L10n.open)
+        let caption = NSStackView(views: [name, meta])
+        caption.orientation = .vertical
+        caption.alignment = .leading
+        caption.spacing = 3
+        caption.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let fileCard = NSStackView(views: [tile, caption])
+        fileCard.orientation = .horizontal
+        fileCard.alignment = .centerY
+        fileCard.spacing = 13
+
+        // MARK: Action row.
+        let open = InspectorActionButton(title: isMedia ? L10n.play : L10n.open, style: .filled)
         open.target = self
         open.action = #selector(openClicked)
         open.keyEquivalent = "\r"
         open.image = NDMChrome.symbol(isMedia ? "play.fill" : "arrow.up.forward.app.fill", pointSize: 12, weight: .semibold)
         open.imagePosition = .imageLeading
         open.imageHugsTitle = true
-        open.font = .systemFont(ofSize: 13, weight: .semibold)
-        open.contentTintColor = NDMChrome.accent
+        open.font = .systemFont(ofSize: 13.5, weight: .semibold)
 
-        let reveal = InspectorActionButton(title: L10n.showInFinder)
+        let reveal = outlinedButton(title: L10n.showInFinder)
         reveal.target = self
         reveal.action = #selector(revealClicked)
         reveal.image = NDMChrome.symbol("folder", pointSize: 12, weight: .medium)
         reveal.imagePosition = .imageLeading
         reveal.imageHugsTitle = true
         reveal.font = .systemFont(ofSize: 13, weight: .medium)
-        reveal.contentTintColor = .secondaryLabelColor
+        reveal.contentTintColor = .labelColor
 
-        let share = InspectorActionButton(title: "")
+        let share = outlinedButton(title: "")
         share.target = self
         share.action = #selector(shareClicked)
-        share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 13, weight: .medium)
+        share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 14, weight: .medium)
         share.imagePosition = .imageOnly
         share.contentTintColor = .secondaryLabelColor
         share.setAccessibilityLabel(L10n.share)
 
-        let more = InspectorActionButton(title: "")
+        let more = outlinedButton(title: "")
         more.target = self
         more.action = #selector(showMoreActions(_:))
-        more.image = NDMChrome.symbol("ellipsis", pointSize: 13, weight: .semibold)
+        more.image = NDMChrome.symbol("ellipsis", pointSize: 14, weight: .semibold)
         more.imagePosition = .imageOnly
         more.contentTintColor = .secondaryLabelColor
         more.setAccessibilityLabel(L10n.moreActions)
         more.isHidden = !SmartFinalize.supportsDeliveryRecipes(input: task.destinationFileURL)
-
-        let close = InspectorActionButton(title: L10n.close)
-        close.target = self
-        close.action = #selector(closeClicked)
-        close.keyEquivalent = "\u{1b}"
-        close.font = .systemFont(ofSize: 13, weight: .medium)
-        close.contentTintColor = .secondaryLabelColor
 
         let fileExists = task.destinationFileURL.map {
             FileManager.default.fileExists(atPath: $0.path)
@@ -237,133 +231,100 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         reveal.isEnabled = fileExists
         share.isEnabled = fileExists
         more.isEnabled = fileExists
+        openButton = open
+        revealButton = reveal
+        shareButton = share
+        moreButton = more
 
-        let actions = NSStackView(views: [open, reveal, NSView(), share, more, close])
+        let actions = NSStackView(views: [open, reveal, NSView(), share, more])
         actions.orientation = .horizontal
-        actions.spacing = 8
+        actions.spacing = 9
         actions.alignment = .centerY
         NSLayoutConstraint.activate([
-            open.widthAnchor.constraint(greaterThanOrEqualToConstant: 110),
-            reveal.widthAnchor.constraint(greaterThanOrEqualToConstant: 110),
-            close.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
-            // Icon-only actions need the same 32 pt hit target as neighboring
-            // controls; a 28 pt target was needlessly fiddly on a trackpad.
-            share.widthAnchor.constraint(equalToConstant: 32),
-            more.widthAnchor.constraint(equalToConstant: 32),
-            open.heightAnchor.constraint(equalToConstant: 32),
-            reveal.heightAnchor.constraint(equalToConstant: 32),
-            share.heightAnchor.constraint(equalToConstant: 32),
-            more.heightAnchor.constraint(equalToConstant: 32),
-            close.heightAnchor.constraint(equalToConstant: 32),
+            open.widthAnchor.constraint(greaterThanOrEqualToConstant: 104),
+            reveal.widthAnchor.constraint(greaterThanOrEqualToConstant: 128),
+            share.widthAnchor.constraint(equalToConstant: 42),
+            more.widthAnchor.constraint(equalToConstant: 42),
+            open.heightAnchor.constraint(equalToConstant: 38),
+            reveal.heightAnchor.constraint(equalToConstant: 38),
+            share.heightAnchor.constraint(equalToConstant: 38),
+            more.heightAnchor.constraint(equalToConstant: 38),
         ])
 
-        // Hero on top, then filename + meta beneath it — a poster-and-caption
-        // composition, not an icon-beside-text row.
-        let caption = NSStackView(views: [name, meta])
-        caption.orientation = .vertical
-        caption.alignment = .leading
-        caption.spacing = 3
-        let headerRow = NSStackView(views: [thumb, caption])
-        headerRow.orientation = .vertical
-        headerRow.alignment = .leading
-        headerRow.spacing = 12
-        headerRow.setCustomSpacing(14, after: thumb)
-
-        var arranged: [NSView] = [title, headerRow]
-        var stepsBoxRef: NSView?
-        if let steps {
-            let section = NSTextField(labelWithString: L10n.finalizeSectionTitle)
-            section.font = .systemFont(ofSize: 10, weight: .semibold)
-            // This is a real section heading, not decorative metadata. Using
-            // tertiary ink made it nearly disappear in the completion moment.
-            section.textColor = .secondaryLabelColor
-            // Open checklist — the checkmarks carry the meaning; no box.
-            let stepRows: [NSView] = steps.map { makeStepRow($0) }
-            let stepsStack = NSStackView(views: [section] + stepRows)
-            stepsStack.orientation = .vertical
-            stepsStack.alignment = .leading
-            stepsStack.spacing = 6
-            stepsStack.setCustomSpacing(8, after: section)
-            stepsStack.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 2, right: 0)
-            stepsStack.translatesAutoresizingMaskIntoConstraints = false
-            arranged.append(stepsStack)
-            stepsBoxRef = stepsStack
-        }
+        // MARK: Deck assembly (everything under the hero).
+        var arranged: [NSView] = [fileCard]
 
         completionStackView.apply(completionStack)
-        if !(completionStack?.sidecars.isEmpty ?? true) {
+        let hasSidecars = !(completionStack?.sidecars.isEmpty ?? true)
+        if hasSidecars {
+            arranged.append(makeHairline())
             arranged.append(completionStackView)
         }
-
-        arranged.append(audioStatusView)
-        scribeStudioCard.apply(fileURL: task.destinationFileURL)
-        if !scribeStudioCard.isHidden {
-            arranged.append(scribeStudioCard)
+        if let notice {
+            arranged.append(makeDeliveryNotice(notice))
         }
+        arranged.append(audioStatusView)
         arranged.append(actions)
 
-        let stack = NSStackView(views: arranged)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let deck = NSStackView(views: arranged)
+        deck.orientation = .vertical
+        deck.alignment = .leading
+        deck.spacing = 14
+        deck.setCustomSpacing(16, after: fileCard)
+        deck.translatesAutoresizingMaskIntoConstraints = false
+        deckStack = deck
 
-        let document = CompletionDocumentView()
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(stack)
-
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = document
-        content.addSubview(scrollView)
-        rootStack = stack
+        content.addSubview(hero)
+        content.addSubview(deck)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: content.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            hero.topAnchor.constraint(equalTo: content.topAnchor),
+            hero.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            hero.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            hero.heightAnchor.constraint(equalToConstant: heroHeight),
 
-            document.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            document.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            document.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            document.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
+            deck.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 20),
+            deck.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
+            deck.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+            deck.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
 
-            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 20),
-            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -20),
-            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
-            actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            headerRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            caption.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            fileCard.widthAnchor.constraint(equalTo: deck.widthAnchor),
+            caption.widthAnchor.constraint(equalTo: fileCard.widthAnchor, constant: -46 - 13),
+            actions.widthAnchor.constraint(equalTo: deck.widthAnchor),
         ])
-        if let stepsBoxRef {
-            stepsBoxRef.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        if hasSidecars {
+            completionStackView.widthAnchor.constraint(equalTo: deck.widthAnchor).isActive = true
         }
-        if !completionStackView.isHidden {
-            completionStackView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        audioStatusView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        if !scribeStudioCard.isHidden {
-            scribeStudioCard.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
+        audioStatusView.widthAnchor.constraint(equalTo: deck.widthAnchor).isActive = true
+    }
+
+    private func makeHairline() -> NSView {
+        let line = ChromeBox(fill: NDMChrome.hairline)
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        line.widthAnchor.constraint(equalTo: deckStack?.widthAnchor ?? line.widthAnchor).isActive = deckStack != nil
+        return line
+    }
+
+    /// Quiet outlined control — a crisp hairline pill, no gray wash.
+    private func outlinedButton(title: String) -> InspectorActionButton {
+        let button = InspectorActionButton(title: title, style: .flat)
+        button.wantsLayer = true
+        button.layer?.borderWidth = 1
+        button.layer?.borderColor = NDMChrome.hairline.cgColor
+        button.layer?.cornerRadius = 9
+        return button
     }
 
     private func resizeToFitContent(animate: Bool) {
-        guard let window, let rootStack else { return }
+        guard let window, let deckStack else { return }
         window.contentView?.layoutSubtreeIfNeeded()
-        let contentHeight = rootStack.fittingSize.height + 40
-        // `fittingSize` is content-view height, while `NSWindow.frame.height`
-        // includes the titlebar. Applying the content number directly to the
-        // frame clipped the bottom action row by roughly one titlebar.
+        let deckHeight = deckStack.fittingSize.height
+        // Hero band + deck (top gap 20 + deck + bottom gap 20).
+        let contentHeight = heroHeight + 20 + deckHeight + 20
         let desiredFrameHeight = window.frameRect(
             forContentRect: NSRect(x: 0, y: 0, width: window.contentLayoutRect.width, height: contentHeight)
         ).height
-        let minimum = window.minSize.height > 0 ? window.minSize.height : 240
+        let minimum: CGFloat = 300
         let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
         let maximum = max(minimum, (visibleFrame?.height ?? desiredFrameHeight) - 24)
         let targetHeight = min(max(minimum, desiredFrameHeight), maximum)
@@ -377,14 +338,13 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true, animate: animate)
     }
 
-    /// Replace the type glyph with a real Quick Look thumbnail once ready.
-    private func loadThumbnail(into imageView: NSImageView) {
-        guard let hero = imageView.superview as? CompletionHeroView,
-              let fileURL = task.destinationFileURL,
+    /// Fill the hero backdrop with a real Quick Look thumbnail once ready.
+    private func loadThumbnail(into hero: CompletionCinemaHero) {
+        guard let fileURL = task.destinationFileURL,
               FileManager.default.fileExists(atPath: fileURL.path) else { return }
         let request = QLThumbnailGenerator.Request(
             fileAt: fileURL,
-            size: CGSize(width: 336, height: 208),
+            size: CGSize(width: 904, height: 416),
             scale: window?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
@@ -394,6 +354,37 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                 hero?.showThumbnail(rep.nsImage)
             }
         }
+    }
+
+    /// Swap every localized string in place on a live language switch. Nothing
+    /// is torn down, so the sidecar disclosure's expansion, the loaded artwork
+    /// and the resolved runtime all survive — the way a mature app relocalizes.
+    private func relocalize() {
+        let isMedia = task.category == .video || task.category == .audio
+        window?.title = L10n.downloadComplete
+        hero?.setTitle(L10n.downloadComplete)
+        openButton?.title = isMedia ? L10n.play : L10n.open
+        revealButton?.title = L10n.showInFinder
+        shareButton?.setAccessibilityLabel(L10n.share)
+        moreButton?.setAccessibilityLabel(L10n.moreActions)
+        if let notice = deliveryNotice() { noticeLabel?.stringValue = notice }
+        updateMetaLabel()
+        completionStackView.relocalize()
+        resizeToFitContent(animate: false)
+    }
+
+    /// Rebuild the "size · type · duration" line from its parts. The size is
+    /// locale-agnostic; the type label and duration are folded in as available.
+    private func updateMetaLabel() {
+        guard let metaLabel else { return }
+        let sizeText = task.fileSize > 0
+            ? TaskPresentationFormatting.byteCount(task.fileSize)
+            : ""
+        let typeText = L10n.fileTypeDisplay(ext: (task.filename as NSString).pathExtension)
+        metaLabel.stringValue = [sizeText, typeText, durationText]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "  ·  ")
     }
 
     /// Append "42:07" to the meta line for playable media.
@@ -415,14 +406,9 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                 text = String(format: "%d:%02d", total / 60, total % 60)
             }
             await MainActor.run { [weak self] in
-                guard let self, let meta = self.metaLabel else { return }
-                let lines = meta.stringValue.split(separator: "\n", maxSplits: 1)
-                if let first = lines.first {
-                    let rest = lines.count > 1 ? "\n" + lines[1] : ""
-                    meta.stringValue = "\(first) · \(text)\(rest)"
-                } else {
-                    meta.stringValue = text
-                }
+                guard let self else { return }
+                self.durationText = text
+                self.updateMetaLabel()
             }
         }
     }
@@ -495,106 +481,283 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let languageObserver {
+            NotificationCenter.default.removeObserver(languageObserver)
+            self.languageObserver = nil
+        }
         audioExtraction.cancel()
         onDismiss()
     }
-
-    private var didCelebrate = false
-
-    override func showWindow(_ sender: Any?) {
-        super.showWindow(sender)
-        guard !didCelebrate, let content = window?.contentView else { return }
-        didCelebrate = true
-        // A beat of delight, fired from just under the success headline.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            CelebrationEffect.burst(
-                in: content,
-                at: CGPoint(x: content.bounds.midX, y: content.bounds.maxY - 90)
-            )
-        }
-    }
 }
 
-private final class CompletionDocumentView: NSView {
-    override var isFlipped: Bool { true }
-}
+// MARK: - Cinema hero
 
-/// Completion hero: a rounded 16:9 plate that shows a real Quick Look
-/// thumbnail once it loads, or a large category-tinted type glyph as the
-/// resting state — plus a soft drop shadow so the finished file feels like an
-/// object, not a list entry.
+/// A full-bleed dark band: the finished file's own artwork fills it (aspect
+/// fill, clipped), a top scrim keeps the white headline legible over any
+/// image, and an accent underline plus a translucent close puck sit on top.
 @MainActor
-final class CompletionHeroView: NSView {
-    let imageView = NSImageView()
-    private let plate = NSView()
-    private let glyphView = NSImageView()
+final class CompletionCinemaHero: NSView {
+    var onClose: (() -> Void)?
 
-    init(filename: String) {
+    private let backdrop = ThumbnailBackdropView()
+    private let restGlyph = NSImageView()
+    private let scrim = TopScrimView()
+    private let closeButton = HeroCloseButton()
+    private let titleLabel = NSTextField(labelWithString: "")
+
+    func setTitle(_ title: String) {
+        // A soft shadow travels with the glyphs, so the headline never dissolves
+        // into a light patch of the artwork — legibility that doesn't depend on
+        // the scrim alone.
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
+        shadow.shadowBlurRadius = 12
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        titleLabel.attributedStringValue = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 34, weight: .bold),
+                .foregroundColor: NSColor.white,
+                .shadow: shadow,
+            ]
+        )
+    }
+
+    init(title: String, filename: String) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.14
-        layer?.shadowRadius = 12
-        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        layer?.backgroundColor = Self.plateColor.cgColor
+        layer?.masksToBounds = true
 
-        plate.wantsLayer = true
-        plate.layer?.cornerRadius = 12
-        plate.layer?.masksToBounds = true
-        plate.layer?.borderWidth = 1
-        plate.layer?.borderColor = NDMChrome.hairline.cgColor
-        plate.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
 
-        let tint = Self.tint(for: filename)
-        plate.layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
+        restGlyph.image = Self.glyph(for: filename)
+        restGlyph.contentTintColor = NSColor.white.withAlphaComponent(0.16)
+        restGlyph.imageScaling = .scaleProportionallyUpOrDown
+        restGlyph.translatesAutoresizingMaskIntoConstraints = false
+        restGlyph.setAccessibilityElement(false)
 
-        glyphView.image = Self.glyph(for: filename)
-        glyphView.contentTintColor = tint.withAlphaComponent(0.9)
-        glyphView.imageScaling = .scaleProportionallyUpOrDown
-        glyphView.translatesAutoresizingMaskIntoConstraints = false
+        scrim.translatesAutoresizingMaskIntoConstraints = false
 
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = 12
-        imageView.layer?.masksToBounds = true
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.isHidden = true
+        setTitle(title)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(plate)
-        plate.addSubview(glyphView)
-        addSubview(imageView)
+        let underline = ChromeBox(fill: NDMChrome.accent, cornerRadius: 2)
+        underline.translatesAutoresizingMaskIntoConstraints = false
+
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.target = self
+        closeButton.action = #selector(closePressed)
+        closeButton.keyEquivalent = "\u{1b}"
+        closeButton.setAccessibilityLabel(L10n.close)
+
+        addSubview(backdrop)
+        addSubview(restGlyph)
+        addSubview(scrim)
+        addSubview(titleLabel)
+        addSubview(underline)
+        addSubview(closeButton)
+
         NSLayoutConstraint.activate([
-            plate.leadingAnchor.constraint(equalTo: leadingAnchor),
-            plate.trailingAnchor.constraint(equalTo: trailingAnchor),
-            plate.topAnchor.constraint(equalTo: topAnchor),
-            plate.bottomAnchor.constraint(equalTo: bottomAnchor),
-            glyphView.centerXAnchor.constraint(equalTo: plate.centerXAnchor),
-            glyphView.centerYAnchor.constraint(equalTo: plate.centerYAnchor),
-            glyphView.widthAnchor.constraint(equalToConstant: 46),
-            glyphView.heightAnchor.constraint(equalToConstant: 46),
-            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+            backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backdrop.topAnchor.constraint(equalTo: topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-        // Reveal the real thumbnail as soon as one is assigned.
-        imageView.postsFrameChangedNotifications = false
+            restGlyph.centerXAnchor.constraint(equalTo: centerXAnchor),
+            restGlyph.centerYAnchor.constraint(equalTo: centerYAnchor),
+            restGlyph.widthAnchor.constraint(equalToConstant: 60),
+            restGlyph.heightAnchor.constraint(equalToConstant: 60),
+
+            scrim.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrim.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrim.topAnchor.constraint(equalTo: topAnchor),
+            scrim.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 26),
+
+            underline.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor, constant: 2),
+            underline.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
+            underline.widthAnchor.constraint(equalToConstant: 52),
+            underline.heightAnchor.constraint(equalToConstant: 4),
+
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            closeButton.widthAnchor.constraint(equalToConstant: 30),
+            closeButton.heightAnchor.constraint(equalToConstant: 30),
+        ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        plate.layer?.borderColor = NDMChrome.hairline.cgColor
+    func showThumbnail(_ image: NSImage) {
+        backdrop.setImage(image)
+        restGlyph.isHidden = true
     }
 
-    /// Called by the QL callback; flips from glyph to photo.
-    func showThumbnail(_ image: NSImage) {
-        imageView.image = image
-        imageView.isHidden = false
-        plate.isHidden = true
+    @objc private func closePressed() {
+        onClose?()
     }
+
+    /// Always-dark plate — the cinema canvas holds even in light mode.
+    static let plateColor = NSColor(srgbRed: 0.043, green: 0.051, blue: 0.070, alpha: 1)
+
+    private static func glyph(for filename: String) -> NSImage? {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let name: String
+        switch ext {
+        case "dmg", "iso": name = "externaldrive.fill"
+        case "pkg", "app", "exe", "msi", "apk": name = "shippingbox.fill"
+        case "zip", "rar", "7z", "gz", "tar": name = "archivebox.fill"
+        case "mp3", "m4a", "flac", "wav", "aac", "ogg": name = "waveform"
+        case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": name = "doc.richtext.fill"
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": name = "film.fill"
+        default: name = "doc.fill"
+        }
+        let img = NDMChrome.symbol(name, pointSize: 60, weight: .regular)
+        img?.isTemplate = true
+        return img
+    }
+}
+
+/// Layer-backed aspect-fill image plate — NSImageView cannot crop-fill.
+private final class ThumbnailBackdropView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.contentsGravity = .resizeAspectFill
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setImage(_ image: NSImage) {
+        var rect = CGRect(origin: .zero, size: image.size)
+        layer?.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+}
+
+/// Vertical scrim: dark at the top so a white headline reads over bright
+/// artwork, fading to clear across the upper half.
+private final class TopScrimView: NSView {
+    private let gradient = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        // Anchored to the headline zone: genuinely dark at the very top so a
+        // white title and the close puck read over *any* artwork — bright,
+        // busy, or dark — then fades to clear so the cover still shines below.
+        gradient.colors = [
+            NSColor.black.withAlphaComponent(0.82).cgColor,
+            NSColor.black.withAlphaComponent(0.42).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        gradient.locations = [0, 0.30, 0.60]
+        layer?.addSublayer(gradient)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        gradient.frame = bounds
+    }
+}
+
+/// Translucent close puck for the hero: a soft dark disc that brightens on
+/// hover, with a white glyph — legible on any artwork.
+private final class HeroCloseButton: NSButton {
+    private var isHovering = false
+    private var trackingAreaRef: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        bezelStyle = .inline
+        wantsLayer = true
+        layer?.cornerRadius = 15
+        layer?.masksToBounds = true
+        imagePosition = .imageOnly
+        image = NDMChrome.symbol("xmark", pointSize: 12, weight: .bold)
+        contentTintColor = .white
+        focusRingType = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        // A denser disc than a hint of tint: the × must read on a bright corner,
+        // not just a dark one. A faint ring gives it an edge on either.
+        let base: CGFloat = isHovering ? 0.58 : 0.42
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(base).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovering = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovering = false
+        needsDisplay = true
+    }
+}
+
+// MARK: - File glyph tile
+
+/// A small rounded tile carrying a white category glyph on an accent-tinted
+/// fill — the file's identity mark beside its name.
+@MainActor
+final class FileGlyphTile: NSView {
+    init(filename: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.masksToBounds = true
+        layer?.backgroundColor = Self.tint(for: filename).cgColor
+
+        let glyph = NSImageView()
+        glyph.image = Self.glyph(for: filename)
+        glyph.contentTintColor = .white
+        glyph.imageScaling = .scaleProportionallyDown
+        glyph.translatesAutoresizingMaskIntoConstraints = false
+        glyph.setAccessibilityElement(false)
+        addSubview(glyph)
+        NSLayoutConstraint.activate([
+            glyph.centerXAnchor.constraint(equalTo: centerXAnchor),
+            glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: 22),
+            glyph.heightAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 
     private static func tint(for filename: String) -> NSColor {
         let ext = (filename as NSString).pathExtension.lowercased()
@@ -618,11 +781,9 @@ final class CompletionHeroView: NSView {
         case "zip", "rar", "7z", "gz", "tar": name = "archivebox.fill"
         case "mp3", "m4a", "flac", "wav", "aac", "ogg": name = "waveform"
         case "pdf", "doc", "docx", "txt", "rtf", "md", "epub": name = "doc.richtext.fill"
-        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": name = "film.fill"
+        case "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts": name = "play.fill"
         default: name = "doc.fill"
         }
-        let img = NDMChrome.symbol(name, pointSize: 46, weight: .regular)
-        img?.isTemplate = true
-        return img
+        return NDMChrome.symbol(name, pointSize: 22, weight: .semibold)
     }
 }
