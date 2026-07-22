@@ -712,6 +712,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Compact pill text for a post-processing phase.
+    private static func phaseLabel(_ phase: DownloadPhase?) -> String {
+        switch phase {
+        case .merging: return L10n.t("Merging", "合并中")
+        case .subtitles: return L10n.t("Subtitles", "字幕整理")
+        case .finalizing: return L10n.t("Finishing", "整理中")
+        default: return L10n.downloading
+        }
+    }
+
     private func apply(progress: DownloadProgress, task: DownloadTask?) {
         lastStatus = progress.status
         let fraction = progress.status == .complete ? 1 : progress.fractionCompleted
@@ -726,10 +736,19 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             window?.title = "\(pct)% \(filename)"
         }
 
+        // Byte-less post-processing (merge / subtitles / finalize): the ring
+        // spins as an indeterminate "working" indicator instead of freezing at
+        // ~98%, and the speed line reads "—" rather than a misleading 0 KB/s.
+        let isPostProcessing = progress.status == .downloading
+            && [.merging, .subtitles, .finalizing].contains(progress.phase)
         overallProgress.progress = fraction
-        overallProgress.isActive = progress.status == .downloading
+        overallProgress.isActive = progress.status == .downloading && !isPostProcessing
+        progressRing.isWorking = isPostProcessing
         progressRing.progress = fraction
         statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
+        if isPostProcessing {
+            statusPill.setPhaseText(Self.phaseLabel(progress.phase))
+        }
 
         let isYtDlp = task?.linkType.lowercased() == "ytdlp"
         // yt-dlp probe sizes are estimates. Once live totals arrive, use the
@@ -754,8 +773,14 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             ? "\(TaskPresentationFormatting.byteCount(done))  (\(pctFine)%)"
             : TaskPresentationFormatting.byteCount(done)
 
-        speedValue.stringValue = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: progress.status)
-        etaValue.stringValue = TaskPresentationFormatting.eta(progress.remainingTime, status: progress.status)
+        if isPostProcessing {
+            // No bytes are moving during a merge; a rate here is noise.
+            speedValue.stringValue = L10n.emDash
+            etaValue.stringValue = L10n.emDash
+        } else {
+            speedValue.stringValue = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: progress.status)
+            etaValue.stringValue = TaskPresentationFormatting.eta(progress.remainingTime, status: progress.status)
+        }
 
         if progress.status == .downloading {
             speedSparkline.addSample(progress.bytesPerSecond)
@@ -1337,6 +1362,15 @@ private final class StatusPillView: NSView {
         toolTip = error
         setAccessibilityLabel(title)
         setAccessibilityValue(error)
+    }
+
+    /// Override the pill text with the current finalize phase (合并中 / 字幕 /
+    /// 整理中) while keeping the accent "active" colors.
+    func setPhaseText(_ text: String) {
+        label.stringValue = text
+        label.textColor = NDMChrome.accent
+        layer?.backgroundColor = NDMChrome.accent.withAlphaComponent(0.12).cgColor
+        setAccessibilityLabel(text)
     }
 
     override func viewDidChangeEffectiveAppearance() {

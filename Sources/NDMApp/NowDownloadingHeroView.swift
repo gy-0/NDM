@@ -201,6 +201,31 @@ final class NowDownloadingHeroView: NSView {
         metaLabel.stringValue = primary.statusDetail
         percentLabel.stringValue = primary.progressText
 
+        // Byte-less post-processing: no bytes move, so the big speed numeral
+        // would read a frozen "0". Show the phase word breathing instead —
+        // "正在合并音视频…" — so it reads as active work, not a stall.
+        if primary.isFinalizing {
+            eyebrowLabel.stringValue = L10n.finishingUp
+            speedLabel.stringValue = primary.statusDetail
+            speedLabel.font = .systemFont(ofSize: 18, weight: .medium)
+            unitLabel.stringValue = ""
+            startFinalizePulse()
+            segmentStrip.isHidden = true
+            progressBar.isHidden = false
+            progressBar.progress = primary.progressFraction
+            progressBar.isActive = true
+            stopRolling()
+            moreLabel.isHidden = activeCount <= 1
+            if activeCount > 1 { moreLabel.stringValue = L10n.heroMoreActive(activeCount - 1) }
+            if taskChanged || currentCoverTaskID != primary.taskID {
+                applyCover(for: primary, crossfade: !taskChanged || currentCoverTaskID != nil)
+            }
+            return
+        }
+        stopFinalizePulse()
+        eyebrowLabel.stringValue = L10n.nowDownloading
+        speedLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .light)
+
         // Multiple live connections → show the parallel segment strip; a
         // single stream keeps the clean accent bar.
         let segments = primary.segmentStates
@@ -314,9 +339,28 @@ final class NowDownloadingHeroView: NSView {
         return (String(format: "%.2f", mb / 1024), "GB/s")
     }
 
+    // MARK: - Finalize pulse
+
+    private func startFinalizePulse() {
+        speedLabel.wantsLayer = true
+        guard speedLabel.layer?.animation(forKey: "finalizePulse") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.45
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        speedLabel.layer?.add(pulse, forKey: "finalizePulse")
+    }
+
+    private func stopFinalizePulse() {
+        speedLabel.layer?.removeAnimation(forKey: "finalizePulse")
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { stopRolling() }
+        if window == nil { stopRolling(); stopFinalizePulse() }
     }
 }
 

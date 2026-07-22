@@ -613,6 +613,19 @@ final class AtmosphereView: NSView {
 final class ProgressRingView: NSView {
     /// Off when a numeral sits inside the ring — the check would draw over it.
     var showsCheckmark = true
+
+    /// Indeterminate "working" mode for byte-less phases (merging, embedding
+    /// subtitles, finalizing). A spinning arc says "active, not frozen" —
+    /// far better than a progress bar stuck at 98% with 0 KB/s.
+    var isWorking: Bool = false {
+        didSet {
+            guard oldValue != isWorking else { return }
+            if isWorking { startAnimation() }
+            needsDisplay = true
+        }
+    }
+    private var workingAngle: CGFloat = -.pi / 2
+
     private var targetProgress: CGFloat = 0
     private var displayedProgress: CGFloat = 0
     private var displayedCheck: CGFloat = 0
@@ -669,8 +682,16 @@ final class ProgressRingView: NSView {
                    startAngle: -.pi / 2, endAngle: 3 * .pi / 2, clockwise: false)
         ctx.strokePath()
 
-        // Fill arc
-        if displayedProgress > 0.001 {
+        // Indeterminate spinner for byte-less post-processing phases.
+        if isWorking, !hasCompleted {
+            ctx.setStrokeColor(fillColor.cgColor)
+            let sweep: CGFloat = .pi * 0.55
+            ctx.addArc(center: center, radius: radius,
+                       startAngle: workingAngle, endAngle: workingAngle + sweep,
+                       clockwise: false)
+            ctx.strokePath()
+        } else if displayedProgress > 0.001 {
+            // Fill arc
             ctx.setStrokeColor(fillColor.cgColor)
             let endAngle = -.pi / 2 + displayedProgress * 2 * .pi
             ctx.addArc(center: center, radius: radius,
@@ -738,6 +759,13 @@ final class ProgressRingView: NSView {
             if abs(displayedProgress - targetProgress) < 0.002 {
                 displayedProgress = targetProgress
             }
+            dirty = true
+        }
+
+        if isWorking, !hasCompleted {
+            // ~1.1 rev/sec; wraps to stay in range.
+            workingAngle += 0.12
+            if workingAngle > .pi * 4 { workingAngle -= .pi * 4 }
             dirty = true
         }
 

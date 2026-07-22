@@ -106,10 +106,11 @@ final class InspectorActionButton: NSButton {
 
     private func animatePress(down: Bool) {
         guard let layer else { return }
-        // Anchor at center so the sink scales toward the middle.
-        let mid = CGPoint(x: bounds.midX, y: bounds.midY)
-        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        layer.position = mid
+        // A view-backed layer already anchors at its center (0.5, 0.5), so the
+        // scale sinks toward the middle on its own. Do NOT touch anchorPoint or
+        // position here: `position` lives in the SUPERLAYER's coordinate space,
+        // and setting it to this view's bounds-center teleported the button to
+        // the top-left corner (the "renew/copy jumps over retry" overlap bug).
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = down ? 0.09 : 0.28
             ctx.timingFunction = down

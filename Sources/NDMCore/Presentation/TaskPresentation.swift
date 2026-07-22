@@ -113,6 +113,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var speedText: String
     /// Raw transfer rate for animated displays (0 when not downloading).
     public var speedBytesPerSecond: Double
+    /// True during byte-less yt-dlp post-processing (merge / subtitles /
+    /// finalize) — surfaces let the UI show a "working" state instead of a
+    /// frozen bar at 98% with 0 KB/s.
+    public var isFinalizing: Bool = false
     public var etaText: String
     public var connectionsText: String
     public var urlText: String
@@ -175,7 +179,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         isDownloading: Bool = false,
         isFailed: Bool = false,
         isQueued: Bool = false,
-        speedBytesPerSecond: Double = 0
+        speedBytesPerSecond: Double = 0,
+        isFinalizing: Bool = false
     ) {
         self.taskID = taskID
         self.filename = filename
@@ -208,6 +213,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.isFailed = isFailed
         self.isQueued = isQueued
         self.speedBytesPerSecond = speedBytesPerSecond
+        self.isFinalizing = isFinalizing
     }
 
     public static func make(task: DownloadTask, progress: DownloadProgress?) -> TaskRowPresentation {
@@ -375,7 +381,9 @@ public struct TaskRowPresentation: Equatable, Sendable {
             isDownloading: task.status == .downloading,
             isFailed: task.status == .error,
             isQueued: task.status == .waiting,
-            speedBytesPerSecond: task.status == .downloading ? speed : 0
+            speedBytesPerSecond: task.status == .downloading ? speed : 0,
+            isFinalizing: task.status == .downloading
+                && [.merging, .subtitles, .finalizing].contains(progress?.phase)
         )
     }
 }
