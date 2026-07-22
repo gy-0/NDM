@@ -219,15 +219,17 @@ public enum L10n: Sendable {
         t("Download again", "再下载一份")
     }
     public static var linkLensOptions: String {
-        t("Options…", "选项…")
+        // Named for what it does — choose the video quality/format — not a
+        // generic "Options", so users know this is where the picker lives.
+        t("Choose quality…", "选择画质…")
     }
     public static func linkLensDownloadReadyChoice(_ quality: String, container: String) -> String {
         t("Download \(quality) · \(container)", "下载 \(quality) · \(container)")
     }
     public static var linkLensReadyChoiceTooltip: String {
         t(
-            "Uses your last successful choice for this site. Open Options to change it.",
-            "使用你上次在此站点确认的选择；如需更改，请打开“选项”。"
+            "Uses your default quality preference. Click “Choose quality” to pick a different one.",
+            "使用你的默认画质偏好；点击「选择画质」可改选其他清晰度。"
         )
     }
     public static func linkLensExistingComplete(_ filename: String) -> String {

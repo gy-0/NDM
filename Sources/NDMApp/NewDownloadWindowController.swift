@@ -52,15 +52,19 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
 
     private static var active: NewDownloadWindowController?
 
+    private let mediaQuality: MediaQualityPreference
+
     init(
         initialURL: String?,
         existingTasks: [DownloadTask],
         destinationDirectory: URL,
+        mediaQuality: MediaQualityPreference = .highest,
         onFinish: @escaping (Result) -> Void
     ) {
         self.onFinish = onFinish
         self.existingTasks = existingTasks
         self.destinationDirectory = destinationDirectory
+        self.mediaQuality = mediaQuality
         let hasInitialPreview = initialURL.flatMap(ClipboardLinks.resolution) != nil
         let window = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 610, height: hasInitialPreview ? 420 : 214),
@@ -87,6 +91,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         on parentWindow: NSWindow?,
         existingTasks: [DownloadTask],
         destinationDirectory: URL,
+        mediaQuality: MediaQualityPreference = .highest,
         initialURL: String? = nil
     ) async -> Result {
         let clip = initialURL ?? ClipboardLinks.firstDownloadableInput()
@@ -94,7 +99,8 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             let wc = NewDownloadWindowController(
                 initialURL: clip,
                 existingTasks: existingTasks,
-                destinationDirectory: destinationDirectory
+                destinationDirectory: destinationDirectory,
+                mediaQuality: mediaQuality
             ) { result in
                 Self.active = nil
                 continuation.resume(returning: result)
@@ -563,19 +569,18 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     }
 
     private func makeReadyChoice(for result: MediaPreflightResult) -> ReadyChoice? {
+        // Honor the global quality preference (Ask / Highest / up-to-cap). This
+        // replaces the old "remember the last exact per-site pick" behavior,
+        // which made a one-off 240p test stick as the permanent default.
         guard result.collection == nil,
-              let preference = SiteMediaPreferenceStore.load(for: result.mediaURL),
-              let resolution = preference.exactResolution(
-                  formatHeights: result.probe.formats.map(\.height),
-                  subtitleCodes: result.probe.subtitleTracks.map(\.code)
+              let index = mediaQuality.autoSelectIndex(
+                  heights: result.probe.formats.map(\.height)
               ),
-              result.probe.formats.indices.contains(resolution.selectedFormatIndex) else {
+              result.probe.formats.indices.contains(index) else {
             return nil
         }
-        let format = result.probe.formats[resolution.selectedFormatIndex]
-        let container: YtDlpContainerPreference = resolution.container == .compactMKV
-            ? .compactMKV
-            : .compatibleMP4
+        let format = result.probe.formats[index]
+        let container: YtDlpContainerPreference = .compatibleMP4
         let budget = StorageBudget.media(
             sampleFinalBytes: format.estimatedBytes(for: container),
             sampleComponentBytes: format.estimatedComponentBytes(for: container),
@@ -592,7 +597,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             format: format,
             options: YtDlpDownloadOptions(
                 container: container,
-                subtitleLanguage: resolution.subtitleLanguage
+                subtitleLanguage: nil
             )
         )
     }

@@ -800,6 +800,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 on: parent,
                 existingTasks: allTasks,
                 destinationDirectory: currentSettings.downloadDirectory,
+                mediaQuality: currentSettings.mediaQualityPreference,
                 initialURL: initialURL
             ) {
             case .download(let submission):

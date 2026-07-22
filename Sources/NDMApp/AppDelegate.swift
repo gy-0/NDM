@@ -1075,14 +1075,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let currentSettings = await manager.currentSettings()
-        let choice = await YtDlpQualityPickerWindowController.choose(
-            url: mediaURL,
-            probe: probe,
-            collection: collection,
-            cookieSource: cookieSource,
-            destinationDirectory: currentSettings.downloadDirectory,
-            parentWindow: mainWindow?.window
-        )
+        // Honor the global quality preference: highest / up-to-cap auto-picks
+        // and skips the sheet; only "ask" (or a cap with nothing matching)
+        // opens the picker.
+        let choice: YtDlpQualityPickerWindowController.Choice
+        if collection == nil,
+           let index = currentSettings.mediaQualityPreference.autoSelectIndex(
+               heights: probe.formats.map(\.height)),
+           probe.formats.indices.contains(index) {
+            working?.dismiss()
+            choice = .download(
+                probe.formats[index],
+                YtDlpDownloadOptions(container: .compatibleMP4, subtitleLanguage: nil),
+                .single
+            )
+        } else {
+            choice = await YtDlpQualityPickerWindowController.choose(
+                url: mediaURL,
+                probe: probe,
+                collection: collection,
+                cookieSource: cookieSource,
+                destinationDirectory: currentSettings.downloadDirectory,
+                parentWindow: mainWindow?.window
+            )
+        }
         do {
             switch choice {
             case .cancel:

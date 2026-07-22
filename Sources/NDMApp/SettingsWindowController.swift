@@ -89,6 +89,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let connField = NSTextField(string: "8")
     private let bwField = NSTextField(string: "0")
     private let smartConnSwitch = SettingsAccentSwitch()
+    private let mediaQualityPopup = SettingsPopupButton()
 
     // Browser
     private let panelSwitch = SettingsAccentSwitch()
@@ -229,6 +230,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         AppLanguageMode.allCases.forEach { languagePopup.addItem(withTitle: $0.settingsTitle) }
         languagePopup.target = self
         languagePopup.action = #selector(languageSelectionChanged)
+
+        mediaQualityPopup.removeAllItems()
+        MediaQualityPreference.presetCases.forEach {
+            mediaQualityPopup.addItem(withTitle: $0.settingsTitle)
+        }
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
 
@@ -638,7 +644,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 ),
             ]
         )
-        return paneStack([destinationCard, performanceCard])
+        mediaQualityPopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        let videoCard = makeCard(
+            title: L10n.t("Video", "视频"),
+            subtitle: nil,
+            symbolName: "film",
+            rows: [
+                settingsRow(
+                    title: L10n.t("Quality", "画质"),
+                    detail: L10n.t(
+                        "How to pick video quality. \"Ask\" opens the picker; a cap uses the best at or below it and only asks when nothing fits.",
+                        "如何选择视频清晰度。「每次询问」会弹出选择器；设定上限则自动选不超过该档的最高画质，仅当没有匹配时才询问。"
+                    ),
+                    control: mediaQualityPopup
+                ),
+            ]
+        )
+        return paneStack([destinationCard, performanceCard, videoCard])
     }
 
     private func makeBrowserPane() -> NSView {
@@ -1046,6 +1068,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         dirField.stringValue = settings.downloadDirectory.path
         connField.stringValue = "\(settings.maxConnections)"
         smartConnSwitch.state = settings.smartConnectionsEnabled ? .on : .off
+        if let qi = MediaQualityPreference.presetCases.firstIndex(of: settings.mediaQualityPreference) {
+            mediaQualityPopup.selectItem(at: qi)
+        }
         bwField.stringValue = "\(settings.bandwidthLimitBytesPerSecond)"
         categorySwitch.state = settings.useCategoryFolders ? .on : .off
         allAtOnceSwitch.state = settings.downloadAllAtOnce ? .on : .off
@@ -1348,6 +1373,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         next.maxConnections = min(requestedConnections, connectionsCap)
         next.smartConnections = smartConnSwitch.state == .on
+        let qi = mediaQualityPopup.indexOfSelectedItem
+        if MediaQualityPreference.presetCases.indices.contains(qi) {
+            next.mediaQuality = MediaQualityPreference.presetCases[qi]
+        }
         next.bandwidthLimitBytesPerSecond = SettingsInputValidation
             .bandwidthBytesPerSecond(bwField.stringValue)!
         next.useCategoryFolders = categorySwitch.state == .on

@@ -77,10 +77,14 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var onboardingCompleted: Bool?
     /// Offer to download links found on the clipboard when the app activates.
     public var clipboardWatch: Bool?
+    /// How to choose video quality: always ask, always highest, or highest up
+    /// to a cap. Optional for backward-compatible decoding. Default: highest.
+    public var mediaQuality: MediaQualityPreference?
 
     public var smartConnectionsEnabled: Bool { smartConnections ?? true }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
     public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
+    public var mediaQualityPreference: MediaQualityPreference { mediaQuality ?? .highest }
 
     public init(
         downloadDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0],
@@ -105,7 +109,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         accentTheme: AccentTheme = .classicBlue,
         customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,
-        smartConnections: Bool? = true
+        smartConnections: Bool? = true,
+        mediaQuality: MediaQualityPreference? = nil
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -128,6 +133,46 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.customAccentHex = customAccentHex
         self.languageMode = languageMode
         self.smartConnections = smartConnections
+        self.mediaQuality = mediaQuality
+    }
+}
+
+/// How the app chooses a video quality when a media page is downloaded.
+public enum MediaQualityPreference: Codable, Equatable, Sendable {
+    /// Always show the quality picker.
+    case ask
+    /// Always take the highest available quality, no picker.
+    case highest
+    /// Highest available quality no taller than this many pixels (e.g. 1080);
+    /// falls back to the picker if nothing at or below the cap exists.
+    case maxHeight(Int)
+
+    /// Menu order for Settings.
+    public static let presetCases: [MediaQualityPreference] =
+        [.highest, .maxHeight(2160), .maxHeight(1080), .maxHeight(720), .maxHeight(480), .ask]
+
+    public var settingsTitle: String {
+        switch self {
+        case .ask: return L10n.t("Ask every time", "每次询问")
+        case .highest: return L10n.t("Always highest", "始终最高画质")
+        case .maxHeight(let h): return L10n.t("Up to \(h)p", "最高 \(h)P")
+        }
+    }
+
+    /// The format index to auto-select, or nil to show the picker. `heights`
+    /// is the probe's format list, ordered highest-first.
+    public func autoSelectIndex(heights: [Int]) -> Int? {
+        guard !heights.isEmpty else { return nil }
+        switch self {
+        case .ask:
+            return nil
+        case .highest:
+            return 0
+        case .maxHeight(let cap):
+            // Highest tier at or below the cap; if nothing fits, ask so the
+            // user knows their preferred ceiling isn't available here.
+            return heights.firstIndex { $0 <= cap }
+        }
     }
 }
 
