@@ -921,6 +921,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Prefer yt-dlp for any capture whose PAGE is a site yt-dlp maintains
+        // an extractor for (YouTube, X, Bilibili, Douyin, TikTok, …). yt-dlp
+        // handles quality, separate audio tracks, DRM-lite, and site quirks far
+        // better than sniffing a raw stream URL into our own HLS/MP4 engine —
+        // e.g. it fixes the silent-X-video case at the source. The hand-rolled
+        // stream engines stay as the fallback for generic / unknown links.
+        if YtDlpTool.isAvailable,
+           !accepted.pageURL.isEmpty,
+           SharedLinkResolver.source(forURLString: accepted.pageURL) != .web {
+            var viaPage = accepted
+            viaPage.url = accepted.pageURL
+            viaPage.ltype = "media-page"
+            _ = await handleBrowserMediaPage(viaPage, manager: manager)
+            return
+        }
+
         // A site-integrated action sends a canonical video page URL rather
         // than one of the many short-lived MP4/TS requests observed by the
         // browser. Resolve it through the same quality flow as a pasted link;
