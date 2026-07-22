@@ -40,7 +40,7 @@
 | C01 | m3u8 / HLS master 解析 | [x] |
 | C02 | 下载全部 .ts 并合并 | [x] AES-128 + 分段断点续传 |
 | C03 | 音视频分轨 → MKV 合并 | [x] `MKVMergeEngine`（双引擎 + ffmpeg/`c` copy；无 ffmpeg 时旁路落盘） |
-| C04 | 浏览器探测到的多清晰度列表 | [-] UI 在 BetterNDM；宿主收最终 URL/`urla` |
+| C04 | 浏览器探测到的多清晰度列表 | [-] UI 在 NDM Relay；宿主收最终 URL/`urla` |
 | C05 | 播放列表 / 课程 / 合集批量下载 | [x] Collection Lens 识别合集元数据；当前/整合集范围；独立任务顺序排队、失败隔离与重启续队 |
 | C06 | 站点级画质 / 容器 / 字幕偏好记忆 | [x] 本机仅保存规范化站点与交付选择；精确档位可用时静默恢复，缺失时回退推荐画质并关闭不可用字幕；不保存 URL、标题、Cookie 或内容 ID |
 | C07 | 在线视频连续进度与真实后处理阶段 | [x] 字节计数与整体旅程分离；下载占 0–96%，真实 postprocessor 事件推进合并、字幕与最终整理，成功退出才到 100%；列表、详情、双进度条与 Dock 读取同一单调 fraction |
@@ -81,10 +81,10 @@
 
 | ID | 功能 | 状态 |
 |----|------|------|
-| F01 | 本地 WebSocket 桥 | [x] 仅监听 `127.0.0.1`；`/download` + `neatextension.v1`；真实文本帧测试覆盖 Waiting/nowaiting/ShowPanel；连接表与 broadcast/stop 在专用队列串行化。 |
-| F02 | Chrome/Edge/Firefox 扩展 | [-] BetterNDM |
+| F01 | 本地 WebSocket 桥 | [x] 仅监听 `127.0.0.1:51873`；`/ndm/download` + `ndm.open.v1`，与原版 Neat 的 `10007` 完全分离；真实文本帧测试覆盖 Waiting/nowaiting/ShowPanel；连接表与 broadcast/stop 在专用队列串行化。 |
+| F02 | Chrome/Edge/Firefox 扩展 | [-] NDM Relay |
 | F03 | Safari Web Extension | [-] 可选，非主线 |
-| F04–F07 | 捕获/右键/浮动按钮/过滤 | [-] BetterNDM |
+| F04–F07 | 捕获/右键/浮动按钮/过滤 | [-] NDM Relay |
 
 ## G. 工程与质量
 
@@ -103,9 +103,9 @@
 2. **M1** 单连接 HTTP + DB + 主窗口 — ✅
 3. **M2** 多连接分段 + 暂停续传 + 进度窗 — ✅
 4. **M3** 设置 / 代理 / 认证 / 限速 — ✅（含 NTLMv2 / FTP 代理 / Proxy Basic）
-5. **M4** WebSocket 桥 + BetterNDM 联调 — 🟡 Wait 窗 + ShowPanel + WS 集成测试完成；`docs/BETTERNDM_SMOKE.md` 实机清单待人工走完
-6. **M5** HLS + 媒体合并 — ✅ C01–C03（C04 由 BetterNDM 面板负责）
-7. **M6** 打磨 UX、对等验收、打包 — 🟡 菜单快捷键、菜单栏状态、删除进废纸篓、Wait/Properties 文案已补；BetterNDM 实机与长期稳定性仍需继续
+5. **M4** WebSocket 桥 + NDM Relay 联调 — 🟡 Wait 窗 + ShowPanel + WS 集成测试完成；`docs/NDM_RELAY_SMOKE.md` 实机清单待人工走完
+6. **M5** HLS + 媒体合并 — ✅ C01–C03（C04 由 NDM Relay 面板负责）
+7. **M6** 打磨 UX、对等验收、打包 — 🟡 菜单快捷键、菜单栏状态、删除进废纸篓、Wait/Properties 文案已补；NDM Relay 实机与长期稳定性仍需继续
 
 ## 实现备注
 
@@ -120,7 +120,7 @@
 
 - 当前验证成品为 Apple Silicon 架构；Intel / Universal 发行物仍需在 x86_64 构建机上生成对应 App、Deno 与 FFmpeg 后合并验证。
 - 本地打包使用 ad-hoc 签名完成结构验证；正式分发仍需 Developer ID 签名与 Apple 公证凭据。
-- BetterNDM 实机 Chrome 联调按 `docs/BETTERNDM_SMOKE.md` 手工走。
+- NDM Relay 实机 Chrome 联调按 `docs/NDM_RELAY_SMOKE.md` 手工走。
 - 菜单栏长时稳定性需在真实交互下继续观察。
 - 真实购买地址与更新通道仍需上线；未配置购买地址时产品不会打开假链接。
 - Onboarding 第 2 步测试文件指向 thinkbroadband 公共文件，正式版应换自有 CDN。

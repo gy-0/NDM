@@ -99,7 +99,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         httpsProxy: ProxySettings? = nil,
         ftpProxy: ProxySettings? = nil,
         socksProxy: SocksProxySettings? = nil,
-        bridgePort: UInt16 = 10_007,
+        bridgePort: UInt16 = BridgeConstants.port,
         bandwidthLimitBytesPerSecond: Int64 = 0,
         showBrowserMediaPanel: Bool = true,
         confirmBrowserDownloads: Bool = false,

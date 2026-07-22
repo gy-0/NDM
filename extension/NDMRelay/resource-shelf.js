@@ -1,7 +1,7 @@
 (function(root, factory) {
-    var api = factory(root.BetterNDMResourcePolicy);
+    var api = factory(root.NDMRelayResourcePolicy);
     if (typeof module === "object" && module.exports) module.exports = api;
-    root.BetterNDMResourceShelf = api;
+    root.NDMRelayResourceShelf = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function(policy) {
     "use strict";
 

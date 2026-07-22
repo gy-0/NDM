@@ -4,7 +4,7 @@
          "16": "img/icon16.png"
       }
    },
-   "author": ["Javad Motallebi", "Berken Eren Usar"],
+   "author": "Yuan Gao",
    "background": {
       "service_worker": "bg.js"
    },
@@ -14,19 +14,17 @@
       "matches": [ "http://*/*", "https://*/*" ],
       "run_at": "document_start"
    } ],
-   "description": "Adds native site download actions and an opt-in shelf for useful page resources",
-   "homepage_url": "https://www.neatdownloadmanager.com/",
+   "description": "Relays browser downloads, media choices, and useful page resources to NDM",
    "host_permissions": [ "\u003Call_urls>" ],
    "icons": {
       "128": "img/icon128.png",
       "16": "img/icon16.png",
       "48": "img/icon48.png"
    },
-   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz0KZ9wDknggIqdwLwOUoJZjEOS38gNqHFsVWJqdYzqbJpbL4TowiZolT2m9ErEvx5bNy+sFjnM0rjXoSlMHbPGp0ZJgfaIpV0xA8GZB45G3HDmwji/dpRaDBiluwPuGwwA8VMmu2kko+qN1O50lLFv7VVj6/AloRWMnTRS5a4Nsk1wkJQY16DBIS2qzg3onvmOQm7uSKfbRhQuU4Nkabt0QaprA3O87jQ0LHLL580V5TJNG00ka0mX46H7Sy/nn+3XQqS/hVkD0gujgLTGo/9CEjaJVstBHCYEiJ8GD/UzZEP852T0gU8sFTGjaRUD3OcDcAyN9qV8YG1oaZN+v6aQIDAQAB",
    "manifest_version": 3,
-   "name": "BetterNDM",
+   "name": "NDM Relay",
    "permissions": [ "webRequest", "webNavigation", "cookies", "contextMenus", "storage", "downloads" ],
-   "version": "1.2.3",
+   "version": "1.3.0",
    "web_accessible_resources": [ {
       "matches": [ "\u003Call_urls>" ],
       "resources": [ "img/icon16.png", "img/icon16_2x.png", "img/close16.png", "img/close16_2x.png" ]

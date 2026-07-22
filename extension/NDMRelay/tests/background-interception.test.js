@@ -78,8 +78,8 @@ function loadBackground() {
     }
 
     const context = {
-        BetterNDMMediaPolicy: policy,
-        BetterNDMResourcePolicy: resourcePolicy,
+        NDMRelayMediaPolicy: policy,
+        NDMRelayResourcePolicy: resourcePolicy,
         Headers,
         URL,
         WebSocket: MockWebSocket,

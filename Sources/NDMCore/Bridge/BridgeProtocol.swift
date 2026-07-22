@@ -3,10 +3,17 @@ import Foundation
 /// Host WebSocket constants for the local browser-extension bridge.
 public enum BridgeConstants {
     public static let host = "127.0.0.1"
-    public static let port: UInt16 = 10_007
-    public static let path = "/download"
-    public static let subprotocol = "neatextension.v1"
+    /// Dedicated NDM bridge port. The original Neat Download Manager owns
+    /// 10007, so reusing it prevents both apps from running side by side.
+    public static let port: UInt16 = 51_873
+    public static let legacyNeatPort: UInt16 = 10_007
+    public static let path = "/ndm/download"
+    public static let subprotocol = "ndm.open.v1"
     public static let maxMessageBytes = 118_784
+
+    public static var endpoint: String {
+        "ws://\(host):\(port)\(path)"
+    }
 
     public static let waiting = "waiting"
     public static let noWaiting = "nowaiting"

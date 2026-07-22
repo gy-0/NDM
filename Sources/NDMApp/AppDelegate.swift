@@ -751,7 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = L10n.appName
         alert.informativeText = L10n.aboutBody(
             dataPath: "~/Library/Application Support/dev.ndm.open",
-            bridge: "ws://127.0.0.1:\(BridgeConstants.port)/download"
+            bridge: BridgeConstants.endpoint
         )
         alert.runModal()
     }
@@ -995,7 +995,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Resolves canonical X/YouTube (and other yt-dlp-supported) pages sent by
-    /// BetterNDM. A return means the request was consumed, including cancel.
+    /// NDM Relay. A return means the request was consumed, including cancel.
     /// Cancel a browser media probe still running and close any quality picker
     /// still waiting, so the newest capture wins.
     private func supersedeInFlightBrowserMedia() {

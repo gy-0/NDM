@@ -53,7 +53,12 @@ public enum SettingsStore {
             httpsProxy: disk.httpsProxy,
             ftpProxy: disk.ftpProxy,
             socksProxy: disk.socksProxy,
-            bridgePort: disk.bridgePort,
+            // Builds before the NDM-specific bridge used Neat's 10007. Migrate
+            // that default so an existing install can coexist with Neat after
+            // upgrading. Preserve any genuinely custom port.
+            bridgePort: disk.bridgePort == BridgeConstants.legacyNeatPort
+                ? BridgeConstants.port
+                : disk.bridgePort,
             bandwidthLimitBytesPerSecond: disk.bandwidthLimitBytesPerSecond ?? 0,
             showBrowserMediaPanel: disk.showBrowserMediaPanel ?? true,
             confirmBrowserDownloads: disk.confirmBrowserDownloads ?? false,

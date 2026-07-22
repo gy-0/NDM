@@ -221,7 +221,7 @@ function V() {
     this.C = !1;
     chrome.contextMenus.removeAll(function() {
         chrome.contextMenus.create({
-            title: "Download by NeatDownloadManager",
+            title: "Download with NDM",
             id: "NDM_CtxMenu",
             contexts: ["link", "image"]
         });
@@ -389,7 +389,7 @@ W.I = async function(a) {
     } else this.i = a, this.M()
 };
 W.M = function() {
-    var a = new WebSocket("ws://127.0.0.1:10007/download", "neatextension.v1");
+    var a = new WebSocket("ws://127.0.0.1:51873/ndm/download", "ndm.open.v1");
     a.onopen = this.fa;
     a.onclose = this.ca;
     a.onmessage = this.ea;
@@ -668,9 +668,9 @@ W.W = function(a) {
                                 isKnownNonDownload: fa.test(b.h),
                                 isUnknownBinary: Boolean(b.h && !u.test(b.h) && !fa.test(b.h))
                             };
-                            p = BetterNDMMediaPolicy.shouldInterceptNavigation(downloadMeta);
-                            !p && BetterNDMMediaPolicy.shouldCancelUnexpectedBrowserDownload(downloadMeta) && d.rememberDownloadURL(d.blockedDownloadURLs, b["2"]);
-                            var resourceCandidate = BetterNDMResourcePolicy.candidateFromResponse({
+                            p = NDMRelayMediaPolicy.shouldInterceptNavigation(downloadMeta);
+                            !p && NDMRelayMediaPolicy.shouldCancelUnexpectedBrowserDownload(downloadMeta) && d.rememberDownloadURL(d.blockedDownloadURLs, b["2"]);
+                            var resourceCandidate = NDMRelayResourcePolicy.candidateFromResponse({
                                 1: b["1"],
                                 2: b["2"],
                                 7: b["7"],

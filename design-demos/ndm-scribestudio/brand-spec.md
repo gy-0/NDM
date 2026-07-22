@@ -8,7 +8,7 @@
 
 ### NDM
 
-- 当前标识：`assets/ndm-icon.png`（128 × 128，源自 BetterNDM 自有扩展资产）
+- 当前标识：`assets/ndm-icon.png`（128 × 128，源自 NDM Relay 自有扩展资产）
 - 当前 UI：`assets/current-ndm.png`（聚焦窗口截图，2048 × 1368）
 - 签名功能：多连接下载、状态/类型筛选、来源与大小可扫读、失败后更新链接、完成后分享或交给 ScribeStudio
 - 禁止：把绿色 N 图标重画成通用蓝紫下载箭头；把“快”表现成虚构倍速或霓虹速度表

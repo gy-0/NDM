@@ -3,7 +3,7 @@ import Network
 import CryptoKit
 import NDMCore
 
-/// Local browser bridge: `ws://127.0.0.1:10007/download` + `neatextension.v1`.
+/// Local browser bridge using NDM's own endpoint and WebSocket subprotocol.
 public final class BrowserBridge: @unchecked Sendable {
     public var onDownloadMessage: (@Sendable (ParsedBridgeMessage) -> Void)?
     public var onClientCountChanged: (@Sendable (Int) -> Void)?
@@ -19,14 +19,18 @@ public final class BrowserBridge: @unchecked Sendable {
 
     public init(port: UInt16 = BridgeConstants.port) {
         // `0` means ephemeral — used by integration tests.
-        self.requestedPort = NWEndpoint.Port(rawValue: port) ?? 10_007
+        self.requestedPort = NWEndpoint.Port(rawValue: port)
+            ?? NWEndpoint.Port(rawValue: BridgeConstants.port)!
         queue.setSpecific(key: queueKey, value: 1)
     }
 
     public func start() throws {
         let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: requestedPort)
+        params.allowLocalEndpointReuse = false
+        params.requiredLocalEndpoint = .hostPort(
+            host: NWEndpoint.Host(BridgeConstants.host),
+            port: requestedPort
+        )
         let listener = try NWListener(using: params)
         syncOnQueue { self.listener = listener }
         let ready = DispatchSemaphore(value: 0)
@@ -116,11 +120,17 @@ public final class BrowserBridge: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            // Expect WebSocket upgrade on `/download` (original NeatWebSocketServer path).
-            let firstLine = req.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
-            let pathOK = firstLine.contains(" /download") || firstLine.contains("GET /download")
+            let firstLine = req.components(separatedBy: "\r\n").first ?? ""
+            let requestParts = firstLine.split(separator: " ")
+            let pathOK = requestParts.count >= 2
+                && requestParts[0] == "GET"
+                && requestParts[1] == Substring(BridgeConstants.path)
             let upgradeOK = req.lowercased().contains("upgrade: websocket")
-            guard pathOK, upgradeOK else {
+            let requestedProtocols = Self.headerValue(req, name: "Sec-WebSocket-Protocol")?
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+            let protocolOK = requestedProtocols.contains(BridgeConstants.subprotocol)
+            guard pathOK, upgradeOK, protocolOK else {
                 connection.cancel()
                 return
             }
@@ -130,10 +140,7 @@ public final class BrowserBridge: @unchecked Sendable {
             response += "Upgrade: websocket\r\n"
             response += "Connection: Upgrade\r\n"
             response += "Sec-WebSocket-Accept: \(accept)\r\n"
-            // Original binary includes Sec-WebSocket-Protocol
-            if req.contains(BridgeConstants.subprotocol) {
-                response += "Sec-WebSocket-Protocol: \(BridgeConstants.subprotocol)\r\n"
-            }
+            response += "Sec-WebSocket-Protocol: \(BridgeConstants.subprotocol)\r\n"
             response += "\r\n"
             connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
                 guard let self, error == nil else {

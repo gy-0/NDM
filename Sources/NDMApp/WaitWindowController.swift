@@ -58,7 +58,7 @@ final class WaitWindowController: NSWindowController, NSWindowDelegate {
         if !message.alternateURL.isEmpty {
             parts.append(L10n.includesAudioTrack)
         }
-        metaLabel.stringValue = parts.isEmpty ? L10n.capturedByBetterNDM : parts.joined(separator: " · ")
+        metaLabel.stringValue = parts.isEmpty ? L10n.capturedByNDMRelay : parts.joined(separator: " · ")
         metaLabel.font = .systemFont(ofSize: 12)
         metaLabel.textColor = .secondaryLabelColor
 

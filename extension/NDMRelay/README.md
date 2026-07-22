@@ -1,9 +1,11 @@
-# BetterNDM
+# NDM Relay
 
-BetterNDM is the Chrome companion for NDM. It sends intentional downloads to the
+NDM Relay is the Chrome companion for NDM. It sends intentional downloads to the
 Mac app and turns detected videos into a small, native-looking download control.
-It remains an MIT-licensed fork of the original NDM extension and retains the
-original authorship in `manifest.json` and `LICENSE`.
+It is maintained by Yuan Gao. Its browser identity and local bridge endpoint are
+NDM-specific, so it can coexist with the original Neat app and extension.
+Required third-party notices remain in `LICENSE` and are not presented as the
+current extension author.
 
 ## Safer download catching
 
@@ -11,10 +13,10 @@ original authorship in `manifest.json` and `LICENSE`.
 - DAT/BIN responses, XHR traffic, hidden frames, and ordinary page subresources
   are not treated as user-requested downloads.
 - If a hidden/subresource response still makes Chrome create a suspicious
-  DAT/BIN/BLOB/MAP/PART/TMP download, BetterNDM cancels and removes that browser
+  DAT/BIN/BLOB/MAP/PART/TMP download, NDM Relay cancels and removes that browser
   download. Explicit top-level opens and context-menu downloads remain allowed.
 - A deliberately opened MP4 or attachment still goes to NDM.
-- Right-click a link or image and choose **Download by NeatDownloadManager** when
+- Right-click a link or image and choose **Download with NDM** when
   you explicitly want to send it to the app.
 
 ## Clearer video choices
@@ -32,7 +34,7 @@ original authorship in `manifest.json` and `LICENSE`.
   section and sends the canonical `@user/video/id` URL.
 - Vimeo, Instagram, and Douyin have canonical page adapters and
   conservative inline insertion points. If a site changes its toolbar markup,
-  BetterNDM leaves the page untouched instead of falling back to a permanent
+  NDM Relay leaves the page untouched instead of falling back to a permanent
   overlay; the generic media panel remains available on hover or from the
   toolbar button.
 - Both site actions send a canonical page URL with the `media-page` route. The
@@ -42,7 +44,7 @@ original authorship in `manifest.json` and `LICENSE`.
   large or unnumbered variants that would otherwise look like real choices.
 
 The generic badge appears while the pointer is over detected media, then gets
-completely out of the way. The BetterNDM toolbar icon shows a detected-media
+completely out of the way. The NDM Relay toolbar icon shows a detected-media
 count and restores the nearest panel on demand, so hiding the overlay never
 makes the controls undiscoverable. Right-click the toolbar icon to pause or
 resume ordinary browser download catching.
@@ -57,13 +59,13 @@ resume ordinary browser download catching.
 - Signed/range variants and strong filename/type/size mirrors of the same
   resource are collapsed. JavaScript, JSON,
   images, DAT/BIN traffic, and raw video transport fragments are excluded.
-- The shelf minimizes to a persistent resource-count pill, and the BetterNDM
+- The shelf minimizes to a persistent resource-count pill, and the NDM Relay
   toolbar button can open it again.
 
 ## Installation
 
 Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and
-select this `extension/BetterNDM` directory. Reload the extension after changing
+select this `extension/NDMRelay` directory. Reload the extension after changing
 its source files.
 
 ## Tests

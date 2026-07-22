@@ -21,6 +21,6 @@ swift run NDM
 
 ## 仍待
 
-- BetterNDM Chrome 实机 smoke
+- NDM Relay Chrome 实机 smoke
 - 长时稳定性观察
 - MKV / HLS 边缘行为

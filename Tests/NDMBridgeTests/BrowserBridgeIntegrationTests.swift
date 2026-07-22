@@ -46,7 +46,7 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(bridge.boundPort, 0)
 
         // Client WebSocket via URLSession
-        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)/download")!
+        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)\(BridgeConstants.path)")!
         var req = URLRequest(url: url)
         req.setValue(BridgeConstants.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
         let session = URLSession(configuration: .ephemeral)
@@ -96,7 +96,7 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         try bridge.start()
         defer { bridge.stop() }
 
-        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)/download")!
+        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)\(BridgeConstants.path)")!
         var request = URLRequest(url: url)
         request.setValue(BridgeConstants.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
         let session = URLSession(configuration: .ephemeral)
@@ -128,10 +128,62 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         XCTAssertEqual(bridge.boundPort, 0)
     }
 
+    func testRejectsLegacyNeatPathAndSubprotocol() async throws {
+        let bridge = BrowserBridge(port: 0)
+        try bridge.start()
+        defer { bridge.stop() }
+
+        await assertWebSocketRejected(
+            port: bridge.boundPort,
+            path: "/download",
+            subprotocol: BridgeConstants.subprotocol
+        )
+        await assertWebSocketRejected(
+            port: bridge.boundPort,
+            path: BridgeConstants.path,
+            subprotocol: "neatextension.v1"
+        )
+    }
+
+    func testDefaultBridgeUsesDedicatedNDMPort() throws {
+        let bridge = BrowserBridge()
+        try bridge.start()
+        defer { bridge.stop() }
+
+        XCTAssertEqual(bridge.boundPort, BridgeConstants.port)
+        XCTAssertNotEqual(bridge.boundPort, BridgeConstants.legacyNeatPort)
+    }
+
     func testParseUrlaField() throws {
         let raw = "1:GET\r\n2:https://v.example/video\r\n12:https://v.example/audio\r\nurla:https://v.example/audio2\r\n"
         let msg = try BridgeMessageParser.parse(raw)
         // last urla wins if both present — urla header overwrites 12
         XCTAssertEqual(msg.alternateURL, "https://v.example/audio2")
+    }
+
+    private func assertWebSocketRejected(
+        port: UInt16,
+        path: String,
+        subprotocol: String
+    ) async {
+        let rejected = expectation(description: "WebSocket handshake rejected")
+        let url = URL(string: "ws://127.0.0.1:\(port)\(path)")!
+        var request = URLRequest(url: url)
+        request.setValue(subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: request)
+        socket.resume()
+        socket.receive { result in
+            switch result {
+            case .failure:
+                rejected.fulfill()
+            case .success:
+                XCTFail("Legacy bridge identity unexpectedly completed a WebSocket handshake")
+                rejected.fulfill()
+            }
+        }
+        await fulfillment(of: [rejected], timeout: 3)
+        socket.cancel()
+        session.invalidateAndCancel()
     }
 }

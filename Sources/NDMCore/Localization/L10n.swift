@@ -1148,11 +1148,11 @@ public enum L10n: Sendable {
     public static var confirmDownload: String { t("Confirm Download", "确认下载") }
     public static var downloadFromBrowser: String { t("Download from browser", "来自浏览器的下载") }
     public static var includesAudioTrack: String { t("Includes audio track", "包含音轨") }
-    public static var capturedByBetterNDM: String { t("Captured by BetterNDM", "由 BetterNDM 捕获") }
+    public static var capturedByNDMRelay: String { t("Captured by NDM Relay", "由 NDM Relay 捕获") }
 
     public static var browserExtension: String { t("Browser Extension", "浏览器扩展") }
     public static var browserExtensionEllipsis: String { t("Browser Extension…", "浏览器扩展…") }
-    public static var connectBetterNDM: String { t("Connect BetterNDM", "连接 BetterNDM") }
+    public static var connectNDMRelay: String { t("Connect NDM Relay", "连接 NDM Relay") }
     public static func bridgeReady(_ endpoint: String) -> String {
         t("Bridge ready · \(endpoint)", "桥接就绪 · \(endpoint)")
     }
@@ -1163,15 +1163,15 @@ public enum L10n: Sendable {
         t(
             """
             1. Open Chrome, Edge, or Firefox
-            2. Load the unpacked BetterNDM extension
+            2. Load the unpacked NDM Relay extension
             3. Keep NDM running — the extension connects automatically
-            4. Hover detected media, or click the BetterNDM toolbar icon, to show download choices
+            4. Hover detected media, or click the NDM Relay toolbar icon, to show download choices
             """,
             """
             1. 打开 Chrome、Edge 或 Firefox
-            2. 以「加载已解压的扩展程序」方式加载 BetterNDM
+            2. 以「加载已解压的扩展程序」方式加载 NDM Relay
             3. 保持 NDM 运行 — 扩展会自动连接
-            4. 将鼠标移到检测到的媒体上，或点击 BetterNDM 工具栏图标，查看下载选项
+            4. 将鼠标移到检测到的媒体上，或点击 NDM Relay 工具栏图标，查看下载选项
             """
         )
     }
@@ -1180,8 +1180,8 @@ public enum L10n: Sendable {
     public static var extensionFolderMissing: String { t("Extension folder not found", "找不到扩展文件夹") }
     public static var extensionFolderHint: String {
         t(
-            "Open this project and load extension/BetterNDM as an unpacked Chrome extension.",
-            "打开本项目，将 extension/BetterNDM 以未打包扩展方式加载到 Chrome。"
+            "Open this project and load extension/NDMRelay as an unpacked Chrome extension.",
+            "打开本项目，将 extension/NDMRelay 以未打包扩展方式加载到 Chrome。"
         )
     }
 
@@ -1375,19 +1375,19 @@ public enum L10n: Sendable {
     public static func bridgePortInUseBody(_ port: UInt16, _ detail: String) -> String {
         t(
             """
-            Another app is already listening on 127.0.0.1:\(port) \
-            (usually the original Neat Download Manager).
+            Another process is already listening on NDM's dedicated bridge port \
+            127.0.0.1:\(port).
 
-            Quit that app, then restart NDM if you need BetterNDM.
+            Quit that process, then restart NDM if you need NDM Relay.
 
             NDM will continue without the WebSocket bridge.
             \(detail)
             """,
             """
-            已有应用占用 127.0.0.1:\(port) \
-            （通常是原版 Neat Download Manager）。
+            已有其他进程占用 NDM 专用桥接端口 \
+            127.0.0.1:\(port)。
 
-            请退出该应用后重启 NDM，以便使用 BetterNDM。
+            如需使用 NDM Relay，请退出该进程后重启 NDM。
 
             NDM 将在没有 WebSocket 桥接的情况下继续运行。
             \(detail)
@@ -1404,7 +1404,7 @@ public enum L10n: Sendable {
 
             Data: \(dataPath)
             Bridge: \(bridge)
-            Extension: BetterNDM
+            Extension: NDM Relay
 
             Inspired by Neat Download Manager's download engine behaviour — not a UI clone.
             """,
@@ -1413,7 +1413,7 @@ public enum L10n: Sendable {
 
             数据目录：\(dataPath)
             桥接：\(bridge)
-            扩展：BetterNDM
+            扩展：NDM Relay
 
             下载引擎行为参考 Neat Download Manager，界面为独立设计，并非 UI 复刻。
             """

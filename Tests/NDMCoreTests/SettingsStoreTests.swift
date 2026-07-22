@@ -34,6 +34,30 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.languageMode, .simplifiedChinese)
     }
 
+    func testLegacyNeatBridgePortMigratesToNDMDedicatedPort() throws {
+        let suiteName = "dev.ndm.open.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var settings = AppSettings()
+        settings.bridgePort = BridgeConstants.legacyNeatPort
+        SettingsStore.save(settings, defaults: defaults)
+
+        XCTAssertEqual(SettingsStore.load(defaults: defaults).bridgePort, BridgeConstants.port)
+    }
+
+    func testCustomBridgePortIsPreserved() {
+        let suiteName = "dev.ndm.open.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var settings = AppSettings()
+        settings.bridgePort = 52_222
+        SettingsStore.save(settings, defaults: defaults)
+
+        XCTAssertEqual(SettingsStore.load(defaults: defaults).bridgePort, 52_222)
+    }
+
     func testL10nChinese() {
         L10n.apply(.simplifiedChinese)
         XCTAssertTrue(L10n.usesChinese)
@@ -50,7 +74,7 @@ final class SettingsStoreTests: XCTestCase {
             "下载 12 项 · 1080p · MP4"
         )
         XCTAssertEqual(L10n.linkLensViewExisting, "查看现有")
-        XCTAssertEqual(L10n.linkLensOptions, "选项…")
+        XCTAssertEqual(L10n.linkLensOptions, "选择画质…")
         XCTAssertEqual(
             L10n.clipboardOffer(source: .douyin, wasExtractedFromText: true),
             "下载抖音分享"
@@ -73,7 +97,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))
         XCTAssertEqual(L10n.ytdlpEntireCollection(12, isTruncated: true), "First 12 items")
         XCTAssertEqual(L10n.linkLensDownloadAgain, "Download again")
-        XCTAssertEqual(L10n.linkLensOptions, "Options…")
+        XCTAssertEqual(L10n.linkLensOptions, "Choose quality…")
         XCTAssertEqual(
             L10n.clipboardOffer(source: .youtube, wasExtractedFromText: false),
             "Download YouTube link"

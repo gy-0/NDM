@@ -7,7 +7,7 @@
 
 - ScribeStudio：活动 renderer 的自动扫描从 7 个命中降为 0；删除重复英文 kicker，改用实色画布/按钮/舞台，标签不再使用 10px，左侧设置与下方工具区改为连续 pane。另修复 1120px Mac 窗口下文稿区覆盖生成文件/日志的响应式网格回归。
 - NDM：详情、进度、Pro 与设置中的目标微型字号已上调；Pro/媒体权限提示不再使用淡色圆角 icon well；Inspector、设置、Pro 权益区的内层容器已改成透明连续信息面。
-- BetterNDM：站点原生圆形按钮继续保留，没有因扫描命中而误改。
+- NDM Relay：站点原生圆形按钮继续保留，没有因扫描命中而误改。
 - 聚焦截图：`verified/kill-ai-slop-scribestudio-focused.jpg`、`verified/kill-ai-slop-ndm-main-focused.jpg`、`verified/kill-ai-slop-ndm-settings-focused.jpg`、`verified/kill-ai-slop-ndm-pro-focused.jpg`。
 
 ## ScribeStudio · 确认需要清理
@@ -79,7 +79,7 @@
 
 - NDM 文件行的淡色类型背景、封面/应用图标预览是用户明确提出的识别与美观设计。它有信息意义，不按 slop 删除；仅控制不透明度与文字可读区。
 - `QuietFinderRows.swift:114-168` 的 ambient artwork 是有品牌/内容来源的文件视觉，不是通用 CSS 氛围渐变；当前 flat scrim 已避免多段渐变，保留。
-- BetterNDM `site-adapters.js:161,165` 的 X/YouTube 圆形按钮是在匹配目标站点原生控件形状，属于被防守的站点适配，不按 max-radius 清理。
+- NDM Relay `site-adapters.js:161,165` 的 X/YouTube 圆形按钮是在匹配目标站点原生控件形状，属于被防守的站点适配，不按 max-radius 清理。
 - NDM README 的 ✅ 是工程状态文档，不是产品 UI 文案，扫描命中不处理。
 - 三方向原型扫描命中的 Mac traffic lights、真实播放控件、方向编号和文件计数均有语义，属于假阳性。
 

@@ -1,7 +1,8 @@
-# BetterNDM（本仓库副本）
+# NDM Relay（本仓库副本）
 
-- 性质：社区维护的 Chrome 扩展（MIT，见 `LICENSE`）
-- 与宿主协议：`ws://127.0.0.1:10007/download` + `neatextension.v1`
+- 性质：由 Yuan Gao 维护的 NDM 官方 Chrome 扩展（MIT，第三方许可声明见 `LICENSE`）
+- 与宿主协议：`ws://127.0.0.1:51873/ndm/download` + `ndm.open.v1`
+- 独立身份：不携带原版扩展的固定 `key` 或官网；可与原版 Neat 扩展并存
 - 角色：本产品的浏览器扩展主线
 - 安全边界：只有顶层下载导航可自动交给宿主；DAT/BIN、XHR、隐藏 frame 和页面子资源不会被视为用户下载意图
 - 媒体体验：候选按语义去重，默认只展示推荐视频；TS 分片过滤，其他格式折叠

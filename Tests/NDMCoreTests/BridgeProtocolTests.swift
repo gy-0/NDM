@@ -2,7 +2,7 @@ import XCTest
 @testable import NDMCore
 
 final class BridgeProtocolTests: XCTestCase {
-    func testParseBetterNDMShape() throws {
+    func testParseNDMRelayShape() throws {
         let raw = [
             "1:GET",
             "2:https://example.com/file.zip",
@@ -27,9 +27,12 @@ final class BridgeProtocolTests: XCTestCase {
         XCTAssertEqual(msg.contentType, "application/zip")
     }
 
-    func testConstantsMatchOriginal() {
-        XCTAssertEqual(BridgeConstants.port, 10_007)
-        XCTAssertEqual(BridgeConstants.subprotocol, "neatextension.v1")
+    func testConstantsUseNDMIdentityInsteadOfOriginalNeatBridge() {
+        XCTAssertEqual(BridgeConstants.port, 51_873)
+        XCTAssertNotEqual(BridgeConstants.port, BridgeConstants.legacyNeatPort)
+        XCTAssertEqual(BridgeConstants.path, "/ndm/download")
+        XCTAssertEqual(BridgeConstants.subprotocol, "ndm.open.v1")
+        XCTAssertEqual(BridgeConstants.endpoint, "ws://127.0.0.1:51873/ndm/download")
         XCTAssertEqual(BridgeConstants.waiting, "waiting")
     }
 

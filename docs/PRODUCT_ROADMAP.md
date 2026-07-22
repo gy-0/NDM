@@ -16,7 +16,7 @@
 | HTTP / SOCKS / FTP 代理 + 认证 | ✅ |
 | 限速、队列 | ✅ |
 | HLS/M3U8 下载合并 | ✅ 输出 TS/MKV |
-| 浏览器扩展接管 | 🟡 BetterNDM 可用，实机 smoke 待走完 |
+| 浏览器扩展接管 | 🟡 NDM Relay 可用，实机 smoke 待走完 |
 | 智能升降连接数 + 无收益自动降级并解释 | ✅ `SmartConnectionTuner` + 进度窗 smartline + Inspector「为什么这么快」 |
 | 下载诊断（人话解释 403/416/瓶颈） | ✅ `DownloadDiagnostic` 双语文案 · 列表行内联 · Inspector 卡片 · 按诊断换按钮主次 |
 | HLS → **MP4** | ✅ 默认 ffmpeg `-c copy` remux + faststart；失败/无 ffmpeg 诚实回退 TS |
@@ -104,9 +104,9 @@
 2. 主窗 Quiet Finder 精装（Inspector / 细进度 / 工具栏 / ~~Link Lens~~ ✅ / ~~Space Confidence~~ ✅）— 运行态视觉验收中
 3. ~~万能粘贴第二步（短链展开、浏览器会话接力、失败时给可执行的人话）~~ ✅
 4. Smart Finalize 收敛（~~字幕成组~~ ✅、~~原文件/音频结果~~ ✅、~~可靠磁盘命名与同名附属文件迁移~~ ✅、封面细节继续精装）
-5. BetterNDM 实机 smoke 收口
+5. NDM Relay 实机 smoke 收口
 6. 真购买链 + 更新通道
 7. ~~批量合集首版~~ ✅；自动化规则 / Shortcuts 与 Raycast（后置）
 
 宣传语（空状态 / Onboarding）：`给我链接，剩下的交给我` · `下完就是能用的文件`。
-细节勾选见 `FEATURE_PARITY.md`；扩展联调见 `BETTERNDM_SMOKE.md`。
+细节勾选见 `FEATURE_PARITY.md`；扩展联调见 `NDM_RELAY_SMOKE.md`。

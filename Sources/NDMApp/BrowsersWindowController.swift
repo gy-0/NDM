@@ -1,7 +1,7 @@
 import AppKit
 import NDMCore
 
-/// Browser extension setup for BetterNDM.
+/// Browser extension setup for NDM Relay.
 @MainActor
 final class BrowsersWindowController: NSWindowController {
     private let statusLabel = NSTextField(labelWithString: "")
@@ -25,12 +25,12 @@ final class BrowsersWindowController: NSWindowController {
 
     private func buildUI(bridgeRunning: Bool) {
         guard let content = window?.contentView else { return }
-        let title = NSTextField(labelWithString: L10n.connectBetterNDM)
+        let title = NSTextField(labelWithString: L10n.connectNDMRelay)
         title.font = .systemFont(ofSize: 16, weight: .semibold)
 
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         if bridgeRunning {
-            statusLabel.stringValue = L10n.bridgeReady("ws://127.0.0.1:\(BridgeConstants.port)/download")
+            statusLabel.stringValue = L10n.bridgeReady(BridgeConstants.endpoint)
             statusLabel.textColor = .secondaryLabelColor
         } else {
             statusLabel.stringValue = L10n.bridgeUnavailable(BridgeConstants.port)
@@ -71,11 +71,11 @@ final class BrowsersWindowController: NSWindowController {
     @objc private func reveal() {
         let candidates = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("extension/BetterNDM"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM-clean/extension/BetterNDM"),
+                .appendingPathComponent("extension/NDMRelay"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("NDM-clean/extension/NDMRelay"),
             Bundle.main.bundleURL
                 .deletingLastPathComponent()
-                .appendingPathComponent("extension/BetterNDM"),
+                .appendingPathComponent("extension/NDMRelay"),
         ]
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -88,9 +88,8 @@ final class BrowsersWindowController: NSWindowController {
     }
 
     @objc private func copyEndpoint() {
-        let value = "ws://127.0.0.1:\(BridgeConstants.port)\(BridgeConstants.path)"
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
+        NSPasteboard.general.setString(BridgeConstants.endpoint, forType: .string)
     }
 
     @objc private func closeClicked() { window?.close() }

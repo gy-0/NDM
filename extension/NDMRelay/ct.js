@@ -91,9 +91,9 @@ function M(d) {
     return d ? !d.fEx || "VTT" != d.fEx.toUpperCase() && "SRT" != d.fEx.toUpperCase() ? d["4"] || (d.fEx.toUpperCase() || "MP4") + " File  " + (G(d.fS) || d.fDu) : d.fEx.toUpperCase() + " Subtitles File " + (d.fS ? G(d.fS) : " ") : "Media File"
 }
 
-var BetterNDMPolicy = globalThis.BetterNDMMediaPolicy;
+var NDMRelayPolicy = globalThis.NDMRelayMediaPolicy;
 
-function BetterNDMText(zh, en) {
+function NDMRelayText(zh, en) {
     return String(navigator.language || "").toLowerCase().indexOf("zh") === 0 ? zh : en
 }
 
@@ -174,7 +174,7 @@ O.I = function(d) {
     var g = this,
         t = this.theme(),
         e = this.D.N(this.visibleItems[d]),
-        b = BetterNDMPolicy ? BetterNDMPolicy.describeCandidate(e, {
+        b = NDMRelayPolicy ? NDMRelayPolicy.describeCandidate(e, {
             locale: navigator.language,
             recommended: 0 == d
         }) : M(e),
@@ -208,13 +208,13 @@ O.I = function(d) {
 };
 O.render = function() {
     if (!this.panel || !this.h) return;
-    var supportedSite = globalThis.BetterNDMSiteAdapters &&
-        BetterNDMSiteAdapters.siteForURL(window.location.href);
+    var supportedSite = globalThis.NDMRelaySiteAdapters &&
+        NDMRelaySiteAdapters.siteForURL(window.location.href);
     var d = this,
         raw = this.items.map(function(g) {
             return d.D.N(g)
         }).filter(Boolean),
-        visible = BetterNDMPolicy ? BetterNDMPolicy.compactCandidates(raw, 6) : raw,
+        visible = NDMRelayPolicy ? NDMRelayPolicy.compactCandidates(raw, 6) : raw,
         allItemIds = visible.map(function(g) {
             return g.id
         });
@@ -228,7 +228,7 @@ O.render = function() {
             more = document.createElement("BUTTON");
         more.type = "button";
         more.style.cssText = "all:unset;box-sizing:border-box;min-height:28px;padding:4px 10px;border-radius:6px;color:" + t.muted + ";cursor:pointer;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:11px;line-height:18px;font-weight:550;text-align:left";
-        more.innerText = this.showAlternatives ? BetterNDMText("收起其他格式", "Hide other formats") : BetterNDMText("其他格式（" + (a - 1) + "）", "Other formats (" + (a - 1) + ")");
+        more.innerText = this.showAlternatives ? NDMRelayText("收起其他格式", "Hide other formats") : NDMRelayText("其他格式（" + (a - 1) + "）", "Other formats (" + (a - 1) + ")");
         more.setAttribute("aria-expanded", this.showAlternatives ? "true" : "false");
         more.onclick = function(f) {
             f.stopPropagation();
@@ -240,9 +240,9 @@ O.render = function() {
     }
     this.count.innerText = a;
     this.count.style.display = 1 < a ? "" : "none";
-    this.badge.setAttribute("aria-label", BetterNDMText("显示检测到的 " + a + " 个视频下载选项", "Show " + a + " detected video download options"));
-    var siteHasInlineUI = supportedSite && globalThis.BetterNDMSiteAdapters &&
-        BetterNDMSiteAdapters.hasInlineAction(window.location.href);
+    this.badge.setAttribute("aria-label", NDMRelayText("显示检测到的 " + a + " 个视频下载选项", "Show " + a + " detected video download options"));
+    var siteHasInlineUI = supportedSite && globalThis.NDMRelaySiteAdapters &&
+        NDMRelaySiteAdapters.hasInlineAction(window.location.href);
     var shouldFloat = a && this.D.H && !(siteHasInlineUI && !this.toolbarPinned);
     this.h.style.display = shouldFloat ? "" : "none";
     shouldFloat ? this.h.removeAttribute("aria-hidden") : this.h.setAttribute("aria-hidden", "true");
@@ -276,7 +276,7 @@ O.L = function(d) {
         this.badge = document.createElement("BUTTON");
         this.badge.type = "button";
         this.badge.style.cssText = "all:unset;display:flex;align-items:center;justify-content:center;height:30px;min-width:48px;padding:0px 8px;box-sizing:border-box;border-radius:9px;border:solid 1px " + t.bd + ";background:" + t.bg + ";cursor:pointer;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.14)";
-        this.badge.setAttribute("aria-label", BetterNDMText("显示视频下载选项", "Show video download options"));
+        this.badge.setAttribute("aria-label", NDMRelayText("显示视频下载选项", "Show video download options"));
         var e = document.createElement("IMG");
         e.src = k;
         e.width = 14;
@@ -304,7 +304,7 @@ O.L = function(d) {
         var cls = document.createElement("BUTTON");
         cls.type = "button";
         cls.style.cssText = "all:unset;display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;border-radius:7px;border:solid 1px " + t.bd + ";background:" + t.bg + ";cursor:pointer";
-        cls.setAttribute("aria-label", BetterNDMText("收起视频下载选项", "Minimize video download options"));
+        cls.setAttribute("aria-label", NDMRelayText("收起视频下载选项", "Minimize video download options"));
         var f = document.createElement("IMG");
         f.src = w;
         f.width = 10;
@@ -376,9 +376,9 @@ if (!window.o) {
         this.o(document, "click", this.ra);
         this.siteAdapters = null;
         this.resourceShelf = null;
-        if (window.top === window && globalThis.BetterNDMSiteAdapters) {
+        if (window.top === window && globalThis.NDMRelaySiteAdapters) {
             try {
-                this.siteAdapters = BetterNDMSiteAdapters.install({
+                this.siteAdapters = NDMRelaySiteAdapters.install({
                     onDownload: this.downloadSitePage.bind(this),
                     onActionReady: this.refreshSitePanels.bind(this)
                 })
@@ -386,9 +386,9 @@ if (!window.o) {
                 this.siteAdapters = null
             }
         }
-        if (window.top === window && globalThis.BetterNDMResourceShelf) {
+        if (window.top === window && globalThis.NDMRelayResourceShelf) {
             try {
-                this.resourceShelf = BetterNDMResourceShelf.install({
+                this.resourceShelf = NDMRelayResourceShelf.install({
                     onDownload: this.downloadResource.bind(this)
                 })
             } catch (a) {
@@ -467,12 +467,12 @@ if (!window.o) {
     O.downloadSitePage = function(a) {
         if (!a || !a.url) return;
         var b = {
-            id: F("BetterNDMSite:" + a.url),
+            id: F("NDMRelaySite:" + a.url),
             1: "GET",
             2: a.url,
             6: "media-page",
             fEx: "mp4",
-            4: a.label || BetterNDMText("使用 NDM 下载", "Download with NDM"),
+            4: a.label || NDMRelayText("使用 NDM 下载", "Download with NDM"),
             betterPageResolver: !0
         };
         this.A[b.id] = b;
@@ -506,16 +506,16 @@ if (!window.o) {
         return ""
     };
     O.ensurePageResolver = function(a) {
-        var b = globalThis.BetterNDMSiteAdapters ? BetterNDMSiteAdapters.pageURLForElement(a.m, window.location) : this.socialVideoPageURL(a.m);
+        var b = globalThis.NDMRelaySiteAdapters ? NDMRelaySiteAdapters.pageURLForElement(a.m, window.location) : this.socialVideoPageURL(a.m);
         if (!b) return;
-        var c = F("BetterNDMPage:" + b);
+        var c = F("NDMRelayPage:" + b);
         this.A[c] || (this.A[c] = {
             id: c,
             1: "GET",
             2: b,
             6: "media-page",
             fEx: "mp4",
-            4: BetterNDMText("推荐 · 选择画质并下载", "Recommended · Choose quality and download"),
+            4: NDMRelayText("推荐 · 选择画质并下载", "Recommended · Choose quality and download"),
             betterPageResolver: !0
         });
         -1 == a.items.indexOf(c) && a.items.unshift(c)
@@ -965,7 +965,7 @@ if (!window.o) {
                 b.resourceShelf && b.resourceShelf.add(a[1]);
                 break;
             case 15:
-                alert("Extension Can't Connect to NeatDownloadManager Application, You Can : \r\n1- Check If NeatDownloadManager is Running.\r\n2- or Hold down Delete-Key and click on the Download link.\r\n3- or Disable NeatDownloadManager Extension temporarily.")
+                alert("The browser extension can't connect to NDM. You can: \r\n1- Check that NDM is running.\r\n2- Hold down Delete and click the download link.\r\n3- Temporarily disable the NDM browser extension.")
         }
     };
     O.o = function(a) {
