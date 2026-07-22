@@ -367,7 +367,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
             canShowProgress: canShowProgress,
             isComplete: task.status == .complete,
             primaryAction: primary,
-            segmentStates: [],
+            // Carry live segments only while downloading — the Now Downloading
+            // hero renders them as a parallel-connection strip. Idle rows keep
+            // this empty so list diffing stays cheap.
+            segmentStates: task.status == .downloading ? (progress?.segmentStates ?? []) : [],
             mediaBadge: mediaBadge,
             isDownloading: task.status == .downloading,
             isFailed: task.status == .error,

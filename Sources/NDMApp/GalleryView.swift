@@ -24,8 +24,14 @@ final class GalleryCardItem: NSCollectionViewItem {
     private let progressBar = ThinProgressView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
+    // Frosted "play/open" affordance that scales in on hover — the poster
+    // invites the click like a streaming tile, over a soft darkening scrim.
+    private let hoverScrim = CALayer()
+    private let playChip = NSVisualEffectView()
+    private let playGlyph = NSImageView()
     private var currentTaskID: Int64?
     private var isHovering = false
+    private var isPlayable = false
 
     override func loadView() {
         view = NSView()
@@ -72,11 +78,36 @@ final class GalleryCardItem: NSCollectionViewItem {
         metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         metaLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        // Darkening scrim (behind the play chip) inside the clipped plate.
+        hoverScrim.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        hoverScrim.opacity = 0
+        coverPlate.layer?.addSublayer(hoverScrim)
+
+        // Frosted circular chip with a play/open glyph.
+        playChip.material = .hudWindow
+        playChip.blendingMode = .withinWindow
+        playChip.state = .active
+        playChip.wantsLayer = true
+        playChip.layer?.cornerRadius = 22
+        playChip.layer?.masksToBounds = true
+        playChip.layer?.borderWidth = 1
+        playChip.layer?.borderColor = NSColor.white.withAlphaComponent(0.35).cgColor
+        playChip.translatesAutoresizingMaskIntoConstraints = false
+        playChip.alphaValue = 0
+        playGlyph.imageScaling = .scaleProportionallyUpOrDown
+        playGlyph.translatesAutoresizingMaskIntoConstraints = false
+        playGlyph.setAccessibilityElement(false)
+        playChip.addGestureRecognizer(
+            NSClickGestureRecognizer(target: self, action: #selector(playChipClicked))
+        )
+
         view.addSubview(coverHost)
         coverHost.addSubview(coverPlate)
         coverPlate.addSubview(iconView)
         coverHost.addSubview(speedBadge)
         coverHost.addSubview(progressBar)
+        coverHost.addSubview(playChip)
+        playChip.addSubview(playGlyph)
         view.addSubview(titleLabel)
         view.addSubview(metaLabel)
 
@@ -109,6 +140,14 @@ final class GalleryCardItem: NSCollectionViewItem {
             metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             metaLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -2),
+            playChip.centerXAnchor.constraint(equalTo: coverHost.centerXAnchor),
+            playChip.centerYAnchor.constraint(equalTo: coverHost.centerYAnchor),
+            playChip.widthAnchor.constraint(equalToConstant: 44),
+            playChip.heightAnchor.constraint(equalToConstant: 44),
+            playGlyph.centerXAnchor.constraint(equalTo: playChip.centerXAnchor),
+            playGlyph.centerYAnchor.constraint(equalTo: playChip.centerYAnchor),
+            playGlyph.widthAnchor.constraint(equalToConstant: 20),
+            playGlyph.heightAnchor.constraint(equalToConstant: 20),
         ])
 
         let tracking = NSTrackingArea(
@@ -123,6 +162,15 @@ final class GalleryCardItem: NSCollectionViewItem {
     func apply(_ row: TaskRowPresentation, cover: NSImage?) {
         currentTaskID = row.taskID
         titleLabel.stringValue = row.filename
+
+        // The hover chip invites the natural action: play a finished video,
+        // otherwise open. Downloading/failed rows get no invite.
+        let ext = (row.filename as NSString).pathExtension.lowercased()
+        isPlayable = ["mp4", "mkv", "mov", "m4v", "webm", "avi", "ts",
+                      "mp3", "m4a", "flac", "wav", "aac"].contains(ext)
+        let glyphName = isPlayable ? "play.fill" : "arrow.up.forward.app.fill"
+        playGlyph.image = NDMChrome.symbol(glyphName, pointSize: 17, weight: .semibold)
+        playGlyph.contentTintColor = .labelColor
 
         if let cover {
             imageLayer.contents = cover.layerContents(forContentsScale: view.window?.backingScaleFactor ?? 2)
@@ -191,6 +239,10 @@ final class GalleryCardItem: NSCollectionViewItem {
             cornerHeight: 12,
             transform: nil
         )
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hoverScrim.frame = coverPlate.bounds
+        CATransaction.commit()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -199,6 +251,10 @@ final class GalleryCardItem: NSCollectionViewItem {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    @objc private func playChipClicked() {
+        if let currentTaskID { onActivate?(currentTaskID) }
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -227,12 +283,26 @@ final class GalleryCardItem: NSCollectionViewItem {
             : CATransform3DIdentity
         coverHost.layer?.shadowOpacity = hovering ? 0.24 : 0.10
         coverHost.layer?.shadowRadius = hovering ? 16 : 8
+        hoverScrim.opacity = hovering ? 1 : 0
         if !isSelected {
             coverPlate.layer?.borderColor = hovering
                 ? NDMChrome.accent.withAlphaComponent(0.45).cgColor
                 : NDMChrome.hairline.cgColor
         }
         CATransaction.commit()
+
+        // The frosted play chip scales + fades in — a poster inviting a click.
+        let progressActive = !progressBar.isHidden
+        let showChip = hovering && !progressActive
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.28
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.2)
+            ctx.allowsImplicitAnimation = true
+            playChip.animator().alphaValue = showChip ? 1 : 0
+        }
+        playChip.layer?.transform = showChip
+            ? CATransform3DMakeScale(1, 1, 1)
+            : CATransform3DMakeScale(0.6, 0.6, 1)
     }
 
     // MARK: - No-artwork placeholder

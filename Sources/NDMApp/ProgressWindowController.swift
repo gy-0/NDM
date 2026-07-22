@@ -843,19 +843,29 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         sizeWindowToFitInitially()
     }
 
+    private var didCelebrateCompletion = false
+
     private func celebratePercentLabel() {
         percentLabel.wantsLayer = true
-        guard let layer = percentLabel.layer else { return }
-        let spring = CASpringAnimation(keyPath: "transform.scale")
-        spring.fromValue = 1.0
-        spring.toValue = 1.08
-        spring.mass = 1
-        spring.stiffness = 300
-        spring.damping = 12
-        spring.initialVelocity = 8
-        spring.autoreverses = true
-        spring.duration = spring.settlingDuration / 2
-        layer.add(spring, forKey: "celebrate")
+        if let layer = percentLabel.layer {
+            let spring = CASpringAnimation(keyPath: "transform.scale")
+            spring.fromValue = 1.0
+            spring.toValue = 1.08
+            spring.mass = 1
+            spring.stiffness = 300
+            spring.damping = 12
+            spring.initialVelocity = 8
+            spring.autoreverses = true
+            spring.duration = spring.settlingDuration / 2
+            layer.add(spring, forKey: "celebrate")
+        }
+        // Emoji confetti + pop, fired from the hero ring — once per window.
+        guard !didCelebrateCompletion, let content = window?.contentView else { return }
+        didCelebrateCompletion = true
+        let ringCenter = percentLabel.superview.map {
+            content.convert(CGPoint(x: $0.frame.midX, y: $0.frame.midY), from: $0.superview)
+        } ?? CGPoint(x: content.bounds.midX, y: content.bounds.maxY - 140)
+        CelebrationEffect.burst(in: content, at: ringCenter)
     }
 
     private func applyCompletionStack(for task: DownloadTask) {

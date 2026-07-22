@@ -498,6 +498,21 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         audioExtraction.cancel()
         onDismiss()
     }
+
+    private var didCelebrate = false
+
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        guard !didCelebrate, let content = window?.contentView else { return }
+        didCelebrate = true
+        // A beat of delight, fired from just under the success headline.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            CelebrationEffect.burst(
+                in: content,
+                at: CGPoint(x: content.bounds.midX, y: content.bounds.maxY - 90)
+            )
+        }
+    }
 }
 
 private final class CompletionDocumentView: NSView {

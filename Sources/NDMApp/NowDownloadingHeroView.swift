@@ -25,6 +25,7 @@ final class NowDownloadingHeroView: NSView {
     private let unitLabel = NSTextField(labelWithString: "KB/s")
     private let moreLabel = NSTextField(labelWithString: "")
     private let progressBar = ThinProgressView()
+    private let segmentStrip = HeroSegmentStrip()
     private let percentLabel = NSTextField(labelWithString: "")
     private let hairline = ChromeBox(fill: NDMChrome.hairline)
 
@@ -85,9 +86,11 @@ final class NowDownloadingHeroView: NSView {
         progressBar.translatesAutoresizingMaskIntoConstraints = false
         hairline.translatesAutoresizingMaskIntoConstraints = false
 
+        segmentStrip.translatesAutoresizingMaskIntoConstraints = false
+        segmentStrip.isHidden = true
         for view in [atmosphere, coverPlate, coverView, eyebrowLabel, nameLabel,
                      metaLabel, speedLabel, unitLabel, moreLabel, progressBar,
-                     percentLabel, hairline] {
+                     segmentStrip, percentLabel, hairline] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -137,6 +140,13 @@ final class NowDownloadingHeroView: NSView {
             progressBar.heightAnchor.constraint(equalToConstant: 4),
             percentLabel.centerYAnchor.constraint(equalTo: progressBar.centerYAnchor),
             percentLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+
+            // The segment strip overlays the same lane as the plain bar; only
+            // one is visible at a time (multi-connection vs single stream).
+            segmentStrip.leadingAnchor.constraint(equalTo: progressBar.leadingAnchor),
+            segmentStrip.trailingAnchor.constraint(equalTo: progressBar.trailingAnchor),
+            segmentStrip.centerYAnchor.constraint(equalTo: progressBar.centerYAnchor),
+            segmentStrip.heightAnchor.constraint(equalToConstant: 5),
 
             hairline.leadingAnchor.constraint(equalTo: leadingAnchor),
             hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -190,8 +200,21 @@ final class NowDownloadingHeroView: NSView {
         nameLabel.stringValue = primary.filename
         metaLabel.stringValue = primary.statusDetail
         percentLabel.stringValue = primary.progressText
-        progressBar.progress = primary.progressFraction
-        progressBar.isActive = true
+
+        // Multiple live connections → show the parallel segment strip; a
+        // single stream keeps the clean accent bar.
+        let segments = primary.segmentStates
+        if segments.count > 1 {
+            segmentStrip.update(segments: segments)
+            segmentStrip.isHidden = false
+            progressBar.isHidden = true
+            progressBar.isActive = false
+        } else {
+            segmentStrip.isHidden = true
+            progressBar.isHidden = false
+            progressBar.progress = primary.progressFraction
+            progressBar.isActive = true
+        }
         moreLabel.isHidden = activeCount <= 1
         if activeCount > 1 {
             moreLabel.stringValue = L10n.heroMoreActive(activeCount - 1)
@@ -294,5 +317,60 @@ final class NowDownloadingHeroView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { stopRolling() }
+    }
+}
+
+/// Parallel-connection strip for the hero: one lane per active segment, each
+/// filled to its own completion, laid out proportionally to segment size — the
+/// same "many workers pulling at once" picture as the progress window, minified.
+@MainActor
+final class HeroSegmentStrip: NSView {
+    private var segments: [SegmentState] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(segments: [SegmentState]) {
+        self.segments = segments.sorted { $0.id < $1.id }
+        needsDisplay = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard !segments.isEmpty else { return }
+        let gap: CGFloat = segments.count > 24 ? 0 : 1.5
+        let totalLength = segments.reduce(Int64(0)) { $0 + max(1, $1.length) }
+        let usableWidth = bounds.width - gap * CGFloat(segments.count - 1)
+        let radius = bounds.height / 2
+
+        var x: CGFloat = 0
+        let track = NSColor.labelColor.withAlphaComponent(0.10)
+        let fill = NDMChrome.accent
+        for segment in segments {
+            let frac = Double(max(1, segment.length)) / Double(totalLength)
+            let laneWidth = max(1, usableWidth * CGFloat(frac))
+            let laneRect = NSRect(x: x, y: 0, width: laneWidth, height: bounds.height)
+            track.setFill()
+            NSBezierPath(roundedRect: laneRect, xRadius: radius, yRadius: radius).fill()
+
+            let done = segment.length > 0
+                ? CGFloat(min(1, Double(segment.completed) / Double(segment.length)))
+                : (segment.isFinished ? 1 : 0)
+            if done > 0.001 {
+                let fillRect = NSRect(x: x, y: 0, width: max(radius * 2, laneWidth * done), height: bounds.height)
+                fill.setFill()
+                NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius).fill()
+            }
+            x += laneWidth + gap
+        }
     }
 }
