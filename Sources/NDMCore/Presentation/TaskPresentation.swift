@@ -4,7 +4,6 @@ import Foundation
 public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
     case all
     case active
-    case queued
     case paused
     case completed
     case failed
@@ -20,7 +19,6 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
         switch self {
         case .all: return L10n.all
         case .active: return L10n.active
-        case .queued: return L10n.queued
         // This bucket combines explicitly paused and interrupted/incomplete
         // work, so an action-oriented label is truthful for both states.
         case .paused: return L10n.toResume
@@ -59,9 +57,9 @@ public enum SidebarFilter: String, CaseIterable, Sendable, Equatable {
         case .all:
             return true
         case .active:
-            return task.status == .downloading
-        case .queued:
-            return task.status == .waiting
+            // Queued (waiting for its turn in one-by-one mode) is "in
+            // progress" from the user's view — no separate 排队中 filter.
+            return task.status == .downloading || task.status == .waiting
         case .paused:
             return task.status == .paused || task.status == .incomplete
         case .completed:

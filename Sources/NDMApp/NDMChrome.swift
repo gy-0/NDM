@@ -267,7 +267,6 @@ enum NDMChrome {
         switch filter {
         case .all: return "tray.full"
         case .active: return "arrow.down.circle"
-        case .queued: return "clock"
         case .paused: return "arrow.clockwise.circle"
         case .completed: return "checkmark.circle"
         case .failed: return "exclamationmark.triangle"

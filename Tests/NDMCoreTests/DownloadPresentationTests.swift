@@ -51,12 +51,12 @@ final class DownloadPresentationTests: XCTestCase {
         let failed = DownloadTask(url: "https://a/x", status: .error)
 
         XCTAssertTrue(SidebarFilter.active.matches(downloading))
-        XCTAssertTrue(SidebarFilter.queued.matches(waiting))
+        // Queued (waiting) folds into "active" — no standalone 排队中 filter.
+        XCTAssertTrue(SidebarFilter.active.matches(waiting))
         XCTAssertTrue(SidebarFilter.paused.matches(paused))
         XCTAssertTrue(SidebarFilter.paused.matches(incomplete))
         XCTAssertTrue(SidebarFilter.completed.matches(complete))
         XCTAssertTrue(SidebarFilter.failed.matches(failed))
-        XCTAssertFalse(SidebarFilter.active.matches(waiting))
         XCTAssertEqual(SidebarFilter.paused.title, "To Resume")
     }
 

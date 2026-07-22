@@ -47,7 +47,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             case .general: return "slider.horizontal.3"
             case .appearance: return "paintpalette"
             case .downloads: return "arrow.down.circle"
-            case .browser: return "globe"
+            // Browser integration is an extension bridge, not "the web" — the
+            // globe was also the card icon inside this very pane, reading as a
+            // duplicate. A puzzle piece says "extension" unambiguously.
+            case .browser: return "puzzlepiece.extension.fill"
             case .network: return "bolt.horizontal"
             case .advanced: return "gearshape.2"
             }
@@ -178,13 +181,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 color: NDMChrome.accent(for: theme, customHex: settings.customAccentHex)
             )
         }
+        appearancePopup.target = self
+        appearancePopup.action = #selector(appearanceSelectionChanged)
         accentPopup.target = self
         accentPopup.action = #selector(accentSelectionChanged)
         customAccentColorWell.target = self
         customAccentColorWell.action = #selector(customAccentChanged)
         customAccentColorWell.setAccessibilityLabel(L10n.t("Custom accent color", "自定义强调色"))
+        // A minimal well opens an inline swatch grid instead of the heavyweight
+        // system color panel — the "clicking custom did nothing" felt broken
+        // because the big panel was easy to miss/dismiss.
+        if #available(macOS 13.0, *) {
+            customAccentColorWell.colorWellStyle = .minimal
+        }
         languagePopup.removeAllItems()
         AppLanguageMode.allCases.forEach { languagePopup.addItem(withTitle: $0.settingsTitle) }
+        languagePopup.target = self
+        languagePopup.action = #selector(languageSelectionChanged)
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
 
@@ -443,11 +456,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         NSLayoutConstraint.deactivate(paneConstraints)
         scrollView.documentView = pane
         if isSwitch, window?.isVisible == true {
+            // A quick, quiet crossfade — just enough to soften the swap, not a
+            // full theatrical dissolve of the whole content area.
             let fade = CATransition()
             fade.type = .fade
-            fade.duration = 0.18
+            fade.duration = 0.10
             fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            scrollView.layer?.add(fade, forKey: "section")
+            scrollView.contentView.layer?.add(fade, forKey: "section")
         }
         pane.translatesAutoresizingMaskIntoConstraints = false
         paneConstraints = [
@@ -1046,8 +1061,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         updateEnabledStates()
     }
 
+    @objc private func appearanceSelectionChanged() {
+        commitAppearanceLive()
+    }
+
+    @objc private func languageSelectionChanged() {
+        commitAppearanceLive()
+    }
+
     @objc private func accentSelectionChanged() {
         refreshAccentControls()
+        commitAppearanceLive()
     }
 
     @objc private func customAccentChanged() {
@@ -1055,6 +1079,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         accentPopup.selectItem(at: customIndex)
         accentPopup.item(at: customIndex)?.image = Self.accentSwatch(color: customAccentColorWell.color)
         refreshAccentControls()
+        commitAppearanceLive()
+    }
+
+    /// Theme, accent, and language apply the instant they're picked — no Save
+    /// round-trip. Each of these fields is validation-free, so we can persist
+    /// them independently of the rest of the form. Other panes (downloads,
+    /// network) still commit on Save.
+    private func commitAppearanceLive() {
+        var next = settings
+        let appearanceIndex = appearancePopup.indexOfSelectedItem
+        if AppearanceMode.allCases.indices.contains(appearanceIndex) {
+            next.appearanceMode = AppearanceMode.allCases[appearanceIndex]
+        }
+        let accentIndex = accentPopup.indexOfSelectedItem
+        if AccentTheme.allCases.indices.contains(accentIndex) {
+            next.accentTheme = AccentTheme.allCases[accentIndex]
+        }
+        if next.accentTheme == .custom {
+            next.customAccentHex = NDMChrome.hexString(for: customAccentColorWell.color) ?? next.customAccentHex
+        }
+        let languageIndex = languagePopup.indexOfSelectedItem
+        if AppLanguageMode.allCases.indices.contains(languageIndex) {
+            next.languageMode = AppLanguageMode.allCases[languageIndex]
+        }
+        settings = next
+        AppearanceApplicator.apply(next.appearanceMode)
+        NDMChrome.applyAccentTheme(next.accentTheme, customHex: next.customAccentHex)
+        L10n.apply(next.languageMode)
+        // Refresh the accent swatches in the popup to the new theme colors.
+        for (index, theme) in AccentTheme.allCases.enumerated() {
+            accentPopup.item(at: index)?.image = Self.accentSwatch(
+                color: NDMChrome.accent(for: theme, customHex: next.customAccentHex)
+            )
+        }
+        SettingsStore.save(next)
+        Task { await manager.updateSettings(next) }
     }
 
     private func refreshAccentControls() {

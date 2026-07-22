@@ -162,7 +162,12 @@ final class QuietFinderRowView: NSTableRowView {
 
         if paintsSelected {
             if usesAccentFill {
-                NDMChrome.accent.setFill()
+                // Sidebar: a soft accent pill, not a solid blue slab. It reads
+                // identically over the light paper rail and the dark glass one
+                // — no more "solid white vs frosted" mismatch — and the label
+                // ink (painted by the cell) carries the accent instead.
+                let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                NDMChrome.accent.withAlphaComponent(isDark ? 0.22 : 0.14).setFill()
             } else {
                 NDMChrome.rowActive.setFill()
             }

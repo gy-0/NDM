@@ -1054,7 +1054,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                             }
                             await reload()
                             if let first = tasks.first {
-                                showProgress(for: first.id)
+                                focusStartedDownload(first.id)
                             }
                             return
                         }
@@ -1076,14 +1076,35 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             do {
                 let task = try await manager.addURL(urlToAdd, ltype: ltype)
                 selectedTaskID = task.id
-                showProgress(for: task.id)
                 try await manager.start(taskID: task.id)
                 await reload()
+                focusStartedDownload(task.id)
             } catch {
                 showAlert(error)
                 await reload()
             }
         }
+    }
+
+    /// Bring a freshly-started, app-initiated download into view in the main
+    /// window instead of popping the standalone progress window. The user is
+    /// already here — the Now Downloading hero and the list row carry the
+    /// state with better UI. (Browser-initiated downloads still use the small
+    /// window, handled in AppDelegate, since the app may not be frontmost.)
+    private func focusStartedDownload(_ taskID: Int64) {
+        selectedTaskID = taskID
+        // Make sure the task is not hidden behind a filter/search the user set
+        // earlier, so the hero + row are actually visible.
+        if let task = allTasks.first(where: { $0.id == taskID }), !selectedFilter.matches(task) {
+            selectedFilter = .all
+        }
+        if !searchQuery.isEmpty {
+            searchQuery = ""
+            contentToolbar.setSearchQuery("")
+        }
+        sidebarController.update(counts: SidebarFilter.counts(in: allTasks), selected: selectedFilter)
+        rebuildDisplayedRows()
+        listController.revealTask(taskID)
     }
 
     private func launchSingleMedia(
@@ -1110,7 +1131,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             }
             selectedTaskID = task.id
             await reload()
-            showProgress(for: task.id)
+            focusStartedDownload(task.id)
         } catch {
             showAlert(error)
         }
@@ -1120,9 +1141,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         Task {
             do {
                 selectedTaskID = id
-                showProgress(for: id)
                 try await manager.start(taskID: id)
                 await reload()
+                focusStartedDownload(id)
             } catch {
                 showAlert(error)
                 await reload()
@@ -1187,9 +1208,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             do {
                 try await manager.renewURL(taskID: id, newURL: url)
                 selectedTaskID = id
-                showProgress(for: id)
                 try await manager.start(taskID: id)
                 await reload()
+                focusStartedDownload(id)
             } catch {
                 showAlert(error)
                 await reload()
@@ -1509,6 +1530,59 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+
+        // Row-level hover, same approach as the task list: one tracking area
+        // on the table + a scroll observer, because per-cell tracking areas
+        // drop mouseExited during trackpad scrolling.
+        let hoverArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        tableView.addTrackingArea(hoverArea)
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sidebarClipBoundsChanged),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    // MARK: - Hover
+
+    private var hoveredRow: Int?
+
+    override func mouseMoved(with event: NSEvent) { recalcHover(event.locationInWindow) }
+    override func mouseEntered(with event: NSEvent) { recalcHover(event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { applyHover(nil) }
+
+    @objc private func sidebarClipBoundsChanged(_ note: Notification) {
+        guard let window = view.window else { return }
+        recalcHover(window.mouseLocationOutsideOfEventStream)
+    }
+
+    private func recalcHover(_ windowPoint: NSPoint) {
+        let point = tableView.convert(windowPoint, from: nil)
+        let row = tableView.row(at: point)
+        // Headers are not hoverable.
+        if row >= 0, row < rows.count, case .filter = rows[row] {
+            applyHover(row)
+        } else {
+            applyHover(nil)
+        }
+    }
+
+    private func applyHover(_ row: Int?) {
+        guard hoveredRow != row else { return }
+        if let old = hoveredRow {
+            (tableView.rowView(atRow: old, makeIfNecessary: false) as? QuietFinderRowView)?.isHovered = false
+        }
+        hoveredRow = row
+        if let new = row {
+            (tableView.rowView(atRow: new, makeIfNecessary: false) as? QuietFinderRowView)?.isHovered = true
+        }
     }
 
     func setContentScale(_ scale: CGFloat) {
@@ -1814,8 +1888,10 @@ private final class SidebarFilterCellView: NSTableCellView {
         guard let filter = appliedFilter else { return }
         let selected = appliedSelected
         let scale = appliedScale
-        let ink: NSColor = selected ? .white : .labelColor
-        let muted: NSColor = selected ? NSColor.white.withAlphaComponent(0.78) : .tertiaryLabelColor
+        // Accent ink on the soft accent pill — the selected row glows in the
+        // theme color instead of inverting to white on a solid slab.
+        let ink: NSColor = selected ? NDMChrome.accent : .labelColor
+        let muted: NSColor = selected ? NDMChrome.accent.withAlphaComponent(0.75) : .tertiaryLabelColor
         let titleFont = NSFont.systemFont(ofSize: 13.5 * scale, weight: selected ? .semibold : .medium)
         let badgeFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5 * scale, weight: .regular)
         iconWidth?.constant = 17 * scale
@@ -1825,7 +1901,7 @@ private final class SidebarFilterCellView: NSTableCellView {
             pointSize: 13.5 * scale,
             weight: selected ? .semibold : .medium
         )
-        icon.contentTintColor = selected ? .white : .secondaryLabelColor
+        icon.contentTintColor = selected ? NDMChrome.accent : .secondaryLabelColor
         titleLabel.attributedStringValue = NSAttributedString(
             string: filter.title,
             attributes: [.font: titleFont, .foregroundColor: ink]
@@ -1838,7 +1914,7 @@ private final class SidebarFilterCellView: NSTableCellView {
         // the one row where that's actually true, instead of a static count.
         let showsPulse = filter == .active && appliedCount > 0
         pulseDot.isHidden = !showsPulse
-        pulseDot.color = selected ? .white : NDMChrome.accent
+        pulseDot.color = NDMChrome.accent
         pulseDot.setBreathing(showsPulse)
     }
 }
