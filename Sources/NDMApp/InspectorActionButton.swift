@@ -6,6 +6,14 @@ import AppKit
 /// way a good physical key feels.
 @MainActor
 final class InspectorActionButton: NSButton {
+    enum Style { case flat, filled }
+
+    /// `.filled` is a confident accent pill (primary actions); `.flat` is a
+    /// borderless action with a hover cushion (secondary actions).
+    var style: Style = .flat {
+        didSet { needsDisplay = true }
+    }
+
     private var isHovering = false
     private var trackingAreaRef: NSTrackingArea?
 
@@ -14,9 +22,14 @@ final class InspectorActionButton: NSButton {
         commonInit()
     }
 
-    convenience init(title: String) {
+    convenience init(title: String, style: Style = .flat) {
         self.init(frame: .zero)
         self.title = title
+        self.style = style
+        if style == .filled {
+            contentTintColor = .white
+            font = .systemFont(ofSize: 13, weight: .semibold)
+        }
     }
 
     @available(*, unavailable)
@@ -34,10 +47,20 @@ final class InspectorActionButton: NSButton {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        let base: CGFloat = isHovering ? 1 : 0
-        layer?.backgroundColor = NSColor.labelColor
-            .withAlphaComponent(0.06 * base)
-            .cgColor
+        switch style {
+        case .flat:
+            let base: CGFloat = isHovering ? 1 : 0
+            layer?.backgroundColor = NSColor.labelColor
+                .withAlphaComponent(0.06 * base)
+                .cgColor
+        case .filled:
+            let accent = NDMChrome.accent
+            let fill = !isEnabled
+                ? accent.withAlphaComponent(0.35)
+                : (isHovering ? accent.blended(withFraction: 0.12, of: .white) ?? accent : accent)
+            layer?.backgroundColor = fill.cgColor
+            contentTintColor = .white
+        }
     }
 
     override func updateTrackingAreas() {
@@ -102,7 +125,10 @@ final class InspectorActionButton: NSButton {
     override var isEnabled: Bool {
         didSet {
             if !isEnabled, isHovering { setHovering(false) }
-            alphaValue = isEnabled ? 1 : 0.4
+            // Filled buttons carry their disabled state in the fill color, so
+            // they don't also fade the (white) label into mud.
+            alphaValue = (isEnabled || style == .filled) ? 1 : 0.4
+            needsDisplay = true
         }
     }
 }

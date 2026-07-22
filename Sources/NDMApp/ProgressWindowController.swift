@@ -39,17 +39,17 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let segmentsCaption = NSTextField(labelWithString: L10n.segments)
     private let segmentStrip = SegmentStripView()
     private var segmentBlock: NSView?
-    private let pauseButton = NSButton(title: L10n.pause, target: nil, action: nil)
-    private let cancelButton = NSButton(title: L10n.close, target: nil, action: nil)
-    private let openButton = NSButton(title: L10n.open, target: nil, action: nil)
-    private let revealActionButton = NSButton(title: L10n.showInFinder, target: nil, action: nil)
+    private let pauseButton = InspectorActionButton(title: L10n.pause, style: .filled)
+    private let cancelButton = InspectorActionButton(title: L10n.close)
+    private let openButton = InspectorActionButton(title: L10n.open, style: .filled)
+    private let revealActionButton = InspectorActionButton(title: L10n.showInFinder)
     private let revealButton = NSButton(image: NSImage(systemSymbolName: "folder", accessibilityDescription: L10n.showInFinder)!, target: nil, action: nil)
     private var actionsStack: NSStackView?
 
     // Options tab
     private let connectionsPopup = NSPopUpButton()
-    private let applyConnButton = NSButton(title: L10n.apply, target: nil, action: nil)
-    private let renewButton = NSButton(title: L10n.renewURLEllipsis, target: nil, action: nil)
+    private let applyConnButton = InspectorActionButton(title: L10n.apply, style: .filled)
+    private let renewButton = InspectorActionButton(title: L10n.renewURLEllipsis)
     private let optionsNote = NSTextField(wrappingLabelWithString: L10n.optionsNote)
     private let connectionsCaptionLabel = NSTextField(labelWithString: "")
     private let smartlineLabel = NSTextField(wrappingLabelWithString: "")
@@ -192,10 +192,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         progressRing.translatesAutoresizingMaskIntoConstraints = false
         overallProgress.progress = 0
-        NDMChrome.styleMainButton(pauseButton)
-        NDMChrome.styleGhostButton(cancelButton)
-        NDMChrome.styleMainButton(openButton)
-        NDMChrome.styleGhostButton(revealActionButton)
+        for button in [pauseButton, cancelButton, openButton, revealActionButton] {
+            button.imagePosition = .imageLeading
+            button.imageHugsTitle = true
+            button.font = .systemFont(ofSize: 13, weight: button.style == .filled ? .semibold : .medium)
+        }
+        cancelButton.contentTintColor = .secondaryLabelColor
+        revealActionButton.contentTintColor = .labelColor
 
         segmentsCaption.font = .systemFont(ofSize: 12, weight: .semibold)
         segmentsCaption.textColor = .tertiaryLabelColor
@@ -233,24 +236,20 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         let card = makeStatsCard()
 
-        pauseButton.bezelStyle = .rounded
-        pauseButton.setButtonType(.momentaryPushIn)
         pauseButton.keyEquivalent = "\r"
         pauseButton.target = self
         pauseButton.action = #selector(pauseClicked)
-        pauseButton.controlSize = .regular
+        pauseButton.image = NDMChrome.symbol("pause.fill", pointSize: 12, weight: .semibold)
 
-        openButton.bezelStyle = .rounded
         openButton.target = self
         openButton.action = #selector(openClicked)
-        openButton.controlSize = .regular
         openButton.keyEquivalent = ""
+        openButton.image = NDMChrome.symbol("arrow.up.forward.app.fill", pointSize: 12, weight: .semibold)
         openButton.isHidden = true
 
-        revealActionButton.bezelStyle = .rounded
         revealActionButton.target = self
         revealActionButton.action = #selector(revealClicked)
-        revealActionButton.controlSize = .regular
+        revealActionButton.image = NDMChrome.symbol("folder", pointSize: 12, weight: .medium)
         revealActionButton.isHidden = true
 
         moreActionsButton.isBordered = false
@@ -263,10 +262,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         moreActionsButton.setAccessibilityLabel(L10n.moreActions)
         moreActionsButton.isHidden = true
 
-        cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
-        cancelButton.controlSize = .regular
         cancelButton.keyEquivalent = "\u{1b}"
 
         revealButton.bezelStyle = .flexiblePush
@@ -350,15 +347,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             nameLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
             header.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            pauseButton.heightAnchor.constraint(equalToConstant: 32),
-            pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108),
-            openButton.heightAnchor.constraint(equalToConstant: 32),
-            openButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108),
-            revealActionButton.heightAnchor.constraint(equalToConstant: 32),
-            moreActionsButton.widthAnchor.constraint(equalToConstant: 32),
-            moreActionsButton.heightAnchor.constraint(equalToConstant: 32),
-            cancelButton.heightAnchor.constraint(equalToConstant: 32),
-            cancelButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            pauseButton.heightAnchor.constraint(equalToConstant: 34),
+            pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
+            openButton.heightAnchor.constraint(equalToConstant: 34),
+            openButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
+            revealActionButton.heightAnchor.constraint(equalToConstant: 34),
+            revealActionButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 128),
+            moreActionsButton.widthAnchor.constraint(equalToConstant: 34),
+            moreActionsButton.heightAnchor.constraint(equalToConstant: 34),
+            cancelButton.heightAnchor.constraint(equalToConstant: 34),
+            cancelButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 78),
         ])
         completionStackView.apply(nil)
         audioStatusView.apply(.unavailable)
@@ -507,12 +505,15 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         connectionsPopup.removeAllItems()
         for i in 1...32 { connectionsPopup.addItem(withTitle: "\(i)") }
 
-        applyConnButton.bezelStyle = .rounded
         applyConnButton.target = self
         applyConnButton.action = #selector(applyConnections)
-        renewButton.bezelStyle = .rounded
+        applyConnButton.font = .systemFont(ofSize: 13, weight: .semibold)
         renewButton.target = self
         renewButton.action = #selector(renewClicked)
+        renewButton.contentTintColor = NDMChrome.accent
+        renewButton.image = NDMChrome.symbol("link", pointSize: 12, weight: .medium)
+        renewButton.imagePosition = .imageLeading
+        renewButton.imageHugsTitle = true
 
         optionsNote.font = .systemFont(ofSize: 12)
         optionsNote.textColor = .secondaryLabelColor
@@ -522,6 +523,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         connRow.orientation = .horizontal
         connRow.spacing = 10
         connRow.alignment = .centerY
+        applyConnButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        applyConnButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 72).isActive = true
+        renewButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
         let stack = NSStackView(views: [connRow, renewButton, optionsNote])
         stack.orientation = .vertical
