@@ -383,6 +383,32 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertEqual(tier?.approximateBytes, 1_000)
     }
 
+    func testTwitterVideoOnlyProbeLeavesAudioPairingToYtDlp() {
+        // X/Twitter's JSON probe may omit the separate HLS audio rendition
+        // from `formats`, even though yt-dlp resolves it when evaluating
+        // `bestvideo+bestaudio`. Selecting `hls-817` directly creates a silent
+        // MP4; the portable selector must be retained in this case.
+        let formats: [[String: Any]] = [
+            [
+                "format_id": "hls-817",
+                "height": 1080,
+                "vcodec": "avc1.640032",
+                "acodec": "none",
+                "ext": "mp4",
+                "protocol": "m3u8_native",
+                "tbr": 817.535,
+            ],
+        ]
+
+        let tier = YtDlpTool.buildTiers(from: formats, duration: 30).first
+        let selector = tier?.selector(for: .compatibleMP4)
+
+        XCTAssertEqual(tier?.height, 1080)
+        XCTAssertNotEqual(selector, "hls-817")
+        XCTAssertTrue(selector?.contains("bestvideo[height<=1080]") == true)
+        XCTAssertTrue(selector?.contains("+bestaudio") == true)
+    }
+
     func testTierEstimatesMatchTheSelectedContainerCodecFamily() {
         let formats: [[String: Any]] = [
             ["height": 1440, "vcodec": "avc1.640033", "acodec": "none", "filesize": 2_000, "tbr": 2_000.0],

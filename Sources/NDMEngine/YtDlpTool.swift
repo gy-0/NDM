@@ -246,8 +246,6 @@ public enum YtDlpTool {
             developerFallbacks: [
                 "/opt/homebrew/bin/yt-dlp",
                 "/usr/local/bin/yt-dlp",
-                "/opt/homebrew/bin/youtube-dl",
-                "/usr/local/bin/youtube-dl",
             ]
         ) { return bundled }
 #if DEBUG
@@ -272,6 +270,24 @@ public enum YtDlpTool {
     }
 
     public static var isAvailable: Bool { find() != nil }
+
+    /// Load only plugins reviewed and shipped inside NDM's signed app bundle.
+    /// yt-dlp otherwise searches user-writable default locations and imports
+    /// every plugin it finds, which is too broad a trust boundary for an app.
+    static func pluginArguments(bundle: Bundle = .main) -> [String] {
+        pluginArguments(resourceURL: bundle.resourceURL)
+    }
+
+    static func pluginArguments(resourceURL: URL?) -> [String] {
+        var arguments = ["--no-plugin-dirs"]
+        guard let resourceURL else { return arguments }
+        let directory = resourceURL.appendingPathComponent("yt-dlp-plugins", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return arguments }
+        arguments += ["--plugin-dirs", directory.path]
+        return arguments
+    }
 
     private static func javascriptRuntimeArguments() -> [String] {
         guard let deno = BundledToolLocator.find(
@@ -311,7 +327,7 @@ public enum YtDlpTool {
         }
         let output = try await run(
             bin,
-            trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + cookieArguments(cookieSource) + [
+            pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + cookieArguments(cookieSource) + [
             "-J",
             "--no-download",
             "--no-warnings",
@@ -352,7 +368,7 @@ public enum YtDlpTool {
         let cappedLimit = max(1, min(500, limit))
         let output = try await run(
             bin,
-            trustStoreArguments() + javascriptRuntimeArguments() + cookieArguments(cookieSource) + [
+            pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + cookieArguments(cookieSource) + [
                 "-J",
                 "--flat-playlist",
                 "--playlist-end", "\(cappedLimit)",
@@ -732,7 +748,17 @@ public enum YtDlpTool {
               !videoID.isEmpty else { return nil }
         guard needsSeparateAudio(video) else { return videoID }
         guard let audioID = audio?["format_id"] as? String,
-              !audioID.isEmpty else { return videoID }
+              !audioID.isEmpty else {
+            // Some extractors expose an HLS audio rendition only while yt-dlp
+            // evaluates its format selector. X/Twitter is the important case:
+            // the probed `formats` array contains video-only `hls-*` entries,
+            // but `bestvideo+bestaudio` resolves the matching
+            // `hls-audio-*-Audio` rendition. Pinning just the known video ID
+            // overrides that resolver behavior and produces a silent file.
+            // Fall back to our portable selector so yt-dlp remains responsible
+            // for pairing the site's video and audio streams.
+            return nil
+        }
         return "\(videoID)+\(audioID)"
     }
 
@@ -894,7 +920,7 @@ public enum YtDlpTool {
         } else {
             template = directory.appendingPathComponent("%(title)s.%(ext)s").path
         }
-        let args = trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + downloadArguments(
+        let args = pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + downloadArguments(
             url: url,
             formatID: formatID,
             outputTemplate: template,
@@ -926,6 +952,7 @@ public enum YtDlpTool {
                     options: options,
                     forceOverwrite: forceOverwrite
                 )
+                try validateExpectedAudio(in: exact, selector: formatID, cancelToken: cancelToken)
                 return exact
             }
         }
@@ -948,7 +975,39 @@ public enum YtDlpTool {
             options: options,
             forceOverwrite: forceOverwrite
         )
+        try validateExpectedAudio(in: newest, selector: formatID, cancelToken: cancelToken)
         return newest
+    }
+
+    /// A selector containing `+` asks yt-dlp to combine independent streams;
+    /// NDM's video selectors use that second component for audio. Validate the
+    /// result so a failed site-specific rendition/merge cannot be reported as
+    /// a successful but silent download.
+    static func selectorExpectsAudio(_ selector: String) -> Bool {
+        selector.split(separator: "/").contains { branch in
+            branch.contains("+")
+        }
+    }
+
+    private static func validateExpectedAudio(
+        in file: URL,
+        selector: String,
+        cancelToken: CancelToken?
+    ) throws {
+        guard selectorExpectsAudio(selector) else { return }
+        guard let ffmpeg = FFmpegTool.find() else {
+            throw EngineError.mergeFailed(L10n.t(
+                "The downloaded video's audio track could not be verified because the built-in media component is unavailable.",
+                "内置媒体组件不可用，无法验证下载视频的音轨。"
+            ))
+        }
+        let streams = try FFmpegTool.streamPresence(ffmpeg: ffmpeg, input: file, cancelToken: cancelToken)
+        guard streams.hasAudio else {
+            throw EngineError.mergeFailed(L10n.t(
+                "The site returned a video without the requested audio track. The file was preserved, but the download was not marked complete.",
+                "网站返回的视频缺少所选音轨。文件已保留，但本次下载不会被标记为完成。"
+            ))
+        }
     }
 
     /// yt-dlp normally writes `Movie.zh-Hans.srt`. NDM currently lets the user

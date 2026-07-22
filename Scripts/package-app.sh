@@ -11,6 +11,7 @@ YTDLP_BIN="${YTDLP_BIN:-$ROOT/Vendor/Tools/yt-dlp}"
 FFMPEG_BIN="${FFMPEG_BIN:-$ROOT/Vendor/Tools/ffmpeg}"
 DENO_BIN="${DENO_BIN:-$ROOT/Vendor/Tools/deno}"
 SOURCE_LICENSES="$ROOT/Vendor/Tools/Licenses"
+YTDLP_PLUGIN_SOURCE="$ROOT/Vendor/Plugins/yt-dlp"
 
 required_licenses=(
   "$SOURCE_LICENSES/yt-dlp-Unlicense.txt"
@@ -49,6 +50,14 @@ cp -L "$YTDLP_BIN" "$TOOLS/yt-dlp"
 cp -L "$FFMPEG_BIN" "$TOOLS/ffmpeg"
 cp -L "$DENO_BIN" "$TOOLS/deno"
 cp "$SOURCE_LICENSES"/*.txt "$LICENSES/"
+if [[ -d "$YTDLP_PLUGIN_SOURCE/yt_dlp_plugins" ]]; then
+  plugin_license=("$YTDLP_PLUGIN_SOURCE"/LICENSE*(N))
+  if (( ${#plugin_license} == 0 )); then
+    print -u2 "Curated yt-dlp plugins require a bundled LICENSE file."
+    exit 1
+  fi
+  cp -R "$YTDLP_PLUGIN_SOURCE" "$APP/Contents/Resources/yt-dlp-plugins"
+fi
 chmod 755 "$APP/Contents/MacOS/NDM" "$TOOLS/yt-dlp" "$TOOLS/ffmpeg" "$TOOLS/deno"
 
 PLIST="$APP/Contents/Info.plist"
@@ -78,6 +87,11 @@ if [[ -n "$compatibility_url" || -n "$compatibility_key" ]]; then
   fi
   plutil -insert NDMSiteCompatibilityManifestURL -string "$compatibility_url" "$PLIST"
   plutil -insert NDMSiteCompatibilityPublicKey -string "$compatibility_key" "$PLIST"
+elif [[ "${NDM_REQUIRE_SITE_COMPATIBILITY_UPDATES:-0}" == "1" ]]; then
+  print -u2 "Release requires the signed site compatibility manifest URL and public key."
+  exit 1
+else
+  print -u2 "Warning: signed yt-dlp compatibility updates are not configured for this package."
 fi
 
 MANIFEST="$APP/Contents/Resources/MediaToolchain.plist"

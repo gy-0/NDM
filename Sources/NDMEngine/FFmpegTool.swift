@@ -10,11 +10,55 @@ public enum FFmpegTool {
         let standardError: String
     }
 
+    struct StreamPresence: Sendable, Equatable {
+        let hasVideo: Bool
+        let hasAudio: Bool
+    }
+
     public static func find() -> String? {
         BundledToolLocator.find(
             ["ffmpeg"],
             developerFallbacks: ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
         )
+    }
+
+    /// Read the container's declared streams without decoding the whole file.
+    /// The bundled tool intentionally omits ffprobe, so use ffmpeg's input
+    /// inspection output and keep the parser separately testable.
+    static func streamPresence(
+        ffmpeg: String,
+        input: URL,
+        cancelToken: CancelToken? = nil
+    ) throws -> StreamPresence {
+        let result = try runProcess(
+            executable: ffmpeg,
+            arguments: ["-hide_banner", "-nostdin", "-i", input.path],
+            // A header read finishes in well under a second; cap it so a wedged
+            // probe can never hold the whole finalize open, and let a pause /
+            // cancel interrupt it immediately.
+            timeout: 30,
+            isCancelled: cancelToken.map { token in { @Sendable in token.isCancelled } }
+        )
+        let presence = parseStreamPresence(result.standardError)
+        guard presence.hasVideo || presence.hasAudio else {
+            throw EngineError.mergeFailed("Could not inspect downloaded media tracks")
+        }
+        return presence
+    }
+
+    static func parseStreamPresence(_ output: String) -> StreamPresence {
+        var hasVideo = false
+        var hasAudio = false
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard line.contains("Stream #") else { continue }
+            if line.range(of: #":\s*Video:"#, options: .regularExpression) != nil {
+                hasVideo = true
+            }
+            if line.range(of: #":\s*Audio:"#, options: .regularExpression) != nil {
+                hasAudio = true
+            }
+        }
+        return StreamPresence(hasVideo: hasVideo, hasAudio: hasAudio)
     }
 
     /// Repackage a finished stream (usually MPEG-TS) into MP4 without re-encoding.
@@ -142,7 +186,8 @@ public enum FFmpegTool {
     private static func probeDuration(ffmpeg: String, input: URL) throws -> Double {
         let result = try runProcess(
             executable: ffmpeg,
-            arguments: ["-hide_banner", "-i", input.path]
+            arguments: ["-hide_banner", "-nostdin", "-i", input.path],
+            timeout: 30
         )
         let text = result.standardError
         let pattern = #"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)"#
@@ -188,7 +233,12 @@ public enum FFmpegTool {
     /// writes progress to stderr; waiting before reading can otherwise fill the
     /// pipe and deadlock a long export. A temporary file keeps output bounded by
     /// disk instead, while polling lets Swift task cancellation stop the child.
-    static func runProcess(executable: String, arguments: [String]) throws -> ProcessResult {
+    static func runProcess(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval? = nil,
+        isCancelled: (@Sendable () -> Bool)? = nil
+    ) throws -> ProcessResult {
         let errorURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ndm-ffmpeg-\(UUID().uuidString).log")
         guard FileManager.default.createFile(atPath: errorURL.path, contents: nil) else {
@@ -205,23 +255,44 @@ public enum FFmpegTool {
         process.arguments = arguments
         process.standardError = errorHandle
         process.standardOutput = FileHandle.nullDevice
+        // Detach stdin from any inherited controlling terminal. When NDM is
+        // launched from a shell (`swift run`), an ffmpeg child that reads the
+        // TTY lands in a background process group and the kernel stops it with
+        // SIGTTIN/SIGTTOU (state "T") — `runProcess` then waits forever on a
+        // process that will never exit. A null stdin gives ffmpeg an immediate
+        // EOF and no terminal to touch. See `-nostdin` on probe calls too.
+        process.standardInput = FileHandle.nullDevice
         try process.run()
 
-        while process.isRunning {
-            let cancelled = withUnsafeCurrentTask { task in
-                task?.isCancelled ?? false
+        let startedAt = Date()
+        func stop() {
+            // SIGCONT first: a process stopped by the terminal (SIGTTIN/SIGTTOU,
+            // state "T") ignores SIGTERM until resumed. Continue it, ask it to
+            // terminate, then hard-kill if it lingers.
+            _ = Darwin.kill(process.processIdentifier, SIGCONT)
+            process.terminate()
+            let deadline = Date().addingTimeInterval(1)
+            while process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.02)
             }
-            if cancelled {
-                process.terminate()
-                let deadline = Date().addingTimeInterval(1)
-                while process.isRunning, Date() < deadline {
-                    Thread.sleep(forTimeInterval: 0.02)
-                }
-                if process.isRunning {
-                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                }
-                process.waitUntilExit()
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+        }
+
+        while process.isRunning {
+            let taskCancelled = withUnsafeCurrentTask { $0?.isCancelled ?? false }
+            let externallyCancelled = isCancelled?() ?? false
+            if taskCancelled || externallyCancelled {
+                stop()
                 throw CancellationError()
+            }
+            if let timeout, Date().timeIntervalSince(startedAt) > timeout {
+                stop()
+                throw EngineError.mergeFailed(
+                    "The media component did not respond in time and was stopped."
+                )
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
