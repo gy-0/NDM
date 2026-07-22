@@ -4442,6 +4442,24 @@ private final class InspectorViewController: NSViewController {
             onShare?(copyURLButton)
         } else {
             onAction?(.copyURL)
+            flashCopied(copyURLButton)
+        }
+    }
+
+    /// Momentary "✓ Copied" confirmation on the button, then restore. Confirms
+    /// the click landed without a disruptive alert.
+    private func flashCopied(_ button: InspectorActionButton) {
+        let title = button.title
+        let image = button.image
+        let tint = button.contentTintColor
+        button.title = L10n.copiedToClipboard
+        button.image = NDMChrome.symbol("checkmark", pointSize: 12, weight: .semibold)
+        button.contentTintColor = .systemGreen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak button] in
+            guard let button else { return }
+            button.title = title
+            button.image = image
+            button.contentTintColor = tint
         }
     }
 

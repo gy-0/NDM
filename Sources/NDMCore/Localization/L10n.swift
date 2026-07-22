@@ -82,6 +82,7 @@ public enum L10n: Sendable {
     public static var share: String { t("Share", "分享") }
     public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
+    public static var copiedToClipboard: String { t("Copied", "已复制") }
     public static var renewURL: String { t("Update Link", "更新链接") }
     public static var renewURLEllipsis: String { t("Update Link…", "更新链接…") }
     public static var renewAndStart: String { t("Update & Start", "更新链接并开始") }

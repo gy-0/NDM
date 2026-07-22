@@ -286,7 +286,15 @@ public actor DownloadEngine {
 
                 setState(.merging)
                 log("DownloadEngine State Changed : Downloading... -> Merging...")
-                try mergeSegments(finalSegments, to: finalURL, total: total)
+                do {
+                    try mergeSegments(finalSegments, to: finalURL, total: total)
+                } catch {
+                    // A failed merge leaves an unusable half-assembled state.
+                    // Discard the segment artifacts so a Retry re-downloads from
+                    // scratch instead of hitting the same broken merge forever.
+                    try? discardSegmentArtifacts(reason: "merge failed")
+                    throw error
+                }
             } catch EngineError.notResumable {
                 tuneTask?.cancel()
                 tuneTask = nil
