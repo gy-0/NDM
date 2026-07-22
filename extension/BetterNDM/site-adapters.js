@@ -157,14 +157,21 @@
         var style = document.createElement("style");
         style.id = "better-ndm-site-adapter-style";
         style.textContent = [
-            ".better-ndm-x-action{display:flex;flex:1 1 0;align-items:center;justify-content:center;min-width:0}",
-            ".better-ndm-x-button{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:5px;min-width:34px;min-height:34px;padding:0 7px;border-radius:9999px;color:rgb(83,100,113);cursor:pointer;font:500 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;transition:color .15s,background-color .15s}",
+            // X action-bar icon button: icon-only inside a circular hover, like
+            // the native Share/Bookmark. Color is synced from a sibling native
+            // button at inject time (theme-exact); the vars are the fallback.
+            ".better-ndm-x-action{display:flex;align-items:center;min-width:0}",
+            ".better-ndm-x-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:34.75px;height:34.75px;border-radius:9999px;color:var(--better-ndm-x-color,rgb(83,100,113));cursor:pointer;transition:color .2s ease,background-color .2s ease}",
             ".better-ndm-x-button:hover,.better-ndm-x-button:focus-visible{color:rgb(29,155,240);background:rgba(29,155,240,.1);outline:none}",
-            ".better-ndm-x-button svg{width:18px;height:18px;fill:currentColor;flex:none}",
+            ".better-ndm-x-button svg{width:18.75px;height:18.75px;fill:currentColor;flex:none}",
+            ".better-ndm-x-label{display:none}",
+            // YouTube: match the native mono action chip (Share/Download).
             ".better-ndm-youtube-action{display:inline-flex;align-items:center;margin-left:8px;vertical-align:middle}",
-            ".better-ndm-youtube-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:18px;background:var(--yt-spec-badge-chip-background,rgba(0,0,0,.1));color:var(--yt-spec-text-primary,#0f0f0f);cursor:pointer;font:500 14px Roboto,Arial,sans-serif;white-space:nowrap;transition:filter .15s,background-color .15s}",
-            ".better-ndm-youtube-button:hover,.better-ndm-youtube-button:focus-visible{filter:brightness(.92);outline:2px solid rgba(62,125,255,.65);outline-offset:2px}",
-            ".better-ndm-youtube-button svg{width:20px;height:20px;fill:currentColor;flex:none}",
+            // Values verified against YouTube's live 分享/Share chip: 40px tall,
+            // 20px radius, 0 16px padding, rgba(0,0,0,.05) bg, 14px Roboto.
+            ".better-ndm-youtube-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:40px;padding:0 16px;border-radius:20px;background:var(--yt-spec-badge-chip-background,rgba(0,0,0,.05));color:var(--yt-spec-text-primary,#0f0f0f);cursor:pointer;font:500 14px/40px Roboto,Arial,sans-serif;white-space:nowrap;transition:background-color .15s ease}",
+            ".better-ndm-youtube-button:hover,.better-ndm-youtube-button:focus-visible{background:var(--yt-spec-button-chip-background-hover,rgba(0,0,0,.1));outline:none}",
+            ".better-ndm-youtube-button svg{width:24px;height:24px;fill:currentColor;flex:none;margin-left:-4px}",
             ".better-ndm-bilibili-action{display:inline-flex;align-items:center;margin-left:24px}",
             ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:7px;color:#61666d;cursor:pointer;font:500 14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;transition:color .15s}",
             ".better-ndm-bilibili-button:hover,.better-ndm-bilibili-button:focus-visible{color:#00aeec;outline:none}",
@@ -173,8 +180,7 @@
             ".better-ndm-site-inline-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid rgba(120,120,128,.25);border-radius:8px;background:rgba(120,120,128,.08);color:inherit;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap}",
             ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(53,120,246,.12);border-color:rgba(53,120,246,.45);color:#3478f6;outline:none}",
             ".better-ndm-site-inline-button svg{width:18px;height:18px;fill:currentColor;flex:none}",
-            ".better-ndm-site-busy{opacity:.68;pointer-events:none}",
-            "@media(max-width:700px){.better-ndm-x-label{display:none}.better-ndm-x-button{padding:0 5px}}"
+            ".better-ndm-site-busy{opacity:.68;pointer-events:none}"
         ].join("");
         document.head.appendChild(style);
     }
@@ -293,9 +299,18 @@
             var wrapper = document.createElement("div");
             wrapper.className = "better-ndm-x-action";
             wrapper.dataset.betterNdmSiteAction = "x-wrapper";
-            wrapper.appendChild(manager.makeButton("x", function() {
+            var button = manager.makeButton("x", function() {
                 return pageURLForElement(article, window.location) || pageURL;
-            }));
+            });
+            // Theme-exact resting color: copy it from a native action-bar icon
+            // (X's dim / lights-out / light themes each use a different gray,
+            // and it isn't the OS color scheme). Falls back to the CSS var.
+            var nativeIcon = group.querySelector('[data-testid="reply"] svg, [data-testid="retweet"] svg, [data-testid="like"] svg');
+            if (nativeIcon) {
+                var nativeColor = window.getComputedStyle(nativeIcon).color;
+                if (nativeColor) button.style.setProperty("--better-ndm-x-color", nativeColor);
+            }
+            wrapper.appendChild(button);
             group.appendChild(wrapper);
             manager.notifyActionReady();
         });
