@@ -356,15 +356,33 @@ public enum SegmentFileFormat {
             totalBytes: totalBytes,
             completedPrefixBytes: completedPrefixBytes
         )
+        // Segment 0 already holds `completedPrefixBytes` on disk (the bootstrap
+        // prefix). Bisecting it below that floor would leave more bytes in
+        // seg.x0 than the plan claims it should have, and the strict merge
+        // (`have == seg.length`) then fails — the "已下载分段合并失败" bug on
+        // small multi-connection files. Never split segment 0 under its prefix.
+        let prefixFloor = min(max(0, completedPrefixBytes), totalBytes)
         var nextID: Int16 = 2
         while segments.count < target {
-            guard let index = segments.indices
-                .filter({ segments[$0].length > 1 })
-                .max(by: { segments[$0].length < segments[$1].length }) else {
+            let candidates = segments.indices.filter { index in
+                let seg = segments[index]
+                guard seg.length > 1 else { return false }
+                // Segment 0 is only splittable in the region past its prefix.
+                if seg.segmentId == 0, seg.start == 0 {
+                    return seg.end >= prefixFloor && (seg.end - prefixFloor) >= 1
+                }
+                return true
+            }
+            guard let index = candidates.max(by: { segments[$0].length < segments[$1].length }) else {
                 break
             }
             let original = segments[index]
-            let split = original.start + original.length / 2
+            var split = original.start + original.length / 2
+            if original.segmentId == 0, original.start == 0 {
+                split = max(split, prefixFloor)
+            }
+            // A split that can't advance (already at the boundary) would loop.
+            guard split > original.start, split <= original.end else { break }
             segments[index].end = split - 1
             segments.append(SegmentRecord(
                 order: 0,

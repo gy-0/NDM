@@ -149,6 +149,31 @@ final class SegmentDynamicPlanTests: XCTestCase {
         }
     }
 
+    /// Regression: a small file (BearCleaner 7.7 MB, 960 KiB bootstrap prefix)
+    /// bisected segment 0 down to ~271 KB while its file held the full 960 KiB
+    /// prefix, so the strict merge (`have == seg.length`) failed with
+    /// "已下载分段合并失败". Segment 0 must never be planned shorter than the
+    /// prefix already on disk.
+    func testSegmentZeroNeverShrinksBelowBootstrapPrefix() {
+        let total: Int64 = 7_716_106
+        let prefix: Int64 = 983_040
+        let segments = SegmentFileFormat.planDynamicConnections(
+            totalBytes: total,
+            connections: 32,
+            completedPrefixBytes: prefix
+        )
+        let segZero = segments.first { $0.segmentId == 0 && $0.start == 0 }
+        XCTAssertNotNil(segZero)
+        XCTAssertGreaterThanOrEqual(segZero!.length, prefix,
+            "segment 0 must keep at least its downloaded bootstrap prefix")
+        // Still a valid, gap-free plan over the whole file.
+        XCTAssertEqual(segments.first?.start, 0)
+        XCTAssertEqual(segments.last?.end, total - 1)
+        for (left, right) in zip(segments, segments.dropFirst()) {
+            XCTAssertEqual(left.end + 1, right.start)
+        }
+    }
+
     func testMinSegmentCapsConnections() {
         let segs = SegmentFileFormat.planEqualSegments(totalBytes: 100_000, connections: 32)
         XCTAssertLessThan(segs.count, 32)

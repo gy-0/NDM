@@ -1170,7 +1170,10 @@ public actor DownloadEngine {
                 throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
             }
             let have = SegmentFileFormat.rawExistingByteCount(for: seg, in: workDirectory)
-            guard have == seg.length else {
+            // Tolerate a segment file that overran its planned length (e.g. a
+            // bootstrap prefix that a later re-plan shrank): the leading
+            // seg.length bytes are the correct contiguous data for this range.
+            guard have >= seg.length else {
                 throw EngineError.mergeFailed("Internal Error. Failed on Merging segments.")
             }
             try out.seek(toOffset: UInt64(seg.start))
