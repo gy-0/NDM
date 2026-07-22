@@ -63,6 +63,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private var navigationButtons: [Section: SettingsNavigationButton] = [:]
     private var panes: [Section: NSView] = [:]
     private var paneConstraints: [NSLayoutConstraint] = []
+    private var currentSection: Section = .general
+    private let sidebarTitle = NSTextField(labelWithString: L10n.settings)
+    private let cancelButton = NSButton(title: "", target: nil, action: nil)
 
     private let contentTitle = NSTextField(labelWithString: "")
     private let contentSubtitle = NSTextField(labelWithString: "")
@@ -154,6 +157,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         showSection(Self.section(named: initialSectionName) ?? .general)
         refreshCompatibilityStatus()
         window.center()
+
+        // Language applies live from the appearance pane — relocalize the whole
+        // settings window in place so it isn't left half-English.
+        NotificationCenter.default.addObserver(
+            forName: L10n.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.relocalizeContent() }
+        }
+    }
+
+    /// Rebuild every localized string in place after a live language switch.
+    private func relocalizeContent() {
+        window?.title = L10n.settings
+        sidebarTitle.stringValue = L10n.settings
+        saveButton.title = L10n.save
+        cancelButton.title = L10n.cancel
+        footerHint.stringValue = defaultFooterHint
+        for (section, button) in navigationButtons {
+            button.updateTitle(section.title)
+        }
+        // Rebuild the panes so their inline row/card labels pick up the new
+        // language; shared controls keep their state, and re-showing restores
+        // the current section and its heading text.
+        panes[.general] = makeGeneralPane()
+        panes[.appearance] = makeAppearancePane()
+        panes[.downloads] = makeDownloadsPane()
+        panes[.browser] = makeBrowserPane()
+        panes[.network] = makeNetworkPane()
+        panes[.advanced] = makeAdvancedPane()
+        loadFields()
+        showSection(currentSection)
     }
 
     @available(*, unavailable)
@@ -281,7 +317,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         sidebar.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         // Match System Settings: section label lines up with row titles (after icon).
-        let sidebarTitle = NSTextField(labelWithString: L10n.settings)
         sidebarTitle.font = .systemFont(ofSize: 19, weight: .bold)
         sidebarTitle.textColor = .labelColor
         sidebarTitle.alignment = .left
@@ -353,7 +388,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         saveButton.controlSize = .large
         NDMChrome.styleMainButton(saveButton)
 
-        let cancel = NSButton(title: L10n.cancel, target: self, action: #selector(cancelClicked))
+        let cancel = cancelButton
+        cancel.title = L10n.cancel
+        cancel.target = self
+        cancel.action = #selector(cancelClicked)
         cancel.keyEquivalent = "\u{1b}"
         cancel.controlSize = .large
         NDMChrome.styleGhostButton(cancel)
@@ -440,6 +478,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func showSection(_ section: Section) {
+        currentSection = section
         contentTitle.stringValue = section.title
         contentSubtitle.stringValue = section.subtitle
         for (candidate, button) in navigationButtons {
@@ -1512,6 +1551,11 @@ private final class SettingsNavigationButton: NSButton {
 
     private var isHovering = false {
         didSet { if oldValue != isHovering { needsDisplay = true } }
+    }
+
+    func updateTitle(_ title: String) {
+        titleLabel.stringValue = title
+        setAccessibilityLabel(title)
     }
 
     init(
