@@ -27,10 +27,11 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | # | 事项 | 状态 |
 |---|---|---|
 | A1 | **引擎无视任务的 HTTP method 和 body，永远发 GET** —— 表单/POST 触发的下载静默写入错误内容（登录页、错误文档）而不报错 | ✅ 2026-07-24 修复（`1a37291`）。附带发现 `postData` 一字段两用（同时存 yt-dlp 选项 JSON），已用 method 白名单锁住 |
-| A2 | **默认测试套件里有真连 YouTube 的测试**（`YtDlpToolIntegrationTests.testDownloadLowestTierYouTubeSample`）随机 403 限流 | ⬜ 直接破坏"全绿才自动合并"的门禁，也违反上面的硬约束。改成 env flag 显式开启的 live 套件 |
+| A2 | **默认测试套件里有真连 YouTube 的测试**随机 403 限流，破坏"全绿才自动合并"的门禁 | ✅ 2026-07-24 修复。`LiveNetworkGate` 把 4 个 live 测试改为 `NDM_LIVE_NETWORK_TESTS=1` 显式开启；同文件 8 个纯逻辑测试仍在默认套件里 |
 | A3 | **长时稳定性** —— 8h+ 连续运行（多任务、暂停续传、休眠唤醒）无崩溃、无内存持续增长 | ⬜ 从未观察过。下载器最致命的死法是跑一夜挂掉 |
 | A4 | **HLS / MKV 边缘行为** —— AES-128、不连续码流、缺失分片、音视频时长不齐 | ⬜ |
 | A5 | **NDM Relay 实机 smoke** —— 扩展是最大入口漏斗，却是唯一没在真机验过的环节 | ⬜ |
+| A6 | **仓库没有任何 CI**（无 `.github/`），也没有一条命令能一次跑完三道门禁 | ⬜ 优先级低（循环目前由我在本地跑），但一个 `Scripts/check.sh` 能让门禁对人和对我都一致 |
 
 ### B · 可测量：不测就不能改进
 
@@ -67,6 +68,8 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 
 1. 读本文件，取最靠前的未完成项。一轮做一件，做完整。
 2. 三道门禁：`swift build` · `swift test` · `extension/NDMRelay` 的 node 测试。
+   触网测试不在默认套件里，需要时显式开：
+   `NDM_LIVE_NETWORK_TESTS=1 swift test --filter YtDlpToolIntegrationTests`
 3. 全绿且不涉及品牌/定价/购买 URL/许可证密钥/用户数据路径迁移 → 直接提交到当前工作分支。否则留分支等审阅。
 4. 纯视觉改动一律停下等审阅。
 5. 在下面追加日志。报告诚实：失败贴真实输出，跳过就说跳过。
@@ -78,3 +81,4 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 |---|---|---|
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
+| 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |

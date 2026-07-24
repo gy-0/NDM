@@ -150,6 +150,7 @@ final class YtDlpToolIntegrationTests: XCTestCase {
     }
 
     func testListFormatsForYouTubeSample() async throws {
+        try LiveNetworkGate.skipUnlessEnabled("Listing YouTube formats")
         try XCTSkipIf(!YtDlpTool.isAvailable, "yt-dlp not installed")
 
         let probe = try await YtDlpTool.probe(url: sampleURL)
@@ -166,6 +167,7 @@ final class YtDlpToolIntegrationTests: XCTestCase {
     }
 
     func testProbeCollectionForYouTubeSample() async throws {
+        try LiveNetworkGate.skipUnlessEnabled("Probing a YouTube playlist")
         try XCTSkipIf(!YtDlpTool.isAvailable, "yt-dlp not installed")
 
         let collection = try await YtDlpTool.probeCollection(
@@ -180,6 +182,7 @@ final class YtDlpToolIntegrationTests: XCTestCase {
     }
 
     func testMediaPreflightForCollectionProducesPlayablePrimaryItem() async throws {
+        try LiveNetworkGate.skipUnlessEnabled("Preflighting a YouTube playlist")
         try XCTSkipIf(!YtDlpTool.isAvailable, "yt-dlp not installed")
 
         let preflight = try await MediaPreflightStore().result(for: samplePlaylistURL)
@@ -190,6 +193,7 @@ final class YtDlpToolIntegrationTests: XCTestCase {
     }
 
     func testDownloadLowestTierYouTubeSample() async throws {
+        try LiveNetworkGate.skipUnlessEnabled("Downloading a YouTube sample")
         try XCTSkipIf(!YtDlpTool.isAvailable, "yt-dlp not installed")
 
         let formats = try await YtDlpTool.listFormats(url: sampleURL)
