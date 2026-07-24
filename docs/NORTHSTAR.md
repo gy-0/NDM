@@ -37,7 +37,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 
 | # | 事项 | 状态 |
 |---|---|---|
-| B1 | **真实成功率 harness** —— 一组国内可达的真实链接（普通直链 / HLS / B站页面 / 分享口令），跑"投递→可用文件"全链路，输出成功率与中位耗时，可重复执行 | ⬜ |
+| B1 | **真实成功率 harness** | ✅ 2026-07-24。`swift run NDMProbe`；用例在 `Scripts/success-rate-cases.json`。走 App 真实路径（直链 `addURL`+`startAndWait`，媒体页 `MediaPreflightStore`+`startYtDlp`），按 SHA-256 校验交付内容。首次基线 **3/3 · 中位 0.43s** |
 
 `PRODUCT_VISION.md` 把"投递到可用文件的成功率与中位耗时"定为北极星，这个判断是对的，但**至今没有任何东西在测它**。307 个单元测试测的是逻辑正确性，不是真实世界能不能下下来。对一个下载器，"能不能下下来"就是产品本身。
 
@@ -82,3 +82,4 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | B1 成功率 harness | 新增 `NDMDiagnostics` 库（纯逻辑，25 个离线测试进默认套件）+ `NDMProbe` 可执行（触网，永不进 `swift test`）。**首次真实基线 3/3 · 中位 0.43s**（直链 2/2 中位 0.39s，B站页面 1/1 3.71s / 9.2MB）。三个过程中的真实发现：① 清华镜像限流会返回 HTML 拦截页且 Content-Length 诚实——SHA-256 校验抓住了它，否则会被记成"成功交付"，据此换用阿里云源并新增 `interstitialHint` 直接指出"服务器给的是页面不是文件"；② `MediaPreflightStore` 只有共享实例，重复轮会命中探测缓存污染计时，加了 `uncached()`；③ 各轮不独立，首轮替后面付 yt-dlp 冷启动（21.8s vs 3.8s），加了 `--warmup` 丢弃轮，验证后两轮回到 3.54s/3.79s |

@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "NDMEngine", targets: ["NDMEngine"]),
         .library(name: "NDMBridge", targets: ["NDMBridge"]),
         .executable(name: "NDM", targets: ["NDMApp"]),
+        .executable(name: "NDMProbe", targets: ["NDMProbe"]),
     ],
     targets: [
         .target(
@@ -34,6 +35,24 @@ let package = Package(
             resources: [
                 .process("Resources"),
             ]
+        ),
+        // Pure aggregation and suite-parsing logic for the delivery success-rate
+        // probe. Kept free of network and AppKit so it is unit-testable offline.
+        .target(
+            name: "NDMDiagnostics",
+            path: "Sources/NDMDiagnostics"
+        ),
+        // Manually-run diagnostic; reaches the public internet, never part of
+        // `swift test`. See Sources/NDMProbe/NDMProbe.swift.
+        .executableTarget(
+            name: "NDMProbe",
+            dependencies: ["NDMCore", "NDMEngine", "NDMDiagnostics"],
+            path: "Sources/NDMProbe"
+        ),
+        .testTarget(
+            name: "NDMDiagnosticsTests",
+            dependencies: ["NDMDiagnostics"],
+            path: "Tests/NDMDiagnosticsTests"
         ),
         .testTarget(
             name: "NDMCoreTests",

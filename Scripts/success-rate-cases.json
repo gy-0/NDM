@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "id": "tiny-direct-file",
+      "kind": "directFile",
+      "url": "https://mirrors.aliyun.com/gnu/hello/hello-2.12.tar.gz.sig",
+      "expectedBytes": 488,
+      "expectedSHA256": "bb13d225d3a1c2debcefe6bf4029035c8f1938e23b84e60c080ed997d8277db2",
+      "note": "Too small to split. Exercises the single-connection path and the no-Range-benefit collapse. Verified 2026-07-24: stable hash across repeated fetches."
+    },
+    {
+      "id": "megabyte-direct-file-with-range",
+      "kind": "directFile",
+      "url": "https://mirrors.aliyun.com/gnu/hello/hello-2.12.tar.gz",
+      "expectedBytes": 1017723,
+      "expectedSHA256": "cf04af86dc085268c5f4470fbae49b18afbc221b78096aab842d934a76bad0ab",
+      "note": "Exercises multi-connection Range splitting and segment merge. An immutable GNU release tarball, so the hash stays valid. Verified 2026-07-24: 206 + Content-Range, valid gzip, and the same hash from aliyun, tencent and ustc mirrors."
+    },
+    {
+      "id": "bilibili-page",
+      "kind": "mediaPage",
+      "url": "https://www.bilibili.com/video/BV1GJ411x7h7",
+      "note": "Exercises probe -> format choice -> media delivery on a domestic site. No hash: the extractor may legitimately return a different rendition over time, so this case only asserts that a non-empty playable file is delivered. Verified probeable 2026-07-24."
+    }
+  ]
+}

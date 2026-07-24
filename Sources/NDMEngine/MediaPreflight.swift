@@ -47,6 +47,14 @@ public enum MediaPreparationPlan {
 public actor MediaPreflightStore {
     public static let shared = MediaPreflightStore()
 
+    /// A store with its own empty cache, for callers that must measure an
+    /// uncached probe (see `Sources/NDMProbe`). Reusing `shared` across repeated
+    /// runs would let the first attempt's cached probe make later attempts look
+    /// instant, which would quietly corrupt the timing it is meant to report.
+    public static func uncached() -> MediaPreflightStore {
+        MediaPreflightStore()
+    }
+
     typealias Expander = @Sendable (String) async -> ExpandedShortLink
     typealias Prober = @Sendable (String) async throws -> YtDlpProbe
     typealias CollectionProber = @Sendable (String) async throws -> YtDlpCollectionProbe?
