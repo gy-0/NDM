@@ -125,6 +125,30 @@ final class DownloadDiagnosticTests: XCTestCase {
         XCTAssertEqual(row.statusDetail, DownloadDiagnostic.linkExpired(status: 403).rowSummary)
         XCTAssertEqual(row.diagnostic?.primaryAction, .renew)
         XCTAssertTrue(row.canRenew)
+        XCTAssertTrue(row.needsLinkRenew)
+    }
+
+    func testNeedsLinkRenewOnlyForLinkExpiry() {
+        let expired = DownloadTask(
+            url: "https://cdn.example.com/file.zip",
+            status: .error,
+            errorText: DownloadDiagnostic.linkExpired(status: 403).storageString
+        )
+        let diskFull = DownloadTask(
+            url: "https://cdn.example.com/file.zip",
+            status: .error,
+            errorText: DownloadDiagnostic.diskFull.storageString
+        )
+        let plain = DownloadTask(
+            url: "https://cdn.example.com/file.zip",
+            status: .error,
+            errorText: "410 Gone"
+        )
+        XCTAssertTrue(TaskRowPresentation.make(task: expired, progress: nil).needsLinkRenew)
+        XCTAssertFalse(TaskRowPresentation.make(task: diskFull, progress: nil).needsLinkRenew)
+        XCTAssertFalse(TaskRowPresentation.make(task: plain, progress: nil).needsLinkRenew)
+        // canRenew remains available for manual repair from menus.
+        XCTAssertTrue(TaskRowPresentation.make(task: diskFull, progress: nil).canRenew)
     }
 
     func testBrowserRescueURLOnlyAppearsForRecoverableDirectFailures() {

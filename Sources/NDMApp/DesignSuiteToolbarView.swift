@@ -9,7 +9,7 @@ enum ToolbarContextAction {
 /// Design Suite in-window tool strip: a primary New action, then a contextual
 /// command group that reflects the current selection, then trailing search.
 @MainActor
-final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
+final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate, AccentChromeRefreshing {
     var onNew: (() -> Void)?
     var onContextAction: ((ToolbarContextAction) -> Void)?
     var onClipboardOffer: (() -> Void)?
@@ -306,6 +306,16 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate {
         refreshActivitySummary()
         invalidateIntrinsicContentSize()
         needsLayout = true
+    }
+
+    func refreshAccentChrome() {
+        newButton.needsDisplay = true
+        contextButtons.forEach { $0.needsDisplay = true }
+        activityIcon.contentTintColor = NDMChrome.accent
+        clipboardOfferButton.contentTintColor = NDMChrome.accent
+        if searchFocused {
+            searchShell.borderColor = NDMChrome.accent
+        }
     }
 
     func controlTextDidChange(_ obj: Notification) {

@@ -163,12 +163,9 @@ final class QualityPickerWindowController: NSWindowController, NSWindowDelegate 
         cancel.keyEquivalent = "\u{1b}"
 
         downloadButton = NSButton(title: "", target: self, action: #selector(downloadClicked))
-        downloadButton.bezelStyle = .rounded
+        NDMChrome.styleMainButton(downloadButton)
         downloadButton.controlSize = .large
         downloadButton.keyEquivalent = "\r"
-        if #available(macOS 11.0, *) {
-            downloadButton.bezelColor = NDMChrome.accent
-        }
 
         let actions = NSStackView(views: [NSView(), cancel, downloadButton])
         actions.orientation = .horizontal

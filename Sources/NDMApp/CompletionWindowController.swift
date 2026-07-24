@@ -2,7 +2,6 @@ import AppKit
 import AVFoundation
 import NDMCore
 import NDMEngine
-import QuickLookThumbnailing
 
 /// Non-modal completion panel — shown standalone or used as the destination
 /// of the progress window's shared-element handoff.
@@ -36,6 +35,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     /// can be rebuilt in place on a language switch without losing the runtime.
     private var durationText: String?
     private var languageObserver: NSObjectProtocol?
+    private var coverObserver: NSObjectProtocol?
 
     /// The hero holds a fixed cinematic band; only the deck below it grows.
     private let heroHeight: CGFloat = 208
@@ -105,6 +105,10 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         deckStack?.alphaValue = 0
         if let preview, preview.isArtwork {
             hero?.showThumbnail(preview.image)
+            // Handoff artwork is already CoverArtCache's poster; drop the
+            // async ensureCover observer so a late local-frame fallback cannot
+            // replace it.
+            clearCoverObserver()
         }
         window?.contentView?.layoutSubtreeIfNeeded()
     }
@@ -365,9 +369,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         return line
     }
 
-    /// Quiet outlined control — a crisp hairline pill, no gray wash.
+    /// Quiet outlined control — hairline pill; hover deepens the ring, not a
+    /// rail-style gray cushion (see `usesOutlinedHover`).
     private func outlinedButton(title: String) -> InspectorActionButton {
         let button = InspectorActionButton(title: title, style: .flat)
+        button.usesOutlinedHover = true
         button.wantsLayer = true
         button.layer?.borderWidth = 1
         button.layer?.borderColor = NDMChrome.hairline.cgColor
@@ -402,21 +408,44 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    /// Fill the hero backdrop with a real Quick Look thumbnail once ready.
+    /// Fill the hero with the same CoverArtCache poster the detail page uses
+    /// (yt-dlp thumbnail → disk cache). A raw Quick Look grab on the finished
+    /// file often returns a muddy mid-frame and used to overwrite that poster
+    /// after the progress handoff had already shown the correct cover.
     private func loadThumbnail(into hero: CompletionCinemaHero) {
-        guard let fileURL = task.destinationFileURL,
-              FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        let request = QLThumbnailGenerator.Request(
-            fileAt: fileURL,
-            size: CGSize(width: 904, height: 416),
-            scale: window?.backingScaleFactor ?? 2,
-            representationTypes: .thumbnail
-        )
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak hero] rep, _ in
-            guard let rep else { return }
-            Task { @MainActor in
-                hero?.showThumbnail(rep.nsImage)
+        let taskID = task.id
+        if let cover = CoverArtCache.shared.image(for: taskID) {
+            hero.showThumbnail(cover)
+            return
+        }
+        if coverObserver == nil {
+            coverObserver = NotificationCenter.default.addObserver(
+                forName: CoverArtCache.didUpdateNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self, weak hero] note in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          let hero,
+                          let updatedID = note.userInfo?["taskID"] as? Int64,
+                          updatedID == self.task.id,
+                          let cover = CoverArtCache.shared.image(for: updatedID) else { return }
+                    hero.showThumbnail(cover)
+                    self.clearCoverObserver()
+                }
             }
+        }
+        CoverArtCache.shared.ensureCover(
+            taskID: taskID,
+            remoteURL: nil,
+            localFile: task.destinationFileURL
+        )
+    }
+
+    private func clearCoverObserver() {
+        if let coverObserver {
+            NotificationCenter.default.removeObserver(coverObserver)
+            self.coverObserver = nil
         }
     }
 
@@ -584,6 +613,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             NotificationCenter.default.removeObserver(languageObserver)
             self.languageObserver = nil
         }
+        clearCoverObserver()
         audioExtraction.cancel()
         onDismiss()
     }

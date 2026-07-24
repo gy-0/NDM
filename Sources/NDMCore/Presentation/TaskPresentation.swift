@@ -156,6 +156,12 @@ public struct TaskRowPresentation: Equatable, Sendable {
     /// Completed downloads don't need a progress bar in list / inspector.
     public var showsProgressBar: Bool { isDownloading || isQueued }
 
+    /// Promote "Update Link" only for structured link-expiry failures — not
+    /// every paused / incomplete / generic error that still *allows* renew.
+    public var needsLinkRenew: Bool {
+        isFailed && diagnostic?.primaryAction == .renew
+    }
+
     public init(
         taskID: Int64,
         filename: String,

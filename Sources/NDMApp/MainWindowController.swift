@@ -140,9 +140,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.relocalizeChrome()
-                self?.window?.contentView?.needsDisplay = true
-                self?.window?.contentView?.displayIfNeeded()
+                // Token refresh walks the view tree; also re-apply imperative
+                // selection ink / inspector chrome that caches accent tints.
+                self?.sidebarController.refreshAccentChrome()
+                self?.listController.refreshAccentChrome()
+                self?.inspectorController.refreshAccentChrome()
             }
         }
         applyContentScale()
@@ -466,7 +468,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             if actions.canRetry, !actions.canStart {
                 context.append((.retry, L10n.retry, "arrow.clockwise"))
             }
-            if actions.canRenew, row.isFailed {
+            // Toolbar stays quiet unless the failure specifically needs a fresh URL.
+            if actions.canRenew, row.needsLinkRenew {
                 context.append((.renew, L10n.renewURL, "link"))
             }
             if actions.canOpen {
@@ -1717,6 +1720,11 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         }
     }
 
+    func refreshAccentChrome() {
+        guard isViewLoaded else { return }
+        syncSelectionAppearance()
+    }
+
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let view = QuietFinderRowView()
         if case .filter(let filter) = rows[row] {
@@ -1926,7 +1934,7 @@ private final class BreathingDotView: NSView {
 }
 
 /// Sidebar filter row — ink colors driven by model selection, not AppKit emphasis.
-private final class SidebarFilterCellView: NSTableCellView {
+private final class SidebarFilterCellView: NSTableCellView, AccentChromeRefreshing {
     private let icon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let badge = NSTextField(labelWithString: "")
@@ -2024,6 +2032,10 @@ private final class SidebarFilterCellView: NSTableCellView {
         pulseDot.isHidden = !showsPulse
         pulseDot.color = NDMChrome.accent
         pulseDot.setBreathing(showsPulse)
+    }
+
+    func refreshAccentChrome() {
+        refreshInk()
     }
 }
 
@@ -2135,8 +2147,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     private let tableView = TaskListTableView()
     private let scrollView = NSScrollView()
-    private let heroView = NowDownloadingHeroView()
+    /// Clipping shell whose height animates as concurrent heroes appear/leave.
+    private let heroContainer = NSView()
+    /// Vertical stack of Now Downloading heroes — one card per live transfer.
+    private let heroStack = NSStackView()
+    private var heroViews: [NowDownloadingHeroView] = []
     private var heroHeight: NSLayoutConstraint?
+    private var heroTaskIDs: Set<Int64> = []
+    private var heroOrderedIDs: [Int64] = []
     // Editorial header — the content column opens with the filter's name in
     // display type, not with a bare file list.
     private let headerTitleLabel = NSTextField(labelWithString: "")
@@ -2268,14 +2286,18 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         batchBar.translatesAutoresizingMaskIntoConstraints = false
         batchBar.isHidden = true
 
-        heroView.alphaValue = 0
-        heroView.onActivateTask = { [weak self] taskID in
-            self?.onActivateTaskID?(taskID)
-        }
-        heroView.onContextAction = { [weak self] action, taskID in
-            self?.onContextAction?(action, taskID)
-        }
-        let heroHeight = heroView.heightAnchor.constraint(equalToConstant: 0)
+        heroContainer.translatesAutoresizingMaskIntoConstraints = false
+        heroContainer.wantsLayer = true
+        heroContainer.layer?.masksToBounds = true
+        heroContainer.alphaValue = 0
+
+        heroStack.orientation = .vertical
+        heroStack.alignment = .width
+        heroStack.spacing = 0
+        heroStack.distribution = .fill
+        heroStack.translatesAutoresizingMaskIntoConstraints = false
+        heroContainer.addSubview(heroStack)
+        let heroHeight = heroContainer.heightAnchor.constraint(equalToConstant: 0)
         self.heroHeight = heroHeight
 
         headerTitleLabel.font = .systemFont(ofSize: 22, weight: .bold)
@@ -2316,7 +2338,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         view.addSubview(headerMetaLabel)
         view.addSubview(listModeButton)
         view.addSubview(gridModeButton)
-        view.addSubview(heroView)
+        view.addSubview(heroContainer)
         view.addSubview(scrollView)
         view.addSubview(galleryScroll)
         view.addSubview(emptyStack)
@@ -2335,15 +2357,18 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             listModeButton.heightAnchor.constraint(equalToConstant: 24),
             gridModeButton.widthAnchor.constraint(equalToConstant: 28),
             gridModeButton.heightAnchor.constraint(equalToConstant: 24),
-            heroView.topAnchor.constraint(equalTo: headerTitleLabel.bottomAnchor, constant: 12),
-            heroView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            heroView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            heroContainer.topAnchor.constraint(equalTo: headerTitleLabel.bottomAnchor, constant: 12),
+            heroContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            heroContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             heroHeight,
-            galleryScroll.topAnchor.constraint(equalTo: heroView.bottomAnchor),
+            heroStack.topAnchor.constraint(equalTo: heroContainer.topAnchor),
+            heroStack.leadingAnchor.constraint(equalTo: heroContainer.leadingAnchor),
+            heroStack.trailingAnchor.constraint(equalTo: heroContainer.trailingAnchor),
+            galleryScroll.topAnchor.constraint(equalTo: heroContainer.bottomAnchor),
             galleryScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             galleryScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             galleryScroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scrollView.topAnchor.constraint(equalTo: heroView.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: heroContainer.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -2532,6 +2557,20 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         galleryView.menu = tableView.menu
     }
 
+    func refreshAccentChrome() {
+        guard isViewLoaded else { return }
+        // Visible row chrome / empty-state primary already refresh via the
+        // hierarchy walk; re-sync selection pills so forcedSelected rows redraw.
+        syncSelectionAppearance()
+        syncHeroSelection()
+        for row in 0..<tableView.numberOfRows {
+            if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+                as? TaskRowCellView {
+                cell.refreshAccentChrome()
+            }
+        }
+    }
+
     /// Zoom task content while the titlebar, toolbar, sidebar, inspector, and
     /// window geometry remain stable.
     func setContentScale(_ scale: CGFloat) {
@@ -2573,11 +2612,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let signpostID = NDMPerformance.begin("TaskListUpdate")
         defer { NDMPerformance.end("TaskListUpdate", id: signpostID) }
 #endif
-        // The cinema strip owns the primary live transfer — repeating the same
-        // task as row #1 directly under it reads as a rendering bug. It leaves
-        // the list and returns (with the completion celebration) when done.
-        let heroTaskID = updateHero(rows)
-        let rows = rows.filter { $0.taskID != heroTaskID }
+        // The cinema strip owns every live transfer — repeating them as list
+        // rows underneath would mix two visual languages for the same work.
+        // Completed / queued / failed tasks remain in the table below.
+        let previousHeroIDs = heroTaskIDs
+        let heroIDs = updateHero(rows)
+        let rows = rows.filter { !heroIDs.contains($0.taskID) }
 
         let previousRows = self.rows
         let previousIDs = previousRows.map(\.taskID)
@@ -2592,7 +2632,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptySubtitleLabel.stringValue = emptySubtitle
         emptyActionsRow?.isHidden = !emptyShowsActions
         let wasEmpty = !emptyStack.isHidden
-        let isEmpty = rows.isEmpty && heroTaskID == nil
+        let isEmpty = rows.isEmpty && heroIDs.isEmpty
         listIsEmpty = isEmpty
         if wasEmpty != isEmpty {
             emptyStack.isHidden = !isEmpty
@@ -2615,8 +2655,28 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             // NSTableView is virtualized. A structural reload is sufficient;
             // explicitly notifying every row height forces AppKit to create and
             // measure all cells (several thousand in real user libraries).
+            let landedFromHero = previousHeroIDs.subtracting(heroIDs)
+            // Capture before reloadData — AppKit may reset the clip origin.
+            let wasViewingTop = isViewingListTop(
+                previousRows: previousRows,
+                scrollAnchor: scrollAnchor
+            )
             tableView.reloadData()
-            restoreScrollAnchor(scrollAnchor, in: rows)
+            // Hero→list completion inserts at the top. Restoring the old scroll
+            // anchor would keep the *previous* first row under the eye and hide
+            // the just-finished task above the fold — reveal it when the user
+            // was watching the top / that task; otherwise keep the history anchor.
+            if !isGalleryActive,
+               let revealID = heroLandingRevealTaskID(
+                landedFromHero: landedFromHero,
+                rows: rows,
+                selectedTaskID: selectedTaskID,
+                wasViewingTop: wasViewingTop
+               ) {
+                revealListRow(for: revealID, in: rows)
+            } else {
+                restoreScrollAnchor(scrollAnchor, in: rows)
+            }
         } else if !rows.isEmpty {
             var changedRows = IndexSet()
             var heightChangedRows = IndexSet()
@@ -2656,6 +2716,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         if tableView.selectedRowIndexes.count <= 1 {
             applyTableSelection(to: selectedTaskID)
         }
+        syncHeroSelection()
 
         applyViewMode()
         // Keep the poster wall live without structural churn: same IDs →
@@ -2680,6 +2741,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     /// item moves to the front. Keeping only the clip view's pixel offset makes
     /// the visible content silently change identity after every structural
     /// reload, which is especially disorienting in long download histories.
+    /// Hero→list completions may override this via `heroLandingRevealTaskID`.
     private func scrollAnchorBeforeStructuralUpdate(
         previousRows: [TaskRowPresentation],
         structuralChange: Bool
@@ -2713,33 +2775,134 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    /// Raise / collapse the Now Downloading cinema strip. The primary slot
-    /// follows the list's activity order, so a newly captured or retried task
-    /// takes the stage immediately. Other live transfers remain as rich rows
-    /// directly underneath instead of silently replacing the user's newest
-    /// action with whichever socket happens to be fastest.
-    /// Returns the task the strip is presenting so the list can exclude it.
+    /// A finished download leaves the Hero strip and reappears in the table
+    /// (usually as row 0). Return that task when we should scroll it into view
+    /// instead of restoring the pre-reload scroll anchor.
+    private func heroLandingRevealTaskID(
+        landedFromHero: Set<Int64>,
+        rows: [TaskRowPresentation],
+        selectedTaskID: Int64?,
+        wasViewingTop: Bool
+    ) -> Int64? {
+        let landedCompleted = rows.filter { landedFromHero.contains($0.taskID) && $0.isComplete }
+        guard !landedCompleted.isEmpty else { return nil }
+
+        // The task the user was already watching just finished — always reveal.
+        if let selectedTaskID,
+           landedFromHero.contains(selectedTaskID),
+           rows.contains(where: { $0.taskID == selectedTaskID }) {
+            return selectedTaskID
+        }
+
+        // Watching the Hero / top of the list: bring the new first row into view.
+        // Deep in history: leave the scroll anchor alone.
+        guard wasViewingTop else { return nil }
+        return landedCompleted.first?.taskID
+    }
+
+    private func isViewingListTop(
+        previousRows: [TaskRowPresentation],
+        scrollAnchor: (taskID: Int64, offset: CGFloat)?
+    ) -> Bool {
+        if previousRows.isEmpty { return true }
+        if !scrollView.isHidden,
+           scrollView.contentView.bounds.origin.y <= max(8, tableView.rowHeight * 0.35) {
+            return true
+        }
+        if let scrollAnchor,
+           let index = previousRows.firstIndex(where: { $0.taskID == scrollAnchor.taskID }),
+           index <= 1 {
+            return true
+        }
+        return false
+    }
+
+    private func revealListRow(for taskID: Int64, in rows: [TaskRowPresentation]) {
+        guard let index = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
+        tableView.layoutSubtreeIfNeeded()
+        tableView.scrollRowToVisible(index)
+    }
+
+    /// Raise / collapse the Now Downloading cinema strip(s). Every live
+    /// transfer gets its own hero card — concurrent downloads no longer mix
+    /// a featured strip with ordinary progress rows. Returns the task IDs
+    /// currently on stage so the list can exclude them.
     @discardableResult
-    private func updateHero(_ rows: [TaskRowPresentation]) -> Int64? {
+    private func updateHero(_ rows: [TaskRowPresentation]) -> Set<Int64> {
         let active = rows.filter(\.isDownloading)
-        let primary = active.first
-        heroView.update(primary: primary, activeCount: active.count)
-        let targetHeight: CGFloat = primary == nil ? 0 : 150
-        guard heroHeight?.constant != targetHeight else { return primary?.taskID }
+        heroOrderedIDs = active.map(\.taskID)
+        heroTaskIDs = Set(heroOrderedIDs)
+        ensureHeroCapacity(active.count)
+
+        for (index, hero) in heroViews.enumerated() {
+            if index < active.count {
+                hero.isHidden = false
+                // Each card is self-contained — no "+N more" eyebrow.
+                hero.update(primary: active[index], activeCount: 1)
+                hero.setSelected(active[index].taskID == selectedTaskID)
+            } else {
+                hero.isHidden = true
+                hero.update(primary: nil, activeCount: 0)
+                hero.setSelected(false)
+            }
+        }
+
+        let targetHeight: CGFloat = CGFloat(active.count) * Self.heroCardHeight
+        let targetAlpha: CGFloat = active.isEmpty ? 0 : 1
+        guard heroHeight?.constant != targetHeight else { return heroTaskIDs }
         guard view.window != nil else {
             heroHeight?.constant = targetHeight
-            heroView.alphaValue = targetHeight == 0 ? 0 : 1
-            return primary?.taskID
+            heroContainer.alphaValue = targetAlpha
+            return heroTaskIDs
         }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.38
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.3, 1)
             ctx.allowsImplicitAnimation = true
             heroHeight?.animator().constant = targetHeight
-            heroView.animator().alphaValue = targetHeight == 0 ? 0 : 1
+            heroContainer.animator().alphaValue = targetAlpha
             view.layoutSubtreeIfNeeded()
         }
-        return primary?.taskID
+        return heroTaskIDs
+    }
+
+    private static let heroCardHeight: CGFloat = 150
+
+    private func ensureHeroCapacity(_ count: Int) {
+        while heroViews.count < count {
+            let hero = makeHeroView()
+            hero.heightAnchor.constraint(equalToConstant: Self.heroCardHeight).isActive = true
+            heroStack.addArrangedSubview(hero)
+            heroViews.append(hero)
+        }
+    }
+
+    private func makeHeroView() -> NowDownloadingHeroView {
+        let hero = NowDownloadingHeroView()
+        hero.onSelectTask = { [weak self] taskID in
+            self?.selectHeroTask(taskID)
+        }
+        hero.onActivateTask = { [weak self] taskID in
+            self?.onActivateTaskID?(taskID)
+        }
+        hero.onContextAction = { [weak self] action, taskID in
+            self?.onContextAction?(action, taskID)
+        }
+        return hero
+    }
+
+    private func selectHeroTask(_ taskID: Int64) {
+        selectedTaskID = taskID
+        applyTableSelection(to: nil)
+        syncHeroSelection()
+        onSelectTaskID?(taskID)
+    }
+
+    private func syncHeroSelection() {
+        for (index, hero) in heroViews.enumerated() where !hero.isHidden {
+            let id = index < heroOrderedIDs.count ? heroOrderedIDs[index] : nil
+            hero.setSelected(id == selectedTaskID)
+        }
     }
 
     private func visibleRowIndexes() -> IndexSet {
@@ -2752,17 +2915,72 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     func revealTask(_ taskID: Int64) {
+        if heroTaskIDs.contains(taskID) {
+            selectHeroTask(taskID)
+            return
+        }
         applyTableSelection(to: taskID)
+        syncHeroSelection()
         guard let index = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
         tableView.scrollRowToVisible(index)
     }
 
     func selectAdjacentRow(offset: Int) -> Bool {
-        guard !rows.isEmpty else { return false }
+        // Heroes sit above the table — arrow keys walk them first, then the list.
+        if !heroOrderedIDs.isEmpty {
+            if let currentHero = selectedTaskID.flatMap({ id in heroOrderedIDs.firstIndex(where: { $0 == id }) }) {
+                let next = currentHero + offset
+                if next >= 0, next < heroOrderedIDs.count {
+                    selectHeroTask(heroOrderedIDs[next])
+                    return true
+                }
+                if next >= heroOrderedIDs.count, !rows.isEmpty, offset > 0 {
+                    let taskID = rows[0].taskID
+                    selectedTaskID = taskID
+                    applyTableSelection(to: taskID)
+                    syncHeroSelection()
+                    tableView.scrollRowToVisible(0)
+                    onSelectTaskID?(taskID)
+                    return true
+                }
+                return false
+            }
+            if selectedTaskID == nil || rows.firstIndex(where: { $0.taskID == selectedTaskID }) == nil {
+                if offset < 0 {
+                    selectHeroTask(heroOrderedIDs[heroOrderedIDs.count - 1])
+                    return true
+                }
+                if offset > 0, rows.isEmpty {
+                    selectHeroTask(heroOrderedIDs[0])
+                    return true
+                }
+                // Stepping up from the first table row lands on the last hero.
+                if offset < 0, let first = rows.first, selectedTaskID == first.taskID {
+                    selectHeroTask(heroOrderedIDs[heroOrderedIDs.count - 1])
+                    return true
+                }
+            }
+        }
+
+        guard !rows.isEmpty else {
+            if offset < 0, let last = heroOrderedIDs.last {
+                selectHeroTask(last)
+                return true
+            }
+            if offset > 0, let first = heroOrderedIDs.first {
+                selectHeroTask(first)
+                return true
+            }
+            return false
+        }
         let current = selectedTaskID.flatMap { id in rows.firstIndex(where: { $0.taskID == id }) }
             ?? (tableView.selectedRow >= 0 ? tableView.selectedRow : nil)
         let next: Int
         if let current {
+            if current == 0, offset < 0, let last = heroOrderedIDs.last {
+                selectHeroTask(last)
+                return true
+            }
             next = min(rows.count - 1, max(0, current + offset))
             guard next != current else { return false }
         } else {
@@ -2772,6 +2990,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let taskID = rows[next].taskID
         selectedTaskID = taskID
         applyTableSelection(to: taskID)
+        syncHeroSelection()
         tableView.scrollRowToVisible(next)
         onSelectTaskID?(taskID)
         return true
@@ -2810,7 +3029,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func refreshCover(for taskID: Int64?) {
-        heroView.refreshCover(with: rows)
+        for (index, hero) in heroViews.enumerated() where !hero.isHidden {
+            if let taskID {
+                guard index < heroOrderedIDs.count, heroOrderedIDs[index] == taskID else { continue }
+                hero.refreshCover()
+            } else {
+                hero.refreshCover()
+            }
+        }
         if isGalleryActive {
             for indexPath in galleryView.indexPathsForVisibleItems() {
                 let index = indexPath.item
@@ -2859,9 +3085,6 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let cell = (tableView.makeView(withIdentifier: id, owner: self) as? TaskRowCellView) ?? TaskRowCellView()
         cell.identifier = id
         let taskID = rows[row].taskID
-        cell.onInlineRenew = { [weak self] in
-            self?.onContextAction?(.renew, taskID)
-        }
         cell.onHoverAction = { [weak self] action in
             self?.onContextAction?(action, taskID)
         }
@@ -2906,6 +3129,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         if indexes.count > 1 {
             selectedTaskID = nil
             syncSelectionAppearance()
+            syncHeroSelection()
             onSelectMultipleTaskIDs?(indexes.compactMap { $0 < rows.count ? rows[$0].taskID : nil })
             return
         }
@@ -2913,10 +3137,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         if row >= 0, row < rows.count {
             selectedTaskID = rows[row].taskID
             syncSelectionAppearance()
+            syncHeroSelection()
             onSelectTaskID?(rows[row].taskID)
         } else {
             selectedTaskID = nil
             syncSelectionAppearance()
+            syncHeroSelection()
             onSelectTaskID?(nil)
         }
     }
@@ -3119,101 +3345,9 @@ private final class ContextMenuDelegate: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) { handler(menu) }
 }
 
-/// A quiet, semantic repair action for expired URLs. The stock rounded button
-/// looked like a second primary CTA and its bezel crowded the compact task row.
-@MainActor
-private final class InlineLinkRepairButton: NSButton {
-    private var isHovering = false
-    private var scale: CGFloat = 1
-    private var tracking: NSTrackingArea?
-    private var heightConstraint: NSLayoutConstraint?
-
-    init() {
-        super.init(frame: .zero)
-        title = L10n.renewURLEllipsis
-        image = NDMChrome.symbol("link.badge.plus", pointSize: 11, weight: .semibold)
-        imagePosition = .imageLeading
-        imageHugsTitle = true
-        bezelStyle = .inline
-        isBordered = false
-        controlSize = .small
-        focusRingType = .exterior
-        font = .systemFont(ofSize: 12, weight: .semibold)
-        contentTintColor = NDMChrome.accent
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        let heightConstraint = heightAnchor.constraint(equalToConstant: 28)
-        heightConstraint.isActive = true
-        self.heightConstraint = heightConstraint
-        setAccessibilityLabel(L10n.renewURLEllipsis)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var wantsUpdateLayer: Bool { true }
-
-    override var intrinsicContentSize: NSSize {
-        let base = super.intrinsicContentSize
-        return NSSize(width: base.width + 14 * scale, height: 28 * scale)
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let next = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(next)
-        tracking = next
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovering = true
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovering = false
-        needsDisplay = true
-    }
-
-    override func updateLayer() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            // Failed rows already carry red status copy. Keep this action
-            // discoverable without repeating a pill-shaped callout down the
-            // whole list; hover supplies the only soft surface.
-            layer?.backgroundColor = (isHovering
-                ? NDMChrome.accent.withAlphaComponent(0.10)
-                : NSColor.clear).cgColor
-            layer?.borderWidth = 0
-            layer?.borderColor = NSColor.clear.cgColor
-            // Do not assign NSControl properties (such as contentTintColor)
-            // here. They invalidate this layer again and create a permanent
-            // display loop when several failed-task buttons are visible.
-        }
-    }
-
-    func setContentScale(_ scale: CGFloat) {
-        self.scale = scale
-        title = L10n.renewURLEllipsis
-        image = NDMChrome.symbol("link.badge.plus", pointSize: 11 * scale, weight: .semibold)
-        font = .systemFont(ofSize: 12 * scale, weight: .semibold)
-        heightConstraint?.constant = 28 * scale
-        setAccessibilityLabel(L10n.renewURLEllipsis)
-        invalidateIntrinsicContentSize()
-        needsDisplay = true
-    }
-}
-
-/// Small icon-only ghost button for a row's hover action rail. Same
-/// hover-tint recipe as `InlineLinkRepairButton`: only the layer's
-/// background reacts, `contentTintColor` is left alone to avoid the
-/// `updateLayer` re-entrancy loop documented there.
+/// Small icon-only ghost button for a row's hover action rail. Quiet hover
+/// tint only — do not assign `contentTintColor` from `updateLayer`, or AppKit
+/// can re-invalidate the layer into a permanent display loop.
 private final class HoverIconButton: NSButton {
     private var isHoveringMouse = false
     private var tracking: NSTrackingArea?
@@ -3273,8 +3407,7 @@ private final class HoverIconButton: NSButton {
 }
 
 @MainActor
-private final class TaskRowCellView: NSTableCellView {
-    var onInlineRenew: (() -> Void)?
+private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
     var onHoverAction: ((TaskListContextAction) -> Void)?
 
     private let glyph = FileGlyphView()
@@ -3283,9 +3416,9 @@ private final class TaskRowCellView: NSTableCellView {
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let progressBar = ThinProgressView()
     private let trailingLabel = NSTextField(labelWithString: "")
-    private let renewButton = InlineLinkRepairButton()
     // Trailing-edge quick actions, revealed only on hover — the size/speed
-    // text is what earns the space the rest of the time.
+    // text is what earns the space the rest of the time. Link renew stays in
+    // the context / inspector menus so it never crowds filename + size.
     private let hoverStack = NSStackView()
     private let hoverPrimaryButton = HoverIconButton(symbolName: "play.fill", tooltip: L10n.start)
     private let hoverRevealButton = HoverIconButton(symbolName: "folder.fill", tooltip: L10n.showInFinder)
@@ -3293,8 +3426,8 @@ private final class TaskRowCellView: NSTableCellView {
     private var isHoverStackVisible = false
     private var hoverPrimaryAction: TaskListContextAction?
     private var hoverShowsReveal = false
-    private var isShowingRenew = false
     private var currentTaskID: Int64?
+    private var currentRow: TaskRowPresentation?
     private var progressHeight: NSLayoutConstraint?
     private var progressTop: NSLayoutConstraint?
     private var titleTop: NSLayoutConstraint?
@@ -3323,9 +3456,6 @@ private final class TaskRowCellView: NSTableCellView {
         trailingLabel.alignment = .right
         trailingLabel.textColor = .labelColor
         trailingLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        renewButton.target = self
-        renewButton.action = #selector(renewTapped)
-        renewButton.isHidden = true
 
         hoverPrimaryButton.target = self
         hoverPrimaryButton.action = #selector(hoverPrimaryTapped)
@@ -3338,7 +3468,7 @@ private final class TaskRowCellView: NSTableCellView {
         hoverStack.alphaValue = 0
         hoverStack.isHidden = true
 
-        for view in [glyph, titleLabel, badgeLabel, subtitleLabel, progressBar, trailingLabel, renewButton, hoverStack] {
+        for view in [glyph, titleLabel, badgeLabel, subtitleLabel, progressBar, trailingLabel, hoverStack] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -3366,15 +3496,12 @@ private final class TaskRowCellView: NSTableCellView {
             trailingLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             trailingLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
 
-            renewButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            renewButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-
             hoverStack.centerYAnchor.constraint(equalTo: subtitleLabel.centerYAnchor),
             hoverStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
 
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -10),
 
             barTop,
             progressBar.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
@@ -3384,7 +3511,6 @@ private final class TaskRowCellView: NSTableCellView {
         ])
     }
 
-    @objc private func renewTapped() { onInlineRenew?() }
     @objc private func hoverPrimaryTapped() {
         guard let action = hoverPrimaryAction else { return }
         onHoverAction?(action)
@@ -3407,7 +3533,7 @@ private final class TaskRowCellView: NSTableCellView {
     /// Crossfades the trailing size/speed text against the hover action
     /// icons.
     private func updateHoverVisibility() {
-        let hasActions = (hoverPrimaryAction != nil || hoverShowsReveal) && !isShowingRenew
+        let hasActions = hoverPrimaryAction != nil || hoverShowsReveal
         let shouldShow = isRowHovering && hasActions
         guard shouldShow != isHoverStackVisible else { return }
         isHoverStackVisible = shouldShow
@@ -3445,6 +3571,7 @@ private final class TaskRowCellView: NSTableCellView {
             trailingLabel.layer?.removeAllAnimations()
             trailingLabel.alphaValue = 1
         }
+        currentRow = row
 
         let liveScale = row.isDownloading ? scale * 1.22 : scale
         glyph.setContentScale(liveScale)
@@ -3455,7 +3582,6 @@ private final class TaskRowCellView: NSTableCellView {
         badgeLabel.font = .systemFont(ofSize: 12 * scale, weight: .bold)
         subtitleLabel.font = .systemFont(ofSize: 12 * scale)
         trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
-        renewButton.setContentScale(scale)
         titleTop?.constant = (row.isDownloading ? 15 : 12) * scale
         badgeHeight?.constant = 18 * scale
 
@@ -3464,6 +3590,7 @@ private final class TaskRowCellView: NSTableCellView {
         titleLabel.stringValue = row.filename
         titleLabel.textColor = .labelColor
         trailingLabel.textColor = .labelColor
+        trailingLabel.isHidden = false
 
         if let badge = row.mediaBadge {
             badgeLabel.stringValue = " \(badge) "
@@ -3499,11 +3626,6 @@ private final class TaskRowCellView: NSTableCellView {
             subtitleLabel.textColor = .secondaryLabelColor
         }
 
-        let showRenew = row.isFailed && row.canRenew
-        renewButton.isHidden = !showRenew
-        trailingLabel.isHidden = showRenew
-        isShowingRenew = showRenew
-
         // Priority: an in-flight transfer offers pause; anything else that
         // can still be started offers start/resume. Reveal rides along
         // whenever there's a file on disk to show.
@@ -3523,29 +3645,46 @@ private final class TaskRowCellView: NSTableCellView {
 
         let showBar = row.isDownloading
         progressBar.isHidden = !showBar
-        if !showBar { progressBar.isActive = false }
+        if !showBar {
+            progressBar.isActive = false
+            progressBar.clearSmoothProgress()
+            progressBar.onDisplayedProgressChange = nil
+        }
         progressTop?.constant = showBar ? 7 * scale : 0
         // ThinProgressView owns a fixed 4 pt hairline. Scaling this constraint
         // would fight its internal height constraint.
         progressHeight?.constant = showBar ? 4 : 0
         if showBar {
-            progressBar.progress = row.progressFraction
+            progressBar.setSmoothProgress(
+                taskID: row.taskID,
+                target: row.progressFraction,
+                complete: row.isComplete
+            )
             progressBar.isActive = true
-            let speed = row.speedText
-            if speed != L10n.emDash && speed != "—" {
-                trailingLabel.stringValue = "\(speed) · \(row.progressText)"
-            } else {
-                trailingLabel.stringValue = row.progressText
+            progressBar.onDisplayedProgressChange = { [weak self] display in
+                self?.updateTrailingProgressText(display: display)
             }
+            updateTrailingProgressText(display: progressBar.displayedProgress)
             trailingLabel.font = .monospacedDigitSystemFont(
                 ofSize: 16 * scale,
                 weight: .medium
             )
             trailingLabel.textColor = NDMChrome.accent
-        } else if !showRenew {
+        } else {
             trailingLabel.stringValue = row.sizeText
             trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
             trailingLabel.textColor = .secondaryLabelColor
+        }
+    }
+
+    private func updateTrailingProgressText(display: Double) {
+        guard let row = currentRow, row.isDownloading else { return }
+        let percent = TaskPresentationFormatting.percent(display)
+        let speed = row.speedText
+        if speed != L10n.emDash && speed != "—" {
+            trailingLabel.stringValue = "\(speed) · \(percent)"
+        } else {
+            trailingLabel.stringValue = percent
         }
     }
 
@@ -3572,30 +3711,29 @@ private final class TaskRowCellView: NSTableCellView {
         }
         return result
     }
+
+    func refreshAccentChrome() {
+        if !progressBar.isHidden {
+            trailingLabel.textColor = NDMChrome.accent
+        }
+    }
 }
 
 // MARK: - Inspector
 
-/// Crop-filled cover art banner with rounded corners and a single soft
-/// shadow — no gradient, no color wash. Only shown when `CoverArtCache` has
-/// a real preview; the generic per-extension file glyph stays small and
-/// inline instead of being stretched up to hero size.
+/// Crop-filled cover art with rounded corners and a quiet neutral drop
+/// shadow — no reflection strip, no ambient color wash. Only shown when
+/// `CoverArtCache` has a real preview; the generic per-extension file glyph
+/// stays small and inline instead of being stretched up to hero size.
 private final class HeroPreviewView: NSView {
     override var isFlipped: Bool { true }
-    static let reflectionHeight: CGFloat = 22
     private let imageLayer = CALayer()
-    // Cinema-screen reflection: the cover mirrors faintly beneath the frame,
-    // fading fast — the artwork sits on a surface, not on a spec sheet.
-    private let reflectionLayer = CALayer()
-    private let reflectionMask = CAGradientLayer()
+    private let cornerRadius: CGFloat = 12
 
     var image: NSImage? {
         didSet {
             let wasEmpty = oldValue == nil
             imageLayer.contents = image
-            reflectionLayer.contents = image
-            reflectionLayer.isHidden = image == nil
-            updateShadowColor()
             if wasEmpty, image != nil, window != nil { revealEntrance() }
         }
     }
@@ -3603,29 +3741,24 @@ private final class HeroPreviewView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // Host must stay fully clear. An opaque root layer behind a rounded
+        // image sublayer shows as light-gray L-corners at every cut.
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = false
+        // Quiet lift only — a large / dominant-colored shadow reads as a dirty
+        // horizontal band on the inspector's white surface.
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.22
-        layer?.shadowRadius = 16
-        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        layer?.shadowOpacity = 0.10
+        layer?.shadowRadius = 6
+        layer?.shadowOffset = CGSize(width: 0, height: -1)
         imageLayer.contentsGravity = .resizeAspectFill
-        imageLayer.cornerRadius = 12
+        imageLayer.backgroundColor = NSColor.clear.cgColor
+        imageLayer.cornerRadius = cornerRadius
         imageLayer.masksToBounds = true
+        if #available(macOS 10.15, *) {
+            imageLayer.cornerCurve = .continuous
+        }
         layer?.addSublayer(imageLayer)
-
-        reflectionLayer.contentsGravity = .resizeAspectFill
-        // Mirror vertically and sample the cover's bottom edge.
-        reflectionLayer.transform = CATransform3DMakeScale(1, -1, 1)
-        reflectionLayer.cornerRadius = 12
-        reflectionLayer.masksToBounds = true
-        reflectionLayer.isHidden = true
-        reflectionMask.colors = [
-            NSColor.white.withAlphaComponent(0.35).cgColor,
-            NSColor.clear.cgColor,
-        ]
-        reflectionMask.startPoint = CGPoint(x: 0.5, y: 0)
-        reflectionMask.endPoint = CGPoint(x: 0.5, y: 0.9)
-        reflectionLayer.mask = reflectionMask
-        layer?.addSublayer(reflectionLayer)
     }
 
     private func revealEntrance() {
@@ -3650,46 +3783,28 @@ private final class HeroPreviewView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        // AppKit may re-paint an opaque fill onto layer-backed views; keep the
+        // host transparent so square corners never peek past the cover.
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let screen = NSRect(
-            x: 0, y: 0,
-            width: bounds.width,
-            height: max(0, bounds.height - Self.reflectionHeight)
+        imageLayer.frame = bounds
+        // Shadow silhouette must match the rounded cover — a rectangular
+        // shadowPath (or none) draws square plates under each corner.
+        layer?.shadowPath = CGPath(
+            roundedRect: bounds,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
         )
-        imageLayer.frame = screen
-        reflectionLayer.frame = NSRect(
-            x: 0, y: screen.maxY + 2,
-            width: bounds.width,
-            height: Self.reflectionHeight - 2
-        )
-        reflectionMask.frame = reflectionLayer.bounds
         CATransaction.commit()
-    }
-
-    private func updateShadowColor() {
-        guard let image else {
-            layer?.shadowColor = NSColor.black.cgColor
-            layer?.shadowOpacity = 0.18
-            return
-        }
-        if let dominant = NDMChrome.dominantColor(from: image) {
-            let anim = CABasicAnimation(keyPath: "shadowColor")
-            anim.fromValue = layer?.shadowColor
-            anim.toValue = dominant.cgColor
-            anim.duration = 0.4
-            anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            layer?.add(anim, forKey: "shadowColor")
-            layer?.shadowColor = dominant.cgColor
-            layer?.shadowOpacity = 0.35
-            layer?.shadowRadius = 20
-        } else {
-            layer?.shadowColor = NSColor.black.cgColor
-            layer?.shadowOpacity = 0.18
-            layer?.shadowRadius = 16
-        }
     }
 }
 
@@ -3937,12 +4052,10 @@ private final class InspectorViewController: NSViewController {
         ]
         NSLayoutConstraint.activate([
             heroImageView.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
-            // True 16:9 screen plus the reflection strip below it — a squashed
-            // cover reads as a bug, not a thumbnail.
+            // True 16:9 cover — a squashed frame reads as a bug, not a thumbnail.
             heroImageView.heightAnchor.constraint(
                 equalTo: heroImageView.widthAnchor,
-                multiplier: 9.0 / 16.0,
-                constant: HeroPreviewView.reflectionHeight
+                multiplier: 9.0 / 16.0
             ),
             diagBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             diagStack.topAnchor.constraint(equalTo: diagBox.topAnchor),
@@ -4222,6 +4335,13 @@ private final class InspectorViewController: NSViewController {
             button.font = .systemFont(ofSize: 12.5 * buttonScale, weight: .medium)
             button.contentTintColor = .secondaryLabelColor
         }
+        if let action = button as? InspectorActionButton {
+            // Primary rail action earns a soft accent wash; secondaries stay
+            // neutral with a quieter hover deepen.
+            action.prefersAccentHover = chrome == .primary
+            action.usesOutlinedHover = false
+            action.noteRestingTint()
+        }
     }
 
     private func refreshHeaderPreview() {
@@ -4236,8 +4356,9 @@ private final class InspectorViewController: NSViewController {
             heroImageView.image = preview
             heroImageView.isHidden = false
             iconView.isHidden = true
-            let dominant = NDMChrome.dominantColor(from: preview)
-            atmosphereView.setAtmosphere(dominant)
+            // No ambient color wash under the cover — a radial tint behind the
+            // transparent scroll reads as a dirty strip below the thumbnail.
+            atmosphereView.setAtmosphere(nil)
         } else {
             heroImageView.isHidden = true
             iconView.isHidden = false
@@ -4330,6 +4451,15 @@ private final class InspectorViewController: NSViewController {
         scribeStudioCard.relocalize()
         let row = currentRow
         currentRow = nil
+        update(row: row)
+    }
+
+    func refreshAccentChrome() {
+        placeholderIcon.contentTintColor = NDMChrome.accent.withAlphaComponent(0.35)
+        audioActionIcon.contentTintColor = NDMChrome.accent
+        let row = currentRow
+        currentRow = nil
+        hasAppliedRow = false
         update(row: row)
     }
 
@@ -4426,6 +4556,7 @@ private final class InspectorViewController: NSViewController {
 #endif
             progressBar.isHidden = true
             progressBar.isActive = false
+            progressBar.clearSmoothProgress()
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
             if !row.activityDateText.isEmpty {
                 pairs.append((L10n.downloadTime, row.activityDateText))
@@ -4440,7 +4571,15 @@ private final class InspectorViewController: NSViewController {
             completionResultURL = nil
             completionStackView.apply(nil)
             progressBar.isHidden = !row.isDownloading
-            progressBar.progress = row.progressFraction
+            if row.isDownloading {
+                progressBar.setSmoothProgress(
+                    taskID: row.taskID,
+                    target: row.progressFraction,
+                    complete: row.isComplete
+                )
+            } else {
+                progressBar.clearSmoothProgress()
+            }
             progressBar.isActive = row.isDownloading
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
             if row.speedText != L10n.emDash && row.speedText != "—" {
@@ -4468,8 +4607,11 @@ private final class InspectorViewController: NSViewController {
             decorate(secondaryButton, title: L10n.showInFinder, symbol: "folder", chrome: .soft)
             secondaryButton.isEnabled = row.canShowInFinder
             progressButtonShowsConnectionDetails = false
+            primaryFiresRenew = false
         } else if row.canRetry {
-            primaryFiresRenew = row.diagnostic?.primaryAction == .renew && row.canRenew
+            // Only promote "Update Link" when the diagnostic says the URL is stale.
+            // Generic failures keep Retry primary; renew stays in … / context menus.
+            primaryFiresRenew = row.needsLinkRenew && row.canRenew
             if primaryFiresRenew {
                 decorate(primaryButton, title: L10n.renewURL, symbol: "arrow.triangle.2.circlepath", chrome: .primary)
                 primaryButton.isEnabled = true
@@ -4478,8 +4620,8 @@ private final class InspectorViewController: NSViewController {
             } else {
                 decorate(primaryButton, title: L10n.retry, symbol: "arrow.clockwise", chrome: .primary)
                 primaryButton.isEnabled = true
-                decorate(secondaryButton, title: L10n.renewURL, symbol: "arrow.triangle.2.circlepath", chrome: .soft)
-                secondaryButton.isEnabled = row.canRenew
+                decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
+                secondaryButton.isEnabled = row.canShowProgress
             }
             progressButtonShowsConnectionDetails = true
         } else if row.canPause {
@@ -4488,12 +4630,14 @@ private final class InspectorViewController: NSViewController {
             decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
             secondaryButton.isEnabled = row.canShowProgress
             progressButtonShowsConnectionDetails = true
+            primaryFiresRenew = false
         } else {
             decorate(primaryButton, title: L10n.start, symbol: "play.fill", chrome: .primary)
             primaryButton.isEnabled = row.canStart
             decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
             secondaryButton.isEnabled = row.canShowProgress
             progressButtonShowsConnectionDetails = false
+            primaryFiresRenew = false
         }
 
         if utilityButtonSharesFile {
@@ -4549,8 +4693,6 @@ private final class InspectorViewController: NSViewController {
             onAction?(.reveal)
         } else if row.canRetry && primaryFiresRenew {
             onAction?(.retry)
-        } else if row.canRenew && (row.canRetry || !row.canPause) {
-            onAction?(.renew)
         } else if row.canShowProgress {
             onAction?(.progress)
         }
@@ -4603,6 +4745,10 @@ private final class InspectorViewController: NSViewController {
             addMoreItem(menu, title: L10n.quickLook, selector: #selector(moreQuickLook), symbol: "eye")
             addMoreItem(menu, title: L10n.copyURL, selector: #selector(moreCopyURL), symbol: "link")
         }
+        if let row = currentRow, row.canRenew, !row.isComplete {
+            // Secondary home for renew when it is not the primary CTA.
+            addMoreItem(menu, title: L10n.renewURLEllipsis, selector: #selector(moreRenew), symbol: "link")
+        }
         addMoreItem(menu, title: L10n.propertiesEllipsis, selector: #selector(moreProperties), symbol: "info.circle")
         menu.addItem(.separator())
         addMoreItem(menu, title: L10n.removeEllipsis, selector: #selector(moreDelete), symbol: "trash")
@@ -4623,6 +4769,7 @@ private final class InspectorViewController: NSViewController {
 
     @objc private func moreQuickLook() { onAction?(.quickLook) }
     @objc private func moreCopyURL() { onAction?(.copyURL) }
+    @objc private func moreRenew() { onAction?(.renew) }
     @objc private func moreProperties() { onAction?(.properties) }
     @objc private func moreDelete() { onAction?(.delete) }
     @objc private func tapDelete() { onAction?(.delete) }

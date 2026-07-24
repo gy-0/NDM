@@ -1562,7 +1562,7 @@ private final class SettingsAccentSwitch: NSButton {
 }
 
 /// Full-rail sidebar row — selection paints `bounds`, label stays leading.
-private final class SettingsNavigationButton: NSButton {
+private final class SettingsNavigationButton: NSButton, AccentChromeRefreshing {
     private let symbolName: String
     private let titleText: String
     private let iconView = NSImageView()
@@ -1697,6 +1697,11 @@ private final class SettingsNavigationButton: NSButton {
         iconView.contentTintColor = isSelected ? NDMChrome.accent : .secondaryLabelColor
         titleLabel.font = .systemFont(ofSize: 14.5, weight: weight)
         titleLabel.textColor = tint
+    }
+
+    func refreshAccentChrome() {
+        updateVisualState()
+        needsDisplay = true
     }
 }
 
