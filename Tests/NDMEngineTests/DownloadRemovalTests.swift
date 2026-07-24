@@ -219,6 +219,87 @@ final class DownloadRemovalTests: XCTestCase {
         )
     }
 
+    /// `remove` cancels every engine before it does anything destructive, so by
+    /// the time it can fail, nothing is running. A surviving row must not keep
+    /// claiming otherwise: a task shown as downloading with no engine behind it
+    /// has no progress, no speed, and no way for the user to stop it.
+    func testFailedRemovalOfAnActiveDownloadLeavesAStoppedStatus() async throws {
+        let payload = Data(repeating: 0x33, count: 2 * 1_024 * 1_024)
+        let server = LocalRangeServer(payload: payload, rangeResponseDelay: { _ in 4 })
+        try server.start()
+        defer { server.stop() }
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = DownloadManager(
+            store: fixture.store,
+            settings: fixture.settings,
+            supportRoot: fixture.support,
+            fileRecycler: { _ in throw RecycleFailure.denied }
+        )
+        let task = try await manager.addURL(server.baseURL.absoluteString, connections: 2)
+        try await manager.start(taskID: task.id)
+        try await waitUntil(timeout: 2) { !server.recordedRanges.isEmpty }
+
+        // The recycler only runs when a file already sits at the destination, which
+        // is the case whenever a previous download left one there.
+        let destinationFile = fixture.downloads.appendingPathComponent(task.filename)
+        try Data("previously downloaded".utf8).write(to: destinationFile)
+
+        do {
+            try await manager.remove(taskID: task.id, deleteFile: true)
+            XCTFail("Expected the recycler to fail")
+        } catch RecycleFailure.denied {
+            // Expected.
+        }
+
+        let fetched = try await manager.task(id: task.id)
+        let retained = try XCTUnwrap(fetched, "the row must survive a failed removal")
+        XCTAssertNotEqual(
+            retained.status,
+            .downloading,
+            "nothing is running after remove cancelled the engines"
+        )
+        let active = await manager.hasActiveDownloads()
+        XCTAssertFalse(active)
+    }
+
+    /// The same guarantee when the stored status is stale rather than live: a
+    /// crash leaves rows marked downloading with no engine, and nothing resets
+    /// them at launch. A failed removal must not leave that lie in place.
+    func testFailedRemovalNormalisesAStaleDownloadingStatus() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = fixture.downloads.appendingPathComponent("interrupted.bin")
+        try Data("partial".utf8).write(to: file)
+        let manager = DownloadManager(
+            store: fixture.store,
+            settings: fixture.settings,
+            supportRoot: fixture.support,
+            fileRecycler: { _ in throw RecycleFailure.denied }
+        )
+        let task = try fixture.store.insert(DownloadTask(
+            url: "https://example.com/file",
+            filename: file.lastPathComponent,
+            status: .downloading,
+            folderPath: fixture.downloads.path
+        ))
+
+        do {
+            try await manager.remove(taskID: task.id, deleteFile: true)
+            XCTFail("Expected the recycler to fail")
+        } catch RecycleFailure.denied {
+            // Expected.
+        }
+
+        let fetched = try await manager.task(id: task.id)
+        let retained = try XCTUnwrap(fetched)
+        XCTAssertNotEqual(
+            retained.status,
+            .downloading,
+            "no engine exists for this task, so it must not present as downloading"
+        )
+    }
+
     func testRemovingActiveDownloadCancelsAndAwaitsItBeforeDeletingRecord() async throws {
         let payload = Data(repeating: 0x5A, count: 2 * 1_024 * 1_024)
         let server = LocalRangeServer(

@@ -969,6 +969,19 @@ public actor DownloadManager {
             await runningTask.value
         }
 
+        // Past this point nothing is running for this task, whatever the row says.
+        // A live download's own cancellation path records that, but a stored
+        // `downloading` with no engine behind it does not — a crash leaves such
+        // rows and nothing resets them at launch. If the removal below fails the
+        // row survives, and a task presenting as downloading with no engine has no
+        // progress, no speed and no way for the user to stop it. Re-read rather
+        // than reusing the snapshot above so a concurrent update is not clobbered.
+        if var current = try? store.allDownloads().first(where: { $0.id == taskID }),
+           current.status == .downloading {
+            current.status = .incomplete
+            try? store.update(current)
+        }
+
         // The engines above are already cancelled, and that cannot be undone, so
         // dropping their registrations is correct whether or not the removal goes
         // on to succeed — a cancelled engine must not stay registered.
