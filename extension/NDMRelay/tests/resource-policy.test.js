@@ -119,3 +119,73 @@ test("same filenames without a reliable size stay separate", () => {
 
     assert.equal(policy.compactResources([first, second]).length, 2);
 });
+
+test("rejects bilibili telemetry web.txt and other tiny noise", () => {
+    assert.equal(policy.candidateFromResponse({
+        2: "https://data.bilibili.com/log/web?event=1",
+        7: 2,
+        8: "text/plain",
+        requestType: "xmlhttprequest",
+        fileName: "web.txt"
+    }), null);
+    assert.equal(policy.candidateFromResponse({
+        2: "https://cdn.example.com/notes/web.txt",
+        7: 2,
+        8: "text/plain",
+        requestType: "xmlhttprequest"
+    }), null);
+    assert.equal(policy.candidateFromResponse({
+        2: "https://cdn.example.com/beacon.txt",
+        7: 4096,
+        8: "text/plain",
+        requestType: "xmlhttprequest"
+    }), null);
+    assert.equal(policy.isNoiseHost("data.bilibili.com"), true);
+    assert.equal(policy.isNoiseFilename("web.txt"), true);
+});
+
+test("keeps real installers and documents above the size floor", () => {
+    const dmg = policy.candidateFromResponse({
+        2: "https://dl.hdslb.com/mobile/fixed/pc_electron_mac/bili_mac.dmg?v=1.17.9",
+        7: 120_000_000,
+        8: "application/x-apple-diskimage",
+        requestType: "main_frame",
+        fileName: "bili_mac.dmg"
+    });
+    assert.equal(dmg.fEx, "dmg");
+    assert.match(dmg[2], /bili_mac\.dmg/);
+    assert.equal(dmg[6], "normal");
+
+    const pdf = policy.candidateFromResponse({
+        2: "https://files.example.com/report.pdf",
+        7: 50_000,
+        8: "application/pdf",
+        requestType: "object"
+    });
+    assert.equal(pdf.fEx, "pdf");
+
+    assert.equal(policy.candidateFromResponse({
+        2: "https://files.example.com/tiny.pdf",
+        7: 200,
+        8: "application/pdf",
+        requestType: "xmlhttprequest"
+    }), null);
+});
+
+test("plain txt without attachment stays off the shelf", () => {
+    assert.equal(policy.candidateFromResponse({
+        2: "https://files.example.com/readme.txt",
+        7: 12_000,
+        8: "text/plain",
+        requestType: "xmlhttprequest"
+    }), null);
+    const attached = policy.candidateFromResponse({
+        2: "https://files.example.com/readme.txt",
+        7: 12_000,
+        8: "text/plain",
+        requestType: "main_frame",
+        isAttachment: true,
+        fileName: "readme.txt"
+    });
+    assert.equal(attached.fEx, "txt");
+});

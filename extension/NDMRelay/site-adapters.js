@@ -132,10 +132,35 @@
         return canonicalPageURL(rawLocation, links);
     }
 
+    /// Page-level adapters (Bilibili/YouTube/…) own the download entry.
+    /// Callers should not mount the legacy floating media strip on these URLs
+    /// at all — even before the in-page button lands — because media sniffs
+    /// during SPA boot (common when logged in) used to append overlays and
+    /// fight hydration (black player + comment skeleton on Bilibili).
+    function prefersInlineUI(value) {
+        var site = siteForURL(value);
+        if (site === "youtube") return Boolean(canonicalYouTubeURL(value));
+        if (site === "bilibili") return Boolean(canonicalBilibiliURL(value));
+        if (site === "vimeo") return Boolean(canonicalVimeoURL(value));
+        if (site === "tiktok") return Boolean(canonicalTikTokURL(value));
+        if (site === "douyin") return Boolean(canonicalDouyinURL(value));
+        return false;
+    }
+
     /// True only after the site-native action actually exists. Callers use
     /// this to suppress the legacy floating media strip without risking a
     /// dead end when a site changes its DOM and injection fails.
+    /// Accepts hasInlineAction(mediaEl, location) or hasInlineAction(locationHref).
     function hasInlineAction(element, locationValue, documentValue) {
+        if (typeof element === "string" && (locationValue === undefined || locationValue === null)) {
+            locationValue = element;
+            element = null;
+        } else if (element && typeof element === "object" && !element.closest &&
+            (element.href || element.hostname) && (locationValue === undefined || locationValue === null)) {
+            // Accidental Location / URL object as the sole argument.
+            locationValue = element;
+            element = null;
+        }
         var rawLocation = String(locationValue && locationValue.href || locationValue || "");
         var site = siteForURL(rawLocation);
         if (!site) return false;
@@ -172,10 +197,11 @@
             ".better-ndm-youtube-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:40px;padding:0 16px;border-radius:20px;background:var(--yt-spec-badge-chip-background,rgba(0,0,0,.05));color:var(--yt-spec-text-primary,#0f0f0f);cursor:pointer;font:500 14px/40px Roboto,Arial,sans-serif;white-space:nowrap;transition:background-color .15s ease}",
             ".better-ndm-youtube-button:hover,.better-ndm-youtube-button:focus-visible{background:var(--yt-spec-button-chip-background-hover,rgba(0,0,0,.1));outline:none}",
             ".better-ndm-youtube-button svg{width:24px;height:24px;fill:currentColor;flex:none;margin-left:-4px}",
-            ".better-ndm-bilibili-action{display:inline-flex;align-items:center;margin-left:24px}",
-            ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:7px;color:#61666d;cursor:pointer;font:500 14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;transition:color .15s}",
+            // Sit in .video-toolbar-right as a peer of 举报/笔记, left of .video-tool-more.
+            ".better-ndm-bilibili-action{display:inline-flex;align-items:center;flex:none;margin-left:18px}",
+            ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:7px;color:#61666d;cursor:pointer;font:500 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;transition:color .15s}",
             ".better-ndm-bilibili-button:hover,.better-ndm-bilibili-button:focus-visible{color:#00aeec;outline:none}",
-            ".better-ndm-bilibili-button svg{width:24px;height:24px;fill:currentColor}",
+            ".better-ndm-bilibili-button svg{width:20px;height:20px;fill:currentColor}",
             ".better-ndm-site-inline-action{display:inline-flex;align-items:center;margin-left:8px}",
             ".better-ndm-site-inline-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid rgba(120,120,128,.25);border-radius:8px;background:rgba(120,120,128,.08);color:inherit;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap}",
             ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(53,120,246,.12);border-color:rgba(53,120,246,.45);color:#3478f6;outline:none}",
@@ -207,25 +233,77 @@
         if (typeof document === "undefined" || typeof window === "undefined") return;
         if (!siteForURL(window.location.href)) return;
         var manager = this;
+        var site = siteForURL(window.location.href);
         var ready = function() {
+            if (site === "bilibili") {
+                // Bilibili's Vue player/header still hydrate after DOMContentLoaded.
+                // A body-wide MutationObserver or early toolbar surgery races that
+                // work and leaves a black player + comment skeleton — especially
+                // in a normal profile where the user is logged in and media sniffs
+                // are busy. Wait for window load, then only watch the toolbar.
+                var startBilibili = function() {
+                    manager.watchBilibiliToolbar();
+                };
+                if (document.readyState === "complete") setTimeout(startBilibili, 600);
+                else window.addEventListener("load", function() {
+                    setTimeout(startBilibili, 600);
+                }, { once: true });
+                return;
+            }
             addStyles();
             manager.scan();
-            if (!manager.observer && window.MutationObserver) {
+            if (!manager.observer && window.MutationObserver && document.body) {
                 manager.observer = new MutationObserver(function() { manager.schedule(); });
-                manager.observer.observe(document.documentElement, { childList: true, subtree: true });
+                // Never observe documentElement: Bilibili (and similar SPAs) hydrate
+                // header chrome from html children and a broad observer there causes
+                // top-bar flash/disappear.
+                manager.observer.observe(document.body, { childList: true, subtree: true });
+                manager._observeDelay = 80;
             }
         };
         if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, { once: true });
         else ready();
     };
 
+    /// Poll for the Bilibili video toolbar, inject once, and observe only that
+    /// subtree — never the player or documentElement.
+    SiteAdapterManager.prototype.watchBilibiliToolbar = function() {
+        var manager = this;
+        if (this._biliWatching) return;
+        this._biliWatching = true;
+        this._observeDelay = 400;
+        var tries = 0;
+        var attach = function() {
+            if (!canonicalBilibiliURL(window.location.href)) {
+                manager._biliWatching = false;
+                return;
+            }
+            // Prefer the whole arc toolbar so right-side 举报/笔记/more reshuffles
+            // still trigger a re-home of the NDM chip (never only left-main).
+            var target = document.querySelector("#arc_toolbar_report, .video-toolbar-right, .video-toolbar-left, .video-toolbar-left-main");
+            if (!target) {
+                if (tries++ < 40) manager._biliPoll = setTimeout(attach, 500);
+                else manager._biliWatching = false;
+                return;
+            }
+            addStyles();
+            manager.scan();
+            if (!manager.observer && window.MutationObserver) {
+                manager.observer = new MutationObserver(function() { manager.schedule(); });
+                manager.observer.observe(target, { childList: true, subtree: true });
+            }
+        };
+        attach();
+    };
+
     SiteAdapterManager.prototype.schedule = function() {
         var manager = this;
         if (this.timer) return;
+        var delay = this._observeDelay || 80;
         this.timer = setTimeout(function() {
             manager.timer = null;
             manager.scan();
-        }, 80);
+        }, delay);
     };
 
     SiteAdapterManager.prototype.notifyActionReady = function() {
@@ -330,16 +408,49 @@
         this.notifyActionReady();
     };
 
+    /// Mount NDM to the right of 稿件举报 / 记笔记 and immediately left of
+    /// `.video-tool-more`. Stay a sibling of more (never a descendant) so Bilibili's
+    /// narrow-width fold into the more menu cannot swallow the chip.
     SiteAdapterManager.prototype.scanBilibili = function() {
         var pageURL = canonicalBilibiliURL(window.location.href);
+        // Only touch the video toolbar on real /video/BV pages. Never inject on
+        // app.bilibili.com or other marketing shells — those hosts only need
+        // ordinary file catching (e.g. .dmg), not DOM surgery.
         if (!pageURL || !document.querySelector("video")) return;
-        var actions = document.querySelector("#arc_toolbar_report .video-toolbar-left-main, .video-toolbar-left-main");
-        if (!actions || actions.querySelector('[data-better-ndm-site-action="bilibili"]')) return;
+
+        var more = document.querySelector(
+            "#arc_toolbar_report .video-tool-more.video-toolbar-right-item, " +
+            "#arc_toolbar_report .video-tool-more, " +
+            ".video-toolbar-right .video-tool-more, " +
+            ".video-tool-more.video-toolbar-right-item"
+        );
+        var right = (more && more.parentElement) ||
+            document.querySelector("#arc_toolbar_report .video-toolbar-right, .video-toolbar-right");
+        if (!right) return;
+
+        var existingWrap = document.querySelector('[data-better-ndm-site-action="bilibili-wrapper"]');
+        if (existingWrap) {
+            // Re-home if SPA re-render tucked us under more or away from the anchor.
+            var misplaced = existingWrap.closest(".video-tool-more") ||
+                (more && existingWrap.parentElement !== more.parentElement) ||
+                (more && existingWrap.nextElementSibling !== more);
+            if (misplaced && more && more.parentElement) {
+                more.parentElement.insertBefore(existingWrap, more);
+            } else if (misplaced && !more && existingWrap.parentElement !== right) {
+                right.appendChild(existingWrap);
+            }
+            return;
+        }
+        if (document.querySelector('[data-better-ndm-site-action="bilibili"]')) return;
+
         var wrapper = document.createElement("div");
-        wrapper.className = "better-ndm-bilibili-action";
+        // video-toolbar-right-item keeps flex alignment with native right chips;
+        // remaining outside .video-tool-more keeps us visible when 举报/笔记 fold away.
+        wrapper.className = "better-ndm-bilibili-action video-toolbar-right-item";
         wrapper.dataset.betterNdmSiteAction = "bilibili-wrapper";
         wrapper.appendChild(this.makeButton("bilibili", function() { return canonicalBilibiliURL(window.location.href) || pageURL; }));
-        actions.appendChild(wrapper);
+        if (more && more.parentElement) more.parentElement.insertBefore(wrapper, more);
+        else right.appendChild(wrapper);
         this.notifyActionReady();
     };
 
@@ -393,14 +504,31 @@
     };
 
     SiteAdapterManager.prototype.refresh = function() {
+        var site = siteForURL(window.location.href);
+        if (site === "bilibili") {
+            if (this.observer) {
+                this.observer.disconnect();
+                this.observer = null;
+            }
+            if (this._biliPoll) clearTimeout(this._biliPoll);
+            this._biliPoll = null;
+            this._biliWatching = false;
+            var manager = this;
+            // SPA navigations re-hydrate the toolbar; re-attach after a beat.
+            setTimeout(function() { manager.watchBilibiliToolbar(); }, 400);
+            return;
+        }
         this.schedule();
     };
 
     SiteAdapterManager.prototype.destroy = function() {
         if (this.observer) this.observer.disconnect();
         if (this.timer) clearTimeout(this.timer);
+        if (this._biliPoll) clearTimeout(this._biliPoll);
         this.observer = null;
         this.timer = null;
+        this._biliPoll = null;
+        this._biliWatching = false;
     };
 
     function install(options) {
@@ -419,6 +547,7 @@
         hasInlineAction: hasInlineAction,
         install: install,
         pageURLForElement: pageURLForElement,
+        prefersInlineUI: prefersInlineUI,
         siteForURL: siteForURL
     };
 });

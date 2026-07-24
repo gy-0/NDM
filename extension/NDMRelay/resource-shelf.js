@@ -22,14 +22,18 @@
         this.expanded = false;
         this.host = null;
         this.shadow = null;
-        this.mount();
+        // Defer DOM insertion until there is something to show. Early
+        // documentElement mounts broke SPA headers (Bilibili top chrome).
     }
 
     ResourceShelf.prototype.mount = function() {
         if (typeof document === "undefined" || this.host) return;
         var host = node("div");
         host.id = "better-ndm-resource-shelf-host";
-        host.style.cssText = "all:initial;display:none;position:fixed;right:16px;bottom:16px;z-index:2147483646;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color-scheme:light dark";
+        // Keep styling local to this host. Never park it under <html>: several
+        // SPAs (notably Bilibili's header) hydrate from documentElement children
+        // and a sibling of <body> makes the top chrome flash then disappear.
+        host.style.cssText = "display:none;position:fixed;right:16px;bottom:16px;z-index:2147483646;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color-scheme:light dark";
         var shadow = host.attachShadow ? host.attachShadow({ mode: "open" }) : host;
         var style = node("style");
         style.textContent = [
@@ -60,16 +64,36 @@
         this.panel.setAttribute("aria-label", localText("NDM 检测到的网页资源", "Resources detected by NDM"));
         shadow.appendChild(this.badge);
         shadow.appendChild(this.panel);
-        (document.documentElement || document).appendChild(host);
         this.host = host;
         this.shadow = shadow;
+        this.attachHost();
         this.render();
+    };
+
+    ResourceShelf.prototype.attachHost = function() {
+        var shelf = this;
+        if (!this.host || this.host.isConnected) return;
+        var attach = function() {
+            if (!shelf.host || shelf.host.isConnected || !document.body) return;
+            document.body.appendChild(shelf.host);
+        };
+        if (document.body) {
+            attach();
+            return;
+        }
+        if (this._bodyWaiter) return;
+        this._bodyWaiter = function() {
+            shelf._bodyWaiter = null;
+            attach();
+        };
+        document.addEventListener("DOMContentLoaded", this._bodyWaiter, { once: true });
     };
 
     ResourceShelf.prototype.add = function(item) {
         if (!item || !policy) return;
         this.items = policy.compactResources(this.items.concat([item]), 12);
         if (!this.host) this.mount();
+        else this.attachHost();
         this.render();
     };
 
@@ -117,10 +141,24 @@
         this.badge.style.display = this.expanded ? "none" : "flex";
     };
 
-    ResourceShelf.prototype.show = function() { this.expanded = true; this.render(); };
+    ResourceShelf.prototype.show = function() {
+        if (!this.items.length) return;
+        if (!this.host) this.mount();
+        else this.attachHost();
+        this.expanded = true;
+        this.render();
+    };
     ResourceShelf.prototype.hide = function() { this.expanded = false; this.render(); };
-    ResourceShelf.prototype.reset = function() { this.items = []; this.expanded = false; this.render(); };
+    ResourceShelf.prototype.reset = function() {
+        this.items = [];
+        this.expanded = false;
+        if (this.host) this.render();
+    };
     ResourceShelf.prototype.destroy = function() {
+        if (this._bodyWaiter) {
+            document.removeEventListener("DOMContentLoaded", this._bodyWaiter);
+            this._bodyWaiter = null;
+        }
         if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
         this.host = this.shadow = this.badge = this.panel = null;
         this.items = [];

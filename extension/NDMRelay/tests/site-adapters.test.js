@@ -66,6 +66,15 @@ test("canonicalizes YouTube watch, short, live, and youtu.be links", () => {
     );
 });
 
+test("page-level adapters prefer in-page UI without waiting for inject", () => {
+    assert.equal(adapters.prefersInlineUI("https://www.bilibili.com/video/BV1abc"), true);
+    assert.equal(adapters.prefersInlineUI("https://www.youtube.com/watch?v=abc"), true);
+    assert.equal(adapters.prefersInlineUI("https://www.bilibili.com/"), false);
+    assert.equal(adapters.prefersInlineUI("https://app.bilibili.com/"), false);
+    assert.equal(adapters.prefersInlineUI("https://x.com/user/status/123"), false);
+    assert.equal(adapters.prefersInlineUI("https://example.com/watch"), false);
+});
+
 test("suppresses a floating candidate only after the nearby native action exists", () => {
     const button = {};
     const article = {
@@ -87,4 +96,19 @@ test("uses the page action for single-video sites and keeps a fallback when inje
     const withoutAction = { querySelector: () => null };
     assert.equal(adapters.hasInlineAction(null, "https://www.youtube.com/watch?v=abc", withAction), true);
     assert.equal(adapters.hasInlineAction(null, "https://www.youtube.com/watch?v=abc", withoutAction), false);
+    assert.equal(adapters.hasInlineAction("https://www.youtube.com/watch?v=abc", undefined, withAction), true);
+    assert.equal(adapters.hasInlineAction(null, "https://www.bilibili.com/video/BV1abc", {
+        querySelector(selector) {
+            return selector === '[data-better-ndm-site-action="bilibili"]' ? {} : null;
+        }
+    }), true);
+});
+
+test("treats a lone location href as the page URL when checking page-level injects", () => {
+    const withAction = {
+        querySelector(selector) {
+            return selector === '[data-better-ndm-site-action="bilibili"]' ? {} : null;
+        }
+    };
+    assert.equal(adapters.hasInlineAction("https://www.bilibili.com/video/BV1abc", undefined, withAction), true);
 });

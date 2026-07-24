@@ -35,8 +35,18 @@ current extension author.
 - Vimeo, Instagram, and Douyin have canonical page adapters and
   conservative inline insertion points. If a site changes its toolbar markup,
   NDM Relay leaves the page untouched instead of falling back to a permanent
-  overlay; the generic media panel remains available on hover or from the
-  toolbar button.
+  overlay; the generic media panel remains available as a fallback only when
+  that in-page inject is missing.
+- Once an adapted site's in-page button is present, the legacy floating
+  **Choose quality and download** strip (and its NDM count badge) stays hidden
+  so it does not compete with the native-looking control. On Bilibili/YouTube
+  video URLs the float is never mounted at all (media sniffs during login-heavy
+  normal profiles used to fight SPA hydration). Ordinary sites keep the hover
+  float; document/installer **Page resources** shelves still appear when real
+  files are detected.
+- Bilibili injection waits until `window.load`, then watches only the video
+  toolbar subtree — never `documentElement` or the whole `body` — so the player
+  and comment section can finish hydrating in a normal (non-incognito) profile.
 - Both site actions send a canonical page URL with the `media-page` route. The
   Mac app resolves the real video, opens its quality picker, and downloads the
   selected rendition; the raw page HTML is never treated as the file.
@@ -55,12 +65,20 @@ resume ordinary browser download catching.
   DMG, and PKG responses appear in a compact **Page resources** shelf.
 - Each row shows the real filename, type, size when known, and source host.
 - Detection never starts a download. The URL is sent to NDM only after the user
-  presses **Download**.
+  presses **Download**, and that button always uses the row's own URL — never
+  the tab's video page.
+- Tiny responses (< 1 KB), plain `txt` without `Content-Disposition: attachment`,
+  telemetry hosts such as `data.bilibili.com`, and junk names like `web.txt` are
+  excluded so the shelf stays useful.
 - Signed/range variants and strong filename/type/size mirrors of the same
   resource are collapsed. JavaScript, JSON,
   images, DAT/BIN traffic, and raw video transport fragments are excluded.
-- The shelf minimizes to a persistent resource-count pill, and the NDM Relay
-  toolbar button can open it again.
+- The shelf mounts under `document.body` only when it has items (never as a
+  sibling of `<body>` under `<html>`), minimizes to a persistent resource-count
+  pill, and the NDM Relay toolbar button can open it again.
+- Direct installers/archives/documents (`.dmg`, `.pdf`, `.zip`, …) captured from
+  a video site still download as ordinary files. Only media sniffs and explicit
+  video-page actions enter the yt-dlp quality flow.
 
 ## Installation
 

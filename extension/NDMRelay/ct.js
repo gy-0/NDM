@@ -135,8 +135,26 @@ O.Y = function(d) {
 O.K = function(d) {
     this.p && (this.p.style.display = d ? "none" : "none" == this.p.style.display ? "flex" : "none")
 };
+O.siteHasInlineUI = function() {
+    if (!globalThis.NDMRelaySiteAdapters) return false;
+    var href = window.location.href;
+    // Page-level adapters: suppress the float as soon as we are on a known
+    // video URL. Waiting for the inject to land was too late — media sniffs
+    // already mounted overlays during Bilibili/YouTube boot.
+    if (NDMRelaySiteAdapters.prefersInlineUI(href)) return true;
+    return Boolean(NDMRelaySiteAdapters.siteForURL(href) &&
+        NDMRelaySiteAdapters.hasInlineAction(this.m, href));
+};
 O.show = function(d) {
     if (!this.h) return;
+    // Adapted sites (Bilibili/YouTube/…) use the in-page button. Never resurrect
+    // the floating strip once that native action is present.
+    if (this.siteHasInlineUI()) {
+        this.h.style.display = "none";
+        this.h.setAttribute("aria-hidden", "true");
+        this.h.style.pointerEvents = "none";
+        return;
+    }
     this.h.style.display = this.D.H ? "" : "none";
     this.h.removeAttribute("aria-hidden");
     this.h.style.opacity = 1;
@@ -208,8 +226,6 @@ O.I = function(d) {
 };
 O.render = function() {
     if (!this.panel || !this.h) return;
-    var supportedSite = globalThis.NDMRelaySiteAdapters &&
-        NDMRelaySiteAdapters.siteForURL(window.location.href);
     var d = this,
         raw = this.items.map(function(g) {
             return d.D.N(g)
@@ -241,11 +257,16 @@ O.render = function() {
     this.count.innerText = a;
     this.count.style.display = 1 < a ? "" : "none";
     this.badge.setAttribute("aria-label", NDMRelayText("显示检测到的 " + a + " 个视频下载选项", "Show " + a + " detected video download options"));
-    var siteHasInlineUI = supportedSite && globalThis.NDMRelaySiteAdapters &&
-        NDMRelaySiteAdapters.hasInlineAction(window.location.href);
-    var shouldFloat = a && this.D.H && !(siteHasInlineUI && !this.toolbarPinned);
+    // Pass the media element so X/Instagram can scope to the nearby article;
+    // page-level adapters (YouTube/Bilibili/…) query document for the inject.
+    var siteHasInlineUI = this.siteHasInlineUI();
+    var shouldFloat = a && this.D.H && !siteHasInlineUI;
     this.h.style.display = shouldFloat ? "" : "none";
     shouldFloat ? this.h.removeAttribute("aria-hidden") : this.h.setAttribute("aria-hidden", "true");
+    if (!shouldFloat) {
+        this.h.style.pointerEvents = "none";
+        this.p && (this.p.style.display = "none");
+    }
     this.D.updateMediaCount();
     this.v()
 };
@@ -457,10 +478,13 @@ if (!window.o) {
         }
     };
     O.updateMediaCount = function() {
+        // Do not badge adapted tabs where the in-page action already owns download.
         var count = 0;
         for (var key in this.i) {
             var panel = this.i[key];
-            if (panel && panel.items) count += panel.items.length
+            if (!panel || !panel.items || !panel.items.length) continue;
+            if (panel.siteHasInlineUI && panel.siteHasInlineUI()) continue;
+            count += panel.items.length
         }
         this.port.postMessage([21, Math.min(99, count)])
     };
@@ -480,10 +504,18 @@ if (!window.o) {
     };
     O.downloadResource = function(a) {
         if (!a || !a["2"]) return;
-        var b = a.id || F(a.resourceKey || a["2"]);
-        a.id = b;
-        a["6"] = "normal";
-        this.A[b] = a;
+        // Shelf rows are ordinary files. Keep the item URL in field 2 and mark
+        // ltype normal so the Mac host does not rewrite it to the tab's video
+        // page (the previous bug turned web.txt / .dmg clicks into yt-dlp probes).
+        var item = {};
+        for (var key in a) {
+            if (Object.prototype.hasOwnProperty.call(a, key)) item[key] = a[key]
+        }
+        var b = item.id || F(item.resourceKey || item["2"]);
+        item.id = b;
+        item["6"] = "normal";
+        item.betterPageResolver = !1;
+        this.A[b] = item;
         this.oa(b)
     };
     O.socialVideoPageURL = function(a) {
@@ -526,6 +558,8 @@ if (!window.o) {
         for (var c in this.i) {
             var d = this.i[c];
             if (!d || !d.h || !d.visibleItems.length) continue;
+            // Prefer the embedded site button; skip floating recovery when it exists.
+            if (d.siteHasInlineUI && d.siteHasInlineUI()) continue;
             var e = d.m && d.m.getBoundingClientRect ? d.m.getBoundingClientRect() : null;
             var g = e && e.bottom >= 0 && e.top <= window.innerHeight ? Math.abs(e.top) : 1E12;
             g < b && (a = d, b = g)
@@ -785,6 +819,15 @@ if (!window.o) {
             h = -1,
             l = null,
             m;
+        // Adapted video pages download via the in-page button. Never create the
+        // legacy float here: logged-in Bilibili tabs emit many media sniffs and
+        // mounting overlays during Vue hydration blacked out the player.
+        if (globalThis.NDMRelaySiteAdapters && NDMRelaySiteAdapters.prefersInlineUI(window.location.href)) {
+            a.id || (a.id = F(a["2"]));
+            e.A[a.id] = a;
+            e.updateMediaCount();
+            return;
+        }
         f = f && RegExp(".*facebook.com$|.*vimeo.com$|.*youtube.com$", "i").test(window.location.host) && !(a.fEx && "VTT" == a.fEx.toUpperCase()) && !(!a.fS || 4194304 < a.fS);
         a.id || (a.id = F(a["2"]));
         c ||= this.ka(a["2"], b);
@@ -989,9 +1032,12 @@ if (!window.o) {
         this.l = null
     };
     O.fa = function() {
-        var a = this.H ? "" : "none";
         try {
-            for (var b in this.i) this.i[b].h.style.display = a
+            for (var b in this.i) {
+                var panel = this.i[b];
+                if (panel && panel.render) panel.render();
+                else if (panel && panel.h) panel.h.style.display = this.H ? "" : "none"
+            }
         } catch (c) {}
     };
     O.ca = function() {

@@ -713,7 +713,7 @@ W.W = function(a) {
                                 k =
                                     "vtt" == b.h.toLowerCase() || "vtt" == b.u.toLowerCase() || "srt" == b.h.toLowerCase() || "srt" == b.u.toLowerCase();
                                 var O = null;
-                                "m3u8" == b.h.toLowerCase() || "m3u8" == b.u.toLowerCase() ? O = new X(this) : k || "POST" == b["1"] || Q(e.toLowerCase(), "vimeo") || Q(e.toLowerCase(), "youtube") || Q(e.toLowerCase(), "google") || "txt" != b.h.toLowerCase() && "js" != b.h.toLowerCase() || "xmlhttprequest" != b.type || b["7"] && 307200 < b["7"] || (O = new X(this));
+                                "m3u8" == b.h.toLowerCase() || "m3u8" == b.u.toLowerCase() ? O = new X(this) : k || "POST" == b["1"] || Q(e.toLowerCase(), "vimeo") || Q(e.toLowerCase(), "youtube") || Q(e.toLowerCase(), "google") || Q(e.toLowerCase(), "bilibili") || Q(e.toLowerCase(), "hdslb") || "txt" != b.h.toLowerCase() && "js" != b.h.toLowerCase() || "xmlhttprequest" != b.type || b["7"] && 307200 < b["7"] || (O = new X(this));
                                 if (O) S({
                                     2: b["2"],
                                     L: function(v) {

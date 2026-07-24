@@ -15,18 +15,55 @@ test("resource shelf uses a solid restrained surface instead of decorative glass
     assert.match(shelf, /可下载资源/);
 });
 
+test("resource shelf mounts under body lazily and never under html", () => {
+    const shelf = source("resource-shelf.js");
+    assert.match(shelf, /document\.body\.appendChild/);
+    assert.doesNotMatch(shelf, /documentElement \|\| document\)\.appendChild/);
+    assert.match(shelf, /Defer DOM insertion|documentElement mounts broke/);
+});
+
 test("generic media control gets out of the way and remains toolbar-recoverable", () => {
     const content = source("ct.js");
     assert.doesNotMatch(content, /backdrop-filter/i);
     assert.match(content, /badgeLabel\.innerText = "NDM"/);
     assert.match(content, /style\.opacity = 0/);
     assert.match(content, /showAllPanels/);
-    assert.match(content, /siteForURL\(window\.location\.href\)/);
     assert.match(content, /postMessage\(\[21,/);
     assert.doesNotMatch(content, /style\.opacity = 0\.82/);
+    // Adapted sites hide the float once the in-page action exists; pass the
+    // media node so X/Instagram can scope, and never resurrect via toolbar pin.
+    assert.match(content, /hasInlineAction\(this\.m,\s*href\)|hasInlineAction\(this\.m,\s*window\.location\.href\)/);
+    assert.match(content, /prefersInlineUI\(window\.location\.href\)|prefersInlineUI\(href\)/);
+    assert.match(content, /siteHasInlineUI/);
+    assert.match(content, /shouldFloat = a && this\.D\.H && !siteHasInlineUI/);
     const background = source("bg.js");
     assert.match(background, /updateMediaBadge/);
     assert.match(background, /case 21:/);
+});
+
+test("bilibili adapter never observes documentElement and defers toolbar watch", () => {
+    const adapters = source("site-adapters.js");
+    assert.match(adapters, /watchBilibiliToolbar/);
+    assert.match(adapters, /prefersInlineUI/);
+    assert.doesNotMatch(adapters, /observe\(document\.documentElement/);
+    assert.doesNotMatch(adapters, /document\.body \|\| document\.documentElement/);
+    assert.match(adapters, /Never observe documentElement/);
+});
+
+test("bilibili NDM chip mounts left of video-tool-more outside the fold", () => {
+    const adapters = source("site-adapters.js");
+    assert.match(adapters, /video-tool-more/);
+    assert.match(adapters, /video-toolbar-right-item/);
+    assert.match(adapters, /insertBefore\(wrapper,\s*more\)/);
+    assert.match(adapters, /closest\("\.video-tool-more"\)/);
+    assert.doesNotMatch(adapters, /video-toolbar-left-main[\s\S]{0,200}appendChild\(wrapper\)/);
+});
+
+test("content script keeps resource downloads as normal file handoffs", () => {
+    const content = source("ct.js");
+    assert.match(content, /downloadResource = function/);
+    assert.match(content, /item\["6"\] = "normal"/);
+    assert.match(content, /betterPageResolver = !1/);
 });
 
 test("site-native actions retain explicit accessible labels", () => {

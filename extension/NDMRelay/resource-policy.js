@@ -35,9 +35,50 @@
         dmg: ["installer", "DMG"], pkg: ["installer", "PKG"]
     };
     var VOLATILE_QUERY_KEYS = /^(?:bytestart|byteend|range|rn|rbuf|sq|part|chunk|fragment|token|signature|sig|expires|policy|key-pair-id|googleaccessid|x-amz-.+)$/i;
+    // Shelf items should look like real files a person would save. Tiny
+    // telemetry beacons (e.g. data.bilibili.com/web.txt at 2 B) must never
+    // crowd out PDFs, archives, or installers.
+    var MIN_USEFUL_BYTES = 1024;
+    var MIN_ATTACHMENT_BYTES = 64;
+    var NOISE_HOST_RE = /(?:^|\.)(?:data\.bilibili\.com|api\.bilibili\.com|s\d*\.hdslb\.com|hm\.baidu\.com|google-analytics\.com|googletagmanager\.com|doubleclick\.net|scorecardresearch\.com|facebook\.net|facebook\.com|sentry\.io)$/i;
+    var NOISE_NAME_RE = /^(?:web|log|logs|beacon|collect|ping|pixel|telemetry|analytics|track|tracking|heartbeat|health|ok|cors|preflight|favicon)(?:\.[a-z0-9]+)?$/i;
 
     function rawValue(item, key, fallback) {
         return item && item[key] !== undefined && item[key] !== null ? item[key] : fallback;
+    }
+
+    function hostFor(url) {
+        try { return new URL(String(url || "")).hostname.replace(/^www\./i, ""); }
+        catch (_) { return ""; }
+    }
+
+    function isNoiseHost(host) {
+        return NOISE_HOST_RE.test(String(host || ""));
+    }
+
+    function isNoiseFilename(name) {
+        var base = String(name || "").trim().toLowerCase().split(/[?#]/, 1)[0];
+        if (!base) return false;
+        if (NOISE_NAME_RE.test(base)) return true;
+        var bare = base.replace(/\.[^.]+$/, "");
+        return bare !== base && NOISE_NAME_RE.test(bare);
+    }
+
+    function isUsefulCandidate(meta) {
+        meta = meta || {};
+        var url = String(rawValue(meta, "2", rawValue(meta, "url", "")) || "");
+        var host = hostFor(url);
+        var name = filenameFor(meta);
+        var extension = extensionFor(meta);
+        var size = sizeFor(meta);
+        var isAttachment = Boolean(meta.isAttachment);
+        if (isNoiseHost(host) || isNoiseFilename(name)) return false;
+        // Plain text from XHR is almost always a beacon or API stub, not a
+        // document the shelf should advertise. Keep attachment downloads only.
+        if (extension === "txt" && !isAttachment) return false;
+        if (extension === "txt" && size > 0 && size < MIN_USEFUL_BYTES) return false;
+        if (size > 0 && size < (isAttachment ? MIN_ATTACHMENT_BYTES : MIN_USEFUL_BYTES)) return false;
+        return true;
     }
 
     function contentTypeFor(item) {
@@ -119,11 +160,11 @@
         if (!extension || !TYPES[extension]) return null;
         var url = String(rawValue(meta, "2", rawValue(meta, "url", "")) || "");
         if (!/^https?:\/\//i.test(url)) return null;
+        if (!isUsefulCandidate(meta)) return null;
         var type = TYPES[extension];
         var name = filenameFor(meta) || (type[1] + " resource." + extension);
         if (name.toLowerCase().slice(-(extension.length + 1)) !== "." + extension) name += "." + extension;
-        var host = "";
-        try { host = new URL(url).hostname.replace(/^www\./i, ""); } catch (_) {}
+        var host = hostFor(url);
         var candidate = {
             1: String(rawValue(meta, "1", "GET") || "GET"),
             2: url,
@@ -188,6 +229,9 @@
         extensionFor: extensionFor,
         filenameFor: filenameFor,
         formatSize: formatSize,
+        isNoiseFilename: isNoiseFilename,
+        isNoiseHost: isNoiseHost,
+        isUsefulCandidate: isUsefulCandidate,
         resourceKey: resourceKey,
         resourceIdentity: resourceIdentity,
         sizeFor: sizeFor
