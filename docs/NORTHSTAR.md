@@ -115,7 +115,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 步 | 内容 | 备注 |
 |---|---|---|
 | C1-1 | 纯逻辑：转写资格与计划 | ✅ 2026-07-24 `TranscriptionWorkflow.decide` + `Environment`/`Plan`/`Decision`/`UnavailableReason`，30 个测试 |
-| C1-2 | 纯逻辑：带时间轴结果 → SRT 序列化（时间戳格式、CJK 断行、过短/过长 cue 合并） | 纯函数，极易测 |
+| C1-2 | 纯逻辑：时间轴 → SRT + 纯文本文稿 | ✅ 2026-07-24 `TranscriptDocument`（`TranscriptSegment` 中性输入、SRT、可读文稿），35 个测试 |
 | C1-3 | `SpeechTranscriptionEngine`（NDMEngine，`@available(macOS 26, *)`）：音频转换管线 + 结果收集。探针已验证可行 | 集成测试用 `say` 生成音频，本地无网络，低版本 skip |
 | C1-4 | 语言包就绪：`AssetInventory` 状态与安装请求呈现为明确阶段 | |
 | C1-5 | 接入交付：字幕落盘命名 + 进入 CompletionStack + 进度并入单调旅程 | |
@@ -149,6 +149,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | C1-2 SRT 与文稿序列化 | `TranscriptDocument`：中性 `TranscriptSegment` 输入（C1-3 只需做 Speech→它的映射，序列化层永远可离线测）、SRT、以及**另出一份可读文稿**——文稿与字幕是两种文档不是两种渲染：字幕受"这行字幕在屏幕上停留时间内能读完多少"约束，文稿没有时钟、按停顿分段、不做行宽限制。明确决定：行尾用 LF（既有 fixture 用 LF、本平台播放器全接受、在 macOS 编辑后不会变成混合行尾），CRLF 只是 SubRip 的历史约定。毫秒按整数毫秒分解以正确进位（分别 round 秒和小数会让 59.9995 变成不存在的 `00:00:59,1000`）。CJK 按字数断行（16 全角/行）而非按空格，标点不许开行；拉丁按词断（42 字符/行）。**肉眼检查抓到一个所有单测都没抓到的 bug**：合并条件写了 `gap <= 0`，本意是捕捉重叠，但 `gap == 0` 只是"相邻"，而字幕几乎全是相邻的——于是任意两条合理长度的 cue 只要合起来不超 7 秒就被强行融成一条。改为 `gap < 0` 并补两个回归测试。35 个测试，含一个断言完整字节的中文实例 |
 | 2026-07-24 | C1-1 资格与计划层 | `TranscriptionWorkflow` 从 15 行扩到完整决策层：`Environment`（可用性/支持语言/已装语言/首选语言全部注入，纯层不 import Speech，所以测试在任何系统版本都能跑）、`Plan`（含 `source` 记录**为什么**选这个语言，猜错了可追溯）、`Decision`、`UnavailableReason`（人话文案 + 测试禁术语）。语言优先级：站点 > 标题文字系统 > 系统首选 > 英文兜底；站点故意压过系统首选（B站视频是中文语音，与界面语言无关），但全球平台（YouTube/TikTok/Vimeo）**不按域名猜**。假名优先于汉字，否则日语视频会被当成中文。30 个测试。两处自我更正：① 上一轮写的"字幕必须带语言后缀"与既有 `normalizeSubtitleSidecar`（故意不带语言）冲突，已改为留给 C1-5 明确决定；② 实测本机 `Locale.preferredLanguages` 是 `["zh-Hans-US", "en-US"]`——带非中文区域，我原来的实现只靠 base 语言回退**碰巧**命中 zh_CN，改为按脚本子标签判断，否则支持列表顺序一变简体用户就会被分到繁体模型 |
 | 2026-07-24 | C1 选型与拆解（未写实现） | 本轮只做决策，不写实现代码。所有选型依据都是本机实测：写探针查到 `SpeechAnalyzer`/`SpeechTranscriber`/`AssetInventory` 是 `@available(anyAppleOS 26, *)`、45 语言、中文三档全支持、`zh_CN` 在原装机器上**已安装**；再用 `say` 生成真语音做端到端转写，中文近乎完美、约 16 倍实时。据此判定 **whisper.cpp 明确不做**（模型体积 + 需自建签名分发 vs Apple 免费已装已签名），并接受"转写只在 macOS 26+ 按功能门控"这个代价，不抬高整个 App 最低版本。拆成 C1-1…C1-6，第一步是纯逻辑的资格与计划层 |
 | 2026-07-24 | A9 无声交付要说出来 | 新增 `DeliveryNote`（成功但不是用户想要的交付事实，与描述失败的 `DownloadDiagnostic` 分开）+ `DownloadTask.deliveryNote` 列与迁移 + `DownloadProgress.deliveryNote` + `runEngine` 落库。HLS 混流后探测输出真实音频流；探测复用了仓库里**已有的** `FFmpegTool.streamPresence`（我先写了个重复的解析器，发现后删掉了）。探测失败返回 nil 而非 false，避免把"测不出来"当成"确认无声"。测试：存储往返、未知键、清除、迁移幂等、文案禁术语；原本钉住"静默无声"的测试改为断言必须落备注；音频只是偏短则明确断言**不**落备注。364 passed。`NDMProbe` 首跑 B站 失败（`下载失败`）——先核对手改的 SQL 占位符（23/23 正确），再单跑与全跑各一次均 3/3 通过，判定为该视频本会话被下载多次后的限流抖动，非回归 |
