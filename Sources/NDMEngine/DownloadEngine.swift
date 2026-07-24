@@ -533,6 +533,13 @@ public actor DownloadEngine {
     }
 
     private func probeRemote() async throws -> Probe {
+        // A body-bearing endpoint rarely answers HEAD usefully — it commonly 405s,
+        // or worse, reports the length of a page instead of the attachment. Probe
+        // such tasks with the real method so the size we plan against is the size
+        // the download will actually produce.
+        if carriesBody {
+            return try await probeWithRangeGet()
+        }
         var req = URLRequest(url: cleanURL)
         req.httpMethod = "HEAD"
         applyHeaders(to: &req)
@@ -568,9 +575,9 @@ public actor DownloadEngine {
 
     private func probeWithRangeGet() async throws -> Probe {
         var req = URLRequest(url: cleanURL)
-        req.httpMethod = "GET"
         req.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         applyHeaders(to: &req)
+        applyMethodAndBody(to: &req)
         let (_, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw EngineError.invalidResponse }
         if http.statusCode == 401 || http.statusCode == 407 {
@@ -956,7 +963,6 @@ public actor DownloadEngine {
         }
 
         var req = URLRequest(url: cleanURL)
-        req.httpMethod = "GET"
         if usesByteRange,
            let remaining = SegmentFileFormat.remainingRange(for: segment, have: have) {
             if remaining.end < 0 {
@@ -964,11 +970,12 @@ public actor DownloadEngine {
             } else {
                 req.setValue("bytes=\(remaining.start)-\(remaining.end)", forHTTPHeaderField: "Range")
             }
-            log("Sending Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) Range = \(remaining.start)-\(remaining.end)")
+            log("Sending Http-\(normalizedMethod) for Socket ( \(Int(segment.segmentId) + 1) ) Range = \(remaining.start)-\(remaining.end)")
         } else {
-            log("Sending clean Http-GET for Socket ( \(Int(segment.segmentId) + 1) ) without Range")
+            log("Sending clean Http-\(normalizedMethod) for Socket ( \(Int(segment.segmentId) + 1) ) without Range")
         }
         applyHeaders(to: &req)
+        applyMethodAndBody(to: &req)
 
         let fileURL = SegmentFileFormat.segmentFileURL(id: segment.segmentId, in: workDirectory)
         let engine = self
@@ -1243,6 +1250,33 @@ public actor DownloadEngine {
         engineState = s
         if old != s {
             log("DownloadEngine State Changed : \(old.rawValue) -> \(s.rawValue)")
+        }
+    }
+
+    /// Methods that may carry `request.body`. This allowlist is load-bearing:
+    /// `DownloadTask.postData` doubles as storage for serialized yt-dlp options,
+    /// and those tasks keep method GET. Gating the body on the method keeps media
+    /// option JSON from ever being sent as a request body.
+    private static let bodyBearingMethods: Set<String> = ["POST", "PUT", "PATCH"]
+
+    private var normalizedMethod: String {
+        let m = request.method.uppercased()
+        return m.isEmpty ? "GET" : m
+    }
+
+    private var carriesBody: Bool {
+        Self.bodyBearingMethods.contains(normalizedMethod)
+            && !(request.body?.isEmpty ?? true)
+    }
+
+    /// Apply the task's real HTTP method and body. Must run *after*
+    /// `applyHeaders` so a browser-captured Content-Type wins over our default.
+    private func applyMethodAndBody(to req: inout URLRequest) {
+        req.httpMethod = normalizedMethod
+        guard carriesBody, let body = request.body else { return }
+        req.httpBody = body
+        if req.value(forHTTPHeaderField: "Content-Type") == nil {
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         }
     }
 

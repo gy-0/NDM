@@ -17,6 +17,8 @@ final class LocalRangeServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "ndm.test.httpserver")
     private let recordLock = NSLock()
     private var _recordedRanges: [String] = []
+    private var _recordedMethods: [String] = []
+    private var _recordedBodies: [String] = []
     private(set) var port: UInt16 = 0
 
     init(
@@ -44,6 +46,19 @@ final class LocalRangeServer: @unchecked Sendable {
     var recordedRanges: [String] {
         recordLock.lock(); defer { recordLock.unlock() }
         return _recordedRanges
+    }
+
+    /// Request methods in arrival order, so tests can assert the engine actually
+    /// spoke the verb the task asked for instead of silently downgrading to GET.
+    var recordedMethods: [String] {
+        recordLock.lock(); defer { recordLock.unlock() }
+        return _recordedMethods
+    }
+
+    /// Request bodies (empty string when a request carried none).
+    var recordedBodies: [String] {
+        recordLock.lock(); defer { recordLock.unlock() }
+        return _recordedBodies
     }
 
     func start() throws {
@@ -75,35 +90,73 @@ final class LocalRangeServer: @unchecked Sendable {
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, _, _ in
-            guard let self, let data, let req = String(data: data, encoding: .utf8) else {
+        readRequest(connection, buffer: Data())
+    }
+
+    /// URLSession commonly writes a POST's headers and body as separate TCP
+    /// segments, so a single `receive` sees headers only. Keep reading until the
+    /// declared `Content-Length` has arrived, otherwise body assertions in tests
+    /// would silently pass against an empty string.
+    private func readRequest(_ connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, _ in
+            guard let self else {
                 connection.cancel()
                 return
             }
-            var rangeOrdinal: Int?
-            if let range = req.components(separatedBy: "\r\n")
-                .first(where: { $0.lowercased().hasPrefix("range:") }) {
-                self.recordLock.lock()
-                self._recordedRanges.append(range)
-                rangeOrdinal = self._recordedRanges.count
-                self.recordLock.unlock()
+            var accumulated = buffer
+            if let data { accumulated.append(data) }
+            guard let req = String(data: accumulated, encoding: .utf8) else {
+                connection.cancel()
+                return
             }
-            let response = self.buildResponse(
-                for: req,
-                rangeOrdinal: rangeOrdinal
-            )
-            let send = {
-                connection.send(content: response, completion: .contentProcessed { _ in
+            guard let sep = req.range(of: "\r\n\r\n") else {
+                if isComplete || data == nil {
                     connection.cancel()
-                })
+                } else {
+                    self.readRequest(connection, buffer: accumulated)
+                }
+                return
             }
-            let start = self.rangeStart(in: req)
-            let delay = self.responseDelay + (start.map(self.rangeResponseDelay) ?? 0)
-            if delay > 0 {
-                self.queue.asyncAfter(deadline: .now() + delay, execute: send)
-            } else {
-                send()
+            let declared = req.components(separatedBy: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.split(separator: ":", maxSplits: 1).last?
+                    .trimmingCharacters(in: .whitespaces) ?? "") } ?? 0
+            if req[sep.upperBound...].utf8.count < declared, !isComplete, data != nil {
+                self.readRequest(connection, buffer: accumulated)
+                return
             }
+            self.respond(connection, req: req, bodyStart: sep.upperBound)
+        }
+    }
+
+    private func respond(_ connection: NWConnection, req: String, bodyStart: String.Index) {
+        recordLock.lock()
+        _recordedMethods.append(
+            (req.components(separatedBy: "\r\n").first ?? "")
+                .split(separator: " ").first.map(String.init) ?? ""
+        )
+        _recordedBodies.append(String(req[bodyStart...]))
+        var rangeOrdinal: Int?
+        let rangeLine = req.components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("range:") }
+        if let rangeLine {
+            _recordedRanges.append(rangeLine)
+            rangeOrdinal = _recordedRanges.count
+        }
+        recordLock.unlock()
+
+        let response = buildResponse(for: req, rangeOrdinal: rangeOrdinal)
+        let send = {
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+        }
+        let start = rangeStart(in: req)
+        let delay = responseDelay + (start.map(rangeResponseDelay) ?? 0)
+        if delay > 0 {
+            queue.asyncAfter(deadline: .now() + delay, execute: send)
+        } else {
+            send()
         }
     }
 
