@@ -12,6 +12,54 @@ final class DownloadPresentationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testMostRecentActivityOrderingPromotesOldTaskAfterRetry() {
+        let base = Date(timeIntervalSince1970: 1_750_000_000)
+        let newlyInserted = DownloadTask(
+            id: 20,
+            url: "https://example.com/new",
+            lastTry: base.addingTimeInterval(10)
+        )
+        let retriedOlderRow = DownloadTask(
+            id: 2,
+            url: "https://example.com/retried",
+            lastTry: base.addingTimeInterval(20)
+        )
+
+        XCTAssertTrue(
+            TaskPresentationFormatting.isMoreRecentlyActive(
+                retriedOlderRow,
+                than: newlyInserted
+            )
+        )
+        XCTAssertFalse(
+            TaskPresentationFormatting.isMoreRecentlyActive(
+                newlyInserted,
+                than: retriedOlderRow
+            )
+        )
+    }
+
+    func testMostRecentActivityUsesCompletionAndFallsBackToID() {
+        let base = Date(timeIntervalSince1970: 1_750_000_000)
+        let completed = DownloadTask(
+            id: 1,
+            url: "https://example.com/completed",
+            lastTry: base,
+            completedAt: base.addingTimeInterval(30)
+        )
+        let retrying = DownloadTask(
+            id: 99,
+            url: "https://example.com/retrying",
+            lastTry: base.addingTimeInterval(20)
+        )
+        XCTAssertEqual(completed.mostRecentActivity, base.addingTimeInterval(30))
+        XCTAssertTrue(TaskPresentationFormatting.isMoreRecentlyActive(completed, than: retrying))
+
+        let lowerID = DownloadTask(id: 3, url: "https://example.com/a")
+        let higherID = DownloadTask(id: 4, url: "https://example.com/b")
+        XCTAssertTrue(TaskPresentationFormatting.isMoreRecentlyActive(higherID, than: lowerID))
+    }
+
     func testSegmentFractionRepresentsIndividualConnectionProgress() {
         let quarter = SegmentState(id: 2, start: 1_000, end: 1_399, completed: 100)
         XCTAssertEqual(quarter.length, 400)

@@ -1,6 +1,15 @@
 import AppKit
 import NDMCore
 
+/// The one visual object that survives the transfer-to-result handoff.
+/// Artwork expands into the completed hero; a generic file glyph moves into
+/// the hero's resting glyph position.
+struct CompletionHandoffPreview {
+    let image: NSImage
+    let rectInHero: NSRect
+    let isArtwork: Bool
+}
+
 /// "Now Downloading" cinema strip — the stage at the top of the task list
 /// while bytes are moving. One primary transfer gets cover art, an ambient
 /// glow in the cover's dominant color, a large rolling speed numeral, and a
@@ -35,6 +44,7 @@ final class NowDownloadingHeroView: NSView {
     private var displayedSpeed: Double = 0
     private var targetSpeed: Double = 0
     private var rollTimer: Timer?
+    private var lastRollUptime: TimeInterval?
     private var currentTaskID: Int64?
     private var currentCoverTaskID: Int64?
 
@@ -43,6 +53,11 @@ final class NowDownloadingHeroView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.masksToBounds = true
+        focusRingType = .default
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(L10n.nowDownloading)
+        setAccessibilityHelp(L10n.progressDetails)
 
         atmosphere.translatesAutoresizingMaskIntoConstraints = false
 
@@ -189,6 +204,24 @@ final class NowDownloadingHeroView: NSView {
         onActivateTask?(currentTaskID)
     }
 
+    override var acceptsFirstResponder: Bool { currentTaskID != nil }
+
+    override func keyDown(with event: NSEvent) {
+        let key = event.charactersIgnoringModifiers
+        if (key == " " || key == "\r"),
+           let currentTaskID {
+            onActivateTask?(currentTaskID)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let currentTaskID else { return false }
+        onActivateTask?(currentTaskID)
+        return true
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard currentTaskID != nil else { return nil }
         let menu = NSMenu()
@@ -215,8 +248,11 @@ final class NowDownloadingHeroView: NSView {
     func update(primary: TaskRowPresentation?, activeCount: Int) {
         guard let primary else {
             currentTaskID = nil
+            setAccessibilityLabel(L10n.nowDownloading)
+            setAccessibilityValue(nil)
             stopRolling()
             progressBar.isActive = false
+            segmentStrip.isActive = false
             return
         }
         let taskChanged = currentTaskID != primary.taskID
@@ -224,6 +260,12 @@ final class NowDownloadingHeroView: NSView {
 
         nameLabel.stringValue = primary.filename
         percentLabel.stringValue = primary.progressText
+        setAccessibilityLabel("\(L10n.nowDownloading): \(primary.filename)")
+        setAccessibilityValue(
+            [primary.progressText, primary.statusDetail]
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
+        )
 
         // Finishing tail: no bytes move in bursts, so the big speed numeral
         // would read a frozen "0". Show a stable breathing "即将完成…" instead
@@ -238,6 +280,7 @@ final class NowDownloadingHeroView: NSView {
             unitLabel.stringValue = ""
             startFinalizePulse()
             segmentStrip.isHidden = true
+            segmentStrip.isActive = false
             progressBar.isHidden = false
             progressBar.progress = primary.progressFraction
             progressBar.isActive = true
@@ -251,7 +294,7 @@ final class NowDownloadingHeroView: NSView {
         }
         stopFinalizePulse()
         metaLabel.stringValue = primary.statusDetail
-        eyebrowLabel.stringValue = L10n.nowDownloading
+        eyebrowLabel.stringValue = primary.isDownloading ? L10n.nowDownloading : primary.statusTitle
         speedLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .light)
 
         // Multiple live connections → show the parallel segment strip; a
@@ -260,19 +303,21 @@ final class NowDownloadingHeroView: NSView {
         if segments.count > 1 {
             segmentStrip.update(segments: segments)
             segmentStrip.isHidden = false
+            segmentStrip.isActive = primary.isDownloading
             progressBar.isHidden = true
             progressBar.isActive = false
         } else {
             segmentStrip.isHidden = true
+            segmentStrip.isActive = false
             progressBar.isHidden = false
             progressBar.progress = primary.progressFraction
-            progressBar.isActive = true
+            progressBar.isActive = primary.isDownloading
         }
         moreLabel.isHidden = activeCount <= 1
         if activeCount > 1 {
             moreLabel.stringValue = L10n.heroMoreActive(activeCount - 1)
         }
-        setTargetSpeed(primary.speedBytesPerSecond, jump: taskChanged)
+        updateSpeedTarget(from: primary, taskChanged: taskChanged)
 
         if taskChanged || currentCoverTaskID != primary.taskID {
             applyCover(for: primary, crossfade: !taskChanged || currentCoverTaskID != nil)
@@ -288,6 +333,8 @@ final class NowDownloadingHeroView: NSView {
 
     private func applyCover(for row: TaskRowPresentation, crossfade: Bool) {
         currentCoverTaskID = row.taskID
+        let allowsCrossfade = crossfade
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let cover = CoverArtCache.shared.image(for: row.taskID)
         if cover == nil {
             CoverArtCache.shared.ensureCover(
@@ -296,7 +343,7 @@ final class NowDownloadingHeroView: NSView {
                 localFile: row.localFileURL
             )
         }
-        if crossfade, coverView.image !== cover {
+        if allowsCrossfade, coverView.image !== cover {
             let transition = CATransition()
             transition.duration = 0.3
             transition.type = .fade
@@ -309,68 +356,118 @@ final class NowDownloadingHeroView: NSView {
             coverSymbol.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 40)
         }
         let glow = cover.flatMap { NDMChrome.dominantColor(from: $0) } ?? NDMChrome.accent
-        atmosphere.setAtmosphere(glow.withAlphaComponent(0.9), animated: crossfade)
+        atmosphere.setAtmosphere(glow.withAlphaComponent(0.9), animated: allowsCrossfade)
     }
 
-    // MARK: - Rolling numeral
+    /// Read-only transition geometry. This deliberately does not alter the
+    /// download state's layout, typography, rolling numeral, or progress lane.
+    func completionHandoffPreview() -> CompletionHandoffPreview? {
+        layoutSubtreeIfNeeded()
+        if let image = coverView.image, !coverView.isHidden {
+            return CompletionHandoffPreview(
+                image: image,
+                rectInHero: convert(coverView.bounds, from: coverView),
+                isArtwork: true
+            )
+        }
+        guard let image = coverSymbol.image else { return nil }
+        return CompletionHandoffPreview(
+            image: image,
+            rectInHero: convert(coverSymbol.bounds, from: coverSymbol),
+            isArtwork: false
+        )
+    }
 
-    /// Ease the displayed rate toward the live rate at 30 fps so the numeral
-    /// rolls smoothly between 1 s samples instead of snapping.
+    // MARK: - One-second average, display-rate rolling numeral
+
+    private func updateSpeedTarget(
+        from row: TaskRowPresentation,
+        taskChanged: Bool
+    ) {
+        guard row.isDownloading else {
+            setTargetSpeed(0, jump: false)
+            return
+        }
+
+        if taskChanged {
+            stopRollTimer()
+            setTargetSpeed(row.speedBytesPerSecond, jump: true)
+            return
+        }
+
+        setTargetSpeed(row.speedBytesPerSecond, jump: false)
+    }
+
+    /// The target changes once per completed one-second byte window. Between
+    /// targets, the visible numeral rolls at display cadence (up to 120 Hz).
     private func setTargetSpeed(_ speed: Double, jump: Bool) {
         targetSpeed = max(0, speed)
-        if jump {
+        if jump || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             displayedSpeed = targetSpeed
             renderSpeed()
+            stopRollTimer()
+            return
+        }
+        guard abs(targetSpeed - displayedSpeed) > max(targetSpeed, 1024) * 0.002 else {
+            displayedSpeed = targetSpeed
+            renderSpeed()
+            stopRollTimer()
             return
         }
         guard rollTimer == nil else { return }
-        rollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        lastRollUptime = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.rollTick()
             }
         }
+        rollTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func rollTick() {
+    private func rollTick(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        let elapsed = min(1.0 / 20.0, max(1.0 / 240.0, now - (lastRollUptime ?? now)))
+        lastRollUptime = now
         let delta = targetSpeed - displayedSpeed
-        // Snap within half a percent — close enough that digits stop moving.
-        if abs(delta) <= max(targetSpeed, 1024) * 0.005 {
+        if abs(delta) <= max(targetSpeed, 1024) * 0.002 {
             displayedSpeed = targetSpeed
             renderSpeed()
-            stopRolling()
+            stopRollTimer()
             return
         }
-        displayedSpeed += delta * 0.14
+        // Time-based easing keeps the same feel on 60 Hz and 120 Hz displays.
+        let response = 1 - exp(-elapsed / 0.20)
+        displayedSpeed += delta * response
         renderSpeed()
     }
 
     private func stopRolling() {
+        stopRollTimer()
+        displayedSpeed = 0
+        targetSpeed = 0
+    }
+
+    private func stopRollTimer() {
         rollTimer?.invalidate()
         rollTimer = nil
+        lastRollUptime = nil
     }
 
     private func renderSpeed() {
-        let (value, unit) = Self.speedParts(displayedSpeed)
+        let (value, unit) = SpeedNumeralFormatting.parts(displayedSpeed)
         speedLabel.stringValue = value
         unitLabel.stringValue = unit
-    }
-
-    private static func speedParts(_ bytesPerSecond: Double) -> (String, String) {
-        let kb = bytesPerSecond / 1024
-        if kb < 1000 {
-            return (String(format: kb < 100 ? "%.1f" : "%.0f", max(0, kb)), "KB/s")
-        }
-        let mb = kb / 1024
-        if mb < 1000 {
-            return (String(format: mb < 100 ? "%.1f" : "%.0f", mb), "MB/s")
-        }
-        return (String(format: "%.2f", mb / 1024), "GB/s")
     }
 
     // MARK: - Finalize pulse
 
     private func startFinalizePulse() {
         speedLabel.wantsLayer = true
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            speedLabel.layer?.removeAnimation(forKey: "finalizePulse")
+            speedLabel.layer?.opacity = 1
+            return
+        }
         guard speedLabel.layer?.animation(forKey: "finalizePulse") == nil else { return }
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 1.0
@@ -398,6 +495,32 @@ final class NowDownloadingHeroView: NSView {
 @MainActor
 final class HeroSegmentStrip: NSView {
     private var segments: [SegmentState] = []
+    private var targetSegments: [SegmentState] = []
+    private var displayTimer: Timer?
+    private var lastDisplayUptime: TimeInterval?
+
+    var isActive = false {
+        didSet {
+            guard oldValue != isActive else { return }
+            refreshActiveAnimation()
+        }
+    }
+
+    private func refreshActiveAnimation() {
+        if isActive && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                let breath = CABasicAnimation(keyPath: "opacity")
+                breath.fromValue = 1.0
+                breath.toValue = 0.64
+                breath.duration = 1.2
+                breath.autoreverses = true
+                breath.repeatCount = .infinity
+                breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer?.add(breath, forKey: "breathe")
+        } else {
+            layer?.removeAnimation(forKey: "breathe")
+            layer?.opacity = 1
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -408,8 +531,77 @@ final class HeroSegmentStrip: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func update(segments: [SegmentState]) {
-        self.segments = segments.sorted { $0.id < $1.id }
+        // Draw in physical byte order. Connection IDs describe workers, not
+        // necessarily the left-to-right order of the finished file.
+        let sorted = segments.sorted {
+            $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start
+        }
+        let shapeChanged = self.segments.map(\.id) != sorted.map(\.id)
+            || zip(self.segments, sorted).contains { $0.length != $1.length }
+        targetSegments = sorted
+        refreshActiveAnimation()
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            stopDisplayTimer()
+            self.segments = sorted
+            needsDisplay = true
+            return
+        }
+        if shapeChanged || self.segments.isEmpty {
+            self.segments = sorted
+            needsDisplay = true
+            return
+        }
+        startDisplayTimer()
+    }
+
+    private func startDisplayTimer() {
+        guard displayTimer == nil else { return }
+        lastDisplayUptime = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.displayTick()
+            }
+        }
+        displayTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func displayTick(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard segments.count == targetSegments.count else {
+            segments = targetSegments
+            stopDisplayTimer()
+            needsDisplay = true
+            return
+        }
+        let elapsed = min(1.0 / 20.0, max(1.0 / 240.0, now - (lastDisplayUptime ?? now)))
+        lastDisplayUptime = now
+        let response = 1 - exp(-elapsed / 0.11)
+        var settled = true
+        for index in segments.indices {
+            let current = Double(segments[index].completed)
+            let target = Double(targetSegments[index].completed)
+            let delta = target - current
+            if abs(delta) > max(1, Double(targetSegments[index].length) * 0.0002) {
+                segments[index].completed = Int64((current + delta * response).rounded())
+                settled = false
+            } else {
+                segments[index].completed = targetSegments[index].completed
+            }
+            segments[index].isFinished = targetSegments[index].isFinished
+        }
         needsDisplay = true
+        if settled { stopDisplayTimer() }
+    }
+
+    private func stopDisplayTimer() {
+        displayTimer?.invalidate()
+        displayTimer = nil
+        lastDisplayUptime = nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { stopDisplayTimer() }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -419,30 +611,37 @@ final class HeroSegmentStrip: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard !segments.isEmpty else { return }
-        let gap: CGFloat = segments.count > 24 ? 0 : 1.5
         let totalLength = segments.reduce(Int64(0)) { $0 + max(1, $1.length) }
-        let usableWidth = bounds.width - gap * CGFloat(segments.count - 1)
         let radius = bounds.height / 2
 
+        // Segment independence is encoded by each range's own filled byte
+        // span, not by decorative spacing. The file itself is one continuous
+        // range, so the track and adjacent completed spans remain seamless.
+        let clip = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        clip.addClip()
+        NSColor.labelColor.withAlphaComponent(0.10).setFill()
+        clip.fill()
+
         var x: CGFloat = 0
-        let track = NSColor.labelColor.withAlphaComponent(0.10)
         let fill = NDMChrome.accent
         for segment in segments {
             let frac = Double(max(1, segment.length)) / Double(totalLength)
-            let laneWidth = max(1, usableWidth * CGFloat(frac))
-            let laneRect = NSRect(x: x, y: 0, width: laneWidth, height: bounds.height)
-            track.setFill()
-            NSBezierPath(roundedRect: laneRect, xRadius: radius, yRadius: radius).fill()
+            let laneWidth = max(1, bounds.width * CGFloat(frac))
 
             let done = segment.length > 0
                 ? CGFloat(min(1, Double(segment.completed) / Double(segment.length)))
                 : (segment.isFinished ? 1 : 0)
             if done > 0.001 {
-                let fillRect = NSRect(x: x, y: 0, width: max(radius * 2, laneWidth * done), height: bounds.height)
+                let fillRect = NSRect(
+                    x: x,
+                    y: 0,
+                    width: max(1, laneWidth * done),
+                    height: bounds.height
+                )
                 fill.setFill()
-                NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius).fill()
+                fillRect.fill()
             }
-            x += laneWidth + gap
+            x += laneWidth
         }
     }
 }

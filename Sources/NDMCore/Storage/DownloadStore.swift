@@ -48,6 +48,7 @@ public final class DownloadStore: @unchecked Sendable {
             connections NUMERIC,
             lasttry NUMERIC,
             firsttry NUMERIC,
+            completedat NUMERIC,
             useragent TEXT,
             resumable NUMERIC,
             pageurl TEXT,
@@ -72,12 +73,29 @@ public final class DownloadStore: @unchecked Sendable {
         );
         """
         try exec(sql)
+        if !hasColumn("completedat", in: "downloads") {
+            try exec("ALTER TABLE downloads ADD COLUMN completedat NUMERIC;")
+        }
     }
 
     public func allDownloads() throws -> [DownloadTask] {
         lock.lock()
         defer { lock.unlock() }
-        let sql = "SELECT * FROM downloads ORDER BY id DESC;"
+        let sql = """
+        SELECT
+            id, url, method, filename, ltype, filesize, category, status,
+            bandwidthlimit, connections, lasttry, firsttry, completedat,
+            useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
+            errortext, urla, postdata, folderpath
+        FROM downloads
+        ORDER BY
+            MAX(
+                COALESCE(lasttry, 0),
+                COALESCE(completedat, 0),
+                COALESCE(firsttry, 0)
+            ) DESC,
+            id DESC;
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw StoreError.prepareFailed
@@ -101,10 +119,10 @@ public final class DownloadStore: @unchecked Sendable {
         let sql = """
         INSERT INTO downloads (
             url, method, filename, ltype, filesize, category, status,
-            bandwidthlimit, connections, lasttry, firsttry, useragent,
-            resumable, pageurl, pagetitle, hittitle, mimetype, errortext,
-            urla, postdata, folderpath
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            bandwidthlimit, connections, lasttry, firsttry, completedat,
+            useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
+            errortext, urla, postdata, folderpath
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -126,9 +144,9 @@ public final class DownloadStore: @unchecked Sendable {
         let sql = """
         UPDATE downloads SET
             url=?, method=?, filename=?, ltype=?, filesize=?, category=?, status=?,
-            bandwidthlimit=?, connections=?, lasttry=?, firsttry=?, useragent=?,
-            resumable=?, pageurl=?, pagetitle=?, hittitle=?, mimetype=?, errortext=?,
-            urla=?, postdata=?, folderpath=?
+            bandwidthlimit=?, connections=?, lasttry=?, firsttry=?, completedat=?,
+            useragent=?, resumable=?, pageurl=?, pagetitle=?, hittitle=?, mimetype=?,
+            errortext=?, urla=?, postdata=?, folderpath=?
         WHERE id=?;
         """
         var stmt: OpaquePointer?
@@ -137,7 +155,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bind(task, to: stmt, includingID: false)
-        sqlite3_bind_int64(stmt, 22, task.id)
+        sqlite3_bind_int64(stmt, 23, task.id)
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.stepFailed }
         try replaceHeadersUnlocked(id: task.id, headers: task.headers)
     }
@@ -297,20 +315,21 @@ public final class DownloadStore: @unchecked Sendable {
         sqlite3_bind_int(stmt, 9, Int32(task.connections))
         if let d = task.lastTry { sqlite3_bind_double(stmt, 10, d.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 10) }
         if let d = task.firstTry { sqlite3_bind_double(stmt, 11, d.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 11) }
-        text(12, task.userAgent)
-        sqlite3_bind_int(stmt, 13, task.resumable ? 1 : 0)
-        text(14, task.pageURL)
-        text(15, task.pageTitle)
-        text(16, task.hitTitle)
-        text(17, task.mimeType)
-        text(18, task.errorText)
-        text(19, task.alternateURL)
+        if let d = task.completedAt { sqlite3_bind_double(stmt, 12, d.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 12) }
+        text(13, task.userAgent)
+        sqlite3_bind_int(stmt, 14, task.resumable ? 1 : 0)
+        text(15, task.pageURL)
+        text(16, task.pageTitle)
+        text(17, task.hitTitle)
+        text(18, task.mimeType)
+        text(19, task.errorText)
+        text(20, task.alternateURL)
         if let data = task.postData, let s = String(data: data, encoding: .utf8) {
-            text(20, s)
+            text(21, s)
         } else {
-            sqlite3_bind_null(stmt, 20)
+            sqlite3_bind_null(stmt, 21)
         }
-        text(21, task.folderPath)
+        text(22, task.folderPath)
         _ = includingID
     }
 
@@ -325,7 +344,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         let category = DownloadCategory(rawValue: colText(6) ?? "misc") ?? .misc
         let status = DownloadStatus(rawValue: colText(7) ?? "incomplete") ?? .incomplete
-        let post: Data? = colText(20).flatMap { $0.data(using: .utf8) }
+        let post: Data? = colText(21).flatMap { $0.data(using: .utf8) }
         return DownloadTask(
             id: sqlite3_column_int64(stmt, 0),
             url: colText(1) ?? "",
@@ -339,18 +358,35 @@ public final class DownloadStore: @unchecked Sendable {
             connections: Int(sqlite3_column_int(stmt, 9)),
             lastTry: colDate(10),
             firstTry: colDate(11),
-            userAgent: colText(12),
-            resumable: sqlite3_column_int(stmt, 13) != 0,
-            pageURL: colText(14),
-            pageTitle: colText(15),
-            hitTitle: colText(16),
-            mimeType: colText(17),
-            errorText: colText(18),
-            alternateURL: colText(19),
+            completedAt: colDate(12),
+            userAgent: colText(13),
+            resumable: sqlite3_column_int(stmt, 14) != 0,
+            pageURL: colText(15),
+            pageTitle: colText(16),
+            hitTitle: colText(17),
+            mimeType: colText(18),
+            errorText: colText(19),
+            alternateURL: colText(20),
             postData: post,
-            folderPath: colText(21),
+            folderPath: colText(22),
             headers: []
         )
+    }
+
+    private func hasColumn(_ column: String, in table: String) -> Bool {
+        let sql = "PRAGMA table_info(\(table));"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(stmt, 1) else { continue }
+            if String(cString: raw).caseInsensitiveCompare(column) == .orderedSame {
+                return true
+            }
+        }
+        return false
     }
 
     private func exec(_ sql: String) throws {

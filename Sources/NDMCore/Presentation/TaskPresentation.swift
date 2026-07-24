@@ -105,14 +105,22 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var taskID: Int64
     public var filename: String
     public var host: String
+    /// User-facing timestamp for the most recent meaningful task activity.
+    /// Completed tasks prefer their actual completion time; older databases
+    /// gracefully fall back to the last/first attempt.
+    public var activityDateText: String
     public var statusTitle: String
     public var statusDetail: String
     public var progressFraction: Double
     public var progressText: String
     public var sizeText: String
     public var speedText: String
-    /// Raw transfer rate for animated displays (0 when not downloading).
+    /// Shared one-second transfer-rate target for animated displays
+    /// (0 when not downloading).
     public var speedBytesPerSecond: Double
+    /// Truthful byte counters for progress and accessibility descriptions.
+    public var completedByteCount: Int64
+    public var totalByteCount: Int64
     /// True during byte-less yt-dlp post-processing (merge / subtitles /
     /// finalize) — surfaces let the UI show a "working" state instead of a
     /// frozen bar at 98% with 0 KB/s.
@@ -152,6 +160,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         taskID: Int64,
         filename: String,
         host: String,
+        activityDateText: String,
         statusTitle: String,
         statusDetail: String,
         progressFraction: Double,
@@ -180,11 +189,14 @@ public struct TaskRowPresentation: Equatable, Sendable {
         isFailed: Bool = false,
         isQueued: Bool = false,
         speedBytesPerSecond: Double = 0,
+        completedByteCount: Int64 = 0,
+        totalByteCount: Int64 = 0,
         isFinalizing: Bool = false
     ) {
         self.taskID = taskID
         self.filename = filename
         self.host = host
+        self.activityDateText = activityDateText
         self.statusTitle = statusTitle
         self.statusDetail = statusDetail
         self.progressFraction = progressFraction
@@ -213,6 +225,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.isFailed = isFailed
         self.isQueued = isQueued
         self.speedBytesPerSecond = speedBytesPerSecond
+        self.completedByteCount = completedByteCount
+        self.totalByteCount = totalByteCount
         self.isFinalizing = isFinalizing
     }
 
@@ -351,6 +365,9 @@ public struct TaskRowPresentation: Equatable, Sendable {
             taskID: task.id,
             filename: task.filename.isEmpty ? L10n.untitled : task.filename,
             host: host,
+            activityDateText: TaskPresentationFormatting.activityDate(
+                task.completedAt ?? task.lastTry ?? task.firstTry
+            ),
             statusTitle: statusTitle,
             statusDetail: statusDetail,
             progressFraction: fraction,
@@ -382,6 +399,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
             isFailed: task.status == .error,
             isQueued: task.status == .waiting,
             speedBytesPerSecond: task.status == .downloading ? speed : 0,
+            completedByteCount: completedBytes,
+            totalByteCount: totalBytes,
             // Finishing tail: an explicit post-process phase, or the byte-gap
             // stretch of a yt-dlp download after the video stream is down
             // (journeyFraction is monotonic, so ≥0.82 latches). Regular HTTP
@@ -394,6 +413,34 @@ public struct TaskRowPresentation: Equatable, Sendable {
 }
 
 public enum TaskPresentationFormatting {
+    /// Deterministic counterpart to DownloadStore's SQL ordering. UI surfaces
+    /// that regroup tasks must still put a newly created or retried task first.
+    public static func isMoreRecentlyActive(
+        _ lhs: DownloadTask,
+        than rhs: DownloadTask
+    ) -> Bool {
+        let lhsDate = lhs.mostRecentActivity ?? .distantPast
+        let rhsDate = rhs.mostRecentActivity ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        return lhs.id > rhs.id
+    }
+
+    public static func activityDate(_ date: Date?) -> String {
+        guard let date else { return "" }
+        let calendar = Calendar.autoupdatingCurrent
+        let includesYear = calendar.component(.year, from: date)
+            != calendar.component(.year, from: Date())
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = L10n.usesChinese
+            ? Locale(identifier: "zh_CN")
+            : Locale.autoupdatingCurrent
+        formatter.dateFormat = L10n.usesChinese
+            ? (includesYear ? "yyyy年M月d日 HH:mm" : "M月d日 HH:mm")
+            : (includesYear ? "MMM d, yyyy, h:mm a" : "MMM d, h:mm a")
+        return formatter.string(from: date)
+    }
+
     public static func host(from urlString: String) -> String {
         guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else {
             return ""

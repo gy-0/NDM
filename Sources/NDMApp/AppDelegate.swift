@@ -31,7 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentBrowserMediaCancellation: BrowserMediaPreparationCancellation?
     private var browsersWindow: BrowsersWindowController?
     private var settingsWindow: SettingsWindowController?
-    private var completionWindow: CompletionWindowController?
+    /// Standalone results can overlap when several app-initiated downloads
+    /// finish together. Keep every controller alive until its own window
+    /// closes; a single slot made earlier results disappear or lose callbacks.
+    private var completionWindows: [Int64: CompletionWindowController] = [:]
+    private var completionWindowOrder: [Int64] = []
     private var onboardingWindow: OnboardingWindowController?
     private var terminationCheckInFlight = false
     private var statusPollTask: Task<Void, Never>?
@@ -70,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 supportRoot: support,
                 fileRecycler: { url in
                     try await AppFileRecycler.recycle(url)
+                },
+                onTaskCompleted: { [weak self] task in
+                    Task { @MainActor in
+                        self?.presentCompletion(for: task)
+                    }
                 }
             )
             self.manager = manager
@@ -230,13 +239,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.startStatusPolling()
             }
 
-            Task { [weak self, manager] in
-                await manager.setCompletionHandler { [weak self] task in
-                    Task { @MainActor in
-                        self?.presentCompletion(for: task)
-                    }
-                }
-            }
         } catch {
             let alert = NSAlert()
             alert.messageText = L10n.failedToStart
@@ -829,24 +831,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentCompletion(for task: DownloadTask) {
         Task { await mainWindow?.reload() }
-        if !NSApp.isActive {
-            NSApp.requestUserAttention(.informationalRequest)
-        }
         guard settings.showCompletionDialog else { return }
 
         // Progress window already open → complete in place. A modal alert would
-        // freeze that window and make Close look broken.
+        // freeze that window and make Close look broken. This includes the
+        // browser's quiet session card, so do not bounce the Dock or activate
+        // the app before giving the in-place handoff a chance.
         if mainWindow?.presentCompletionInProgressWindow(for: task) == true {
             return
         }
 
-        let wc = CompletionWindowController(task: task) { [weak self] in
-            self?.completionWindow = nil
+        if !NSApp.isActive {
+            NSApp.requestUserAttention(.informationalRequest)
         }
-        completionWindow = wc
+
+        // A completed task can be retried while its old result is still open.
+        // Replace only that task's stale result; never disturb other files.
+        completionWindows[task.id]?.window?.close()
+
+        weak var weakController: CompletionWindowController?
+        let wc = CompletionWindowController(task: task) { [weak self] in
+            guard let self else { return }
+            if self.completionWindows[task.id] === weakController {
+                self.completionWindows.removeValue(forKey: task.id)
+                self.completionWindowOrder.removeAll { $0 == task.id }
+            }
+        }
+        weakController = wc
+        positionStandaloneCompletionWindow(wc.window)
+        completionWindows[task.id] = wc
+        completionWindowOrder.removeAll { $0 == task.id }
+        completionWindowOrder.append(task.id)
         wc.showWindow(nil)
         wc.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Preserve the centered first result, then use a restrained native-style
+    /// cascade so simultaneous completions remain individually reachable
+    /// instead of occupying the exact same pixels.
+    private func positionStandaloneCompletionWindow(_ window: NSWindow?) {
+        guard let window, !completionWindowOrder.isEmpty else { return }
+        let previous = completionWindowOrder.reversed().compactMap {
+            completionWindows[$0]?.window
+        }.first { $0.isVisible }
+        guard let previous else { return }
+
+        var frame = window.frame
+        frame.origin.x = previous.frame.minX + 24
+        frame.origin.y = previous.frame.minY - 24
+        let visible = previous.screen?.visibleFrame
+            ?? window.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+        if let visible {
+            if frame.maxX > visible.maxX - 12 {
+                frame.origin.x = max(visible.minX + 12, previous.frame.minX - 24)
+            }
+            if frame.minY < visible.minY + 12 {
+                frame.origin.y = min(
+                    visible.maxY - frame.height - 12,
+                    previous.frame.minY + 24
+                )
+            }
+        }
+        window.setFrame(frame, display: false)
     }
 
     /// "SwiftUI Masterclass · Week 3" + "1080p" → a safe media filename.
@@ -913,12 +961,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleBrowserDownloadRequest(_ msg: ParsedBridgeMessage) async {
         guard let manager else { return }
-        // The user just clicked "download with NDM" in their browser — bring
-        // the app forward now, and let this newest capture supersede any
-        // quality picker still open for a previous one.
+        // The user just clicked "download with NDM" in their browser. Keep the
+        // library window where it is; only the lightweight session card will
+        // appear once the task is accepted.
         supersedeInFlightBrowserMedia()
-        NSApp.activate(ignoringOtherApps: true)
-        mainWindow?.window?.makeKeyAndOrderFront(nil)
         bridge?.sendToAllClients(BridgeConstants.waiting)
         defer { bridge?.sendToAllClients(BridgeConstants.noWaiting) }
 
@@ -1001,7 +1047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let task = try await manager.addFromBridge(accepted)
             // Show progress first so capture → window is immediate.
-            mainWindow?.showProgress(for: task.id)
+            mainWindow?.showProgress(for: task.id, quietly: true)
             try await manager.start(taskID: task.id)
             await mainWindow?.reload()
         } catch {
@@ -1158,7 +1204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                     await mainWindow?.reload()
-                    mainWindow?.showProgress(for: task.id)
+                    mainWindow?.showProgress(for: task.id, quietly: true)
                 case .collection(let selectedCollection):
                     let tasks = try await manager.enqueueYtDlpCollection(
                         selectedCollection.items,
@@ -1180,7 +1226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     await mainWindow?.reload()
                     if let first = tasks.first {
-                        mainWindow?.showProgress(for: first.id)
+                        mainWindow?.showProgress(for: first.id, quietly: true)
                     }
                 }
             }

@@ -14,6 +14,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
     public var connections: Int
     public var lastTry: Date?
     public var firstTry: Date?
+    public var completedAt: Date?
     public var userAgent: String?
     public var resumable: Bool
     public var pageURL: String?
@@ -39,6 +40,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         connections: Int = 8,
         lastTry: Date? = nil,
         firstTry: Date? = nil,
+        completedAt: Date? = nil,
         userAgent: String? = nil,
         resumable: Bool = false,
         pageURL: String? = nil,
@@ -63,6 +65,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         self.connections = connections
         self.lastTry = lastTry
         self.firstTry = firstTry
+        self.completedAt = completedAt
         self.userAgent = userAgent
         self.resumable = resumable
         self.pageURL = pageURL
@@ -81,6 +84,13 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         guard let folderPath, !folderPath.isEmpty, !filename.isEmpty else { return nil }
         return URL(fileURLWithPath: folderPath, isDirectory: true)
             .appendingPathComponent(filename, isDirectory: false)
+    }
+
+    /// One canonical recency value for every surface that presents task
+    /// activity. A retry can make an old database row the newest thing the
+    /// user did; a later completion can then advance it once more.
+    public var mostRecentActivity: Date? {
+        [lastTry, completedAt, firstTry].compactMap { $0 }.max()
     }
 }
 

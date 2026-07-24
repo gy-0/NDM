@@ -43,7 +43,11 @@ final class BrowsersWindowController: NSWindowController {
 
         let openFolder = NSButton(title: L10n.showExtensionFolder, target: self, action: #selector(reveal))
         openFolder.bezelStyle = .rounded
-        let copyEndpoint = NSButton(title: L10n.copyBridgeAddress, target: self, action: #selector(copyEndpoint))
+        let copyEndpoint = NSButton(
+            title: L10n.copyBridgeAddress,
+            target: self,
+            action: #selector(copyEndpoint(_:))
+        )
         copyEndpoint.bezelStyle = .rounded
         let close = NSButton(title: L10n.close, target: self, action: #selector(closeClicked))
         close.bezelStyle = .rounded
@@ -87,9 +91,24 @@ final class BrowsersWindowController: NSWindowController {
         alert.runModal()
     }
 
-    @objc private func copyEndpoint() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(BridgeConstants.endpoint, forType: .string)
+    @objc private func copyEndpoint(_ sender: NSButton) {
+        let originalTitle = sender.title
+        let originalImage = sender.image
+        let originalTint = sender.contentTintColor
+        let succeeded = DownloadClipboard.copy(BridgeConstants.endpoint)
+        sender.title = succeeded ? L10n.copiedToClipboard : L10n.copyFailed
+        sender.image = NDMChrome.symbol(
+            succeeded ? "checkmark" : "exclamationmark.triangle",
+            pointSize: 12,
+            weight: .semibold
+        )
+        sender.contentTintColor = succeeded ? .systemGreen : .systemOrange
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak sender] in
+            guard let sender else { return }
+            sender.title = originalTitle
+            sender.image = originalImage
+            sender.contentTintColor = originalTint
+        }
     }
 
     @objc private func closeClicked() { window?.close() }

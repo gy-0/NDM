@@ -147,11 +147,8 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
 
     func testDefaultBridgeUsesDedicatedNDMPort() throws {
         let bridge = BrowserBridge()
-        try bridge.start()
-        defer { bridge.stop() }
-
-        XCTAssertEqual(bridge.boundPort, BridgeConstants.port)
-        XCTAssertNotEqual(bridge.boundPort, BridgeConstants.legacyNeatPort)
+        XCTAssertEqual(bridge.configuredPort, BridgeConstants.port)
+        XCTAssertNotEqual(bridge.configuredPort, BridgeConstants.legacyNeatPort)
     }
 
     func testParseUrlaField() throws {

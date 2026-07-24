@@ -83,6 +83,14 @@ public enum L10n: Sendable {
     public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
     public static var copiedToClipboard: String { t("Copied", "已复制") }
+    public static var copyFailed: String { t("Copy failed", "复制失败") }
+    public static var copyFailedDetail: String {
+        t(
+            "The clipboard didn’t accept the link. Please try again.",
+            "剪贴板没有接收到链接，请重试。"
+        )
+    }
+    public static var openFileFailed: String { t("Couldn’t open the file", "无法打开文件") }
     public static var renewURL: String { t("Update Link", "更新链接") }
     public static var renewURLEllipsis: String { t("Update Link…", "更新链接…") }
     public static var renewAndStart: String { t("Update & Start", "更新链接并开始") }
@@ -90,6 +98,7 @@ public enum L10n: Sendable {
     public static var properties: String { t("Properties", "属性") }
     public static var propertiesEllipsis: String { t("Properties…", "属性…") }
     public static var detailsEllipsis: String { t("Details…", "详情…") }
+    public static var hideDetails: String { t("Hide details", "收起详情") }
     public static var connectionDetails: String { t("Connection details…", "连接详情…") }
     public static var progressDetails: String { t("Progress Details", "进度详情") }
     public static var resultDetails: String { t("Details", "文件详情") }
@@ -659,6 +668,8 @@ public enum L10n: Sendable {
     public static var location: String { t("Location", "位置") }
     public static var progress: String { t("Progress", "进度") }
     public static var downloaded: String { t("Downloaded", "已下载") }
+    public static var downloadTime: String { t("Downloaded", "下载时间") }
+    public static var lastAttempt: String { t("Last tried", "最近尝试") }
     public static var speed: String { t("Speed", "速度") }
     public static var timeLeft: String { t("Time left", "剩余时间") }
     public static var resumable: String { t("Resumable", "可断点续传") }

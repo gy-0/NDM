@@ -9,6 +9,15 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let manager: DownloadManager
     private let taskID: Int64
     private var filename: String
+    private var quietlyPresented: Bool
+    private var currentTask: DownloadTask?
+    private var completionController: CompletionWindowController?
+    private var completionHandoffOverlay: CompletionHandoffOverlay?
+    private var quietStackIndex: Int?
+    /// A result can be closed while the 620 ms shared-element handoff is still
+    /// running. Delayed animation callbacks must then become no-ops instead of
+    /// ordering the dismissed result window back to the front.
+    private var completionHandoffIsActive = false
 
     private let tabControl = NSSegmentedControl(
         labels: [L10n.tabDownload, L10n.tabOptions, L10n.tabConnections],
@@ -17,6 +26,14 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         action: nil
     )
     private let tabContainer = NSView()
+    private let sessionHero = NowDownloadingHeroView()
+    private let detailsButton = InspectorActionButton(title: L10n.detailsEllipsis)
+    private var detailsSection: NSView?
+    private var compactBottomConstraint: NSLayoutConstraint?
+    private var expandedBottomConstraint: NSLayoutConstraint?
+    private var detailsVisible = false
+    private static let compactFrameHeight: CGFloat = 244
+    private static let expandedFrameHeight: CGFloat = 600
 
     // Download tab
     private let percentLabel = NSTextField(labelWithString: "0%")
@@ -70,24 +87,36 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var connectionsPane: NSView!
     private var pollTask: Task<Void, Never>?
     private var lastStatus: DownloadStatus = .waiting
+    private var lastSparklineSampleUptime: TimeInterval?
     private var completionStackApplied = false
     private var completionExpansionAddedHeight: CGFloat = 0
     /// Cleared by MainWindowController so the cache does not retain closed windows.
     var onWindowClose: (() -> Void)?
 
-    init(manager: DownloadManager, taskID: Int64, filename: String) {
+    init(
+        manager: DownloadManager,
+        taskID: Int64,
+        filename: String,
+        quietlyPresented: Bool = false
+    ) {
         self.manager = manager
         self.taskID = taskID
         self.filename = filename
+        self.quietlyPresented = quietlyPresented
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: Self.compactFrameHeight),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.minSize = NSSize(width: 460, height: 420)
-        window.title = filename
-        window.titlebarAppearsTransparent = false
+        window.minSize = NSSize(width: 452, height: Self.compactFrameHeight)
+        window.title = L10n.nowDownloading
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         NDMChrome.applyWindowChrome(window)
         window.center()
         super.init(window: window)
@@ -132,7 +161,11 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             completionExpansionAddedHeight = 0
         }
         frame.origin.y = oldTop - frame.height
-        window.setFrame(frame, display: true, animate: true)
+        window.setFrame(
+            frame,
+            display: true,
+            animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     // MARK: - Build
@@ -141,6 +174,61 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         guard let content = window?.contentView else { return }
         content.wantsLayer = true
 
+        sessionHero.translatesAutoresizingMaskIntoConstraints = false
+        sessionHero.onActivateTask = { [weak self] _ in
+            self?.toggleDetails()
+        }
+        sessionHero.onContextAction = { [weak self] action, _ in
+            guard let self else { return }
+            switch action {
+            case .pause:
+                self.pauseClicked()
+            case .progress:
+                self.toggleDetails()
+            case .copyURL:
+                if let url = self.currentTask?.url {
+                    if !DownloadClipboard.copy(url) {
+                        self.showActionFailure(
+                            message: L10n.copyFailed,
+                            detail: L10n.copyFailedDetail
+                        )
+                    }
+                }
+            default:
+                break
+            }
+        }
+
+        detailsButton.target = self
+        detailsButton.action = #selector(toggleDetails)
+        detailsButton.image = NDMChrome.symbol("slider.horizontal.3", pointSize: 12, weight: .medium)
+        detailsButton.imagePosition = .imageLeading
+        detailsButton.imageHugsTitle = true
+        detailsButton.font = .systemFont(ofSize: 13, weight: .medium)
+        detailsButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+
+        pauseButton.target = self
+        pauseButton.action = #selector(pauseClicked)
+        pauseButton.image = NDMChrome.symbol("pause.fill", pointSize: 12, weight: .semibold)
+        pauseButton.imagePosition = .imageLeading
+        pauseButton.imageHugsTitle = true
+        pauseButton.font = .systemFont(ofSize: 13, weight: .semibold)
+        pauseButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108).isActive = true
+
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelClicked)
+        cancelButton.font = .systemFont(ofSize: 13, weight: .medium)
+        cancelButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+
+        let actionSpacer = NSView()
+        actionSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        let actions = NSStackView(views: [detailsButton, actionSpacer, cancelButton, pauseButton])
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+        actions.translatesAutoresizingMaskIntoConstraints = false
+
         tabControl.segmentStyle = .rounded
         tabControl.selectedSegment = 0
         tabControl.target = self
@@ -148,7 +236,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         tabControl.translatesAutoresizingMaskIntoConstraints = false
 
         tabContainer.translatesAutoresizingMaskIntoConstraints = false
-        downloadPane = makeDownloadPane()
+        downloadPane = makeCompactDetailsPane()
         optionsPane = makeOptionsPane()
         connectionsPane = makeConnectionsPane()
         for pane in [downloadPane!, optionsPane!, connectionsPane!] {
@@ -163,18 +251,98 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
         showTab(0)
 
-        content.addSubview(tabControl)
-        content.addSubview(tabContainer)
+        let details = NSView()
+        details.translatesAutoresizingMaskIntoConstraints = false
+        details.addSubview(tabControl)
+        details.addSubview(tabContainer)
         NSLayoutConstraint.activate([
-            tabControl.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
-            tabControl.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            tabControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
+            tabControl.topAnchor.constraint(equalTo: details.topAnchor),
+            tabControl.leadingAnchor.constraint(equalTo: details.leadingAnchor),
+            tabControl.trailingAnchor.constraint(lessThanOrEqualTo: details.trailingAnchor),
 
             tabContainer.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 14),
-            tabContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            tabContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            tabContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            tabContainer.leadingAnchor.constraint(equalTo: details.leadingAnchor),
+            tabContainer.trailingAnchor.constraint(equalTo: details.trailingAnchor),
+            tabContainer.bottomAnchor.constraint(equalTo: details.bottomAnchor),
         ])
+        details.isHidden = true
+        detailsSection = details
+
+        content.addSubview(sessionHero)
+        content.addSubview(actions)
+        content.addSubview(details)
+        let compactBottom = actions.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
+        let expandedBottom = details.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
+        compactBottomConstraint = compactBottom
+        expandedBottomConstraint = expandedBottom
+        NSLayoutConstraint.activate([
+            sessionHero.topAnchor.constraint(equalTo: content.topAnchor),
+            sessionHero.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            sessionHero.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            sessionHero.heightAnchor.constraint(equalToConstant: 150),
+
+            actions.topAnchor.constraint(equalTo: sessionHero.bottomAnchor, constant: 12),
+            actions.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
+            actions.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
+            compactBottom,
+
+            details.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 16),
+            details.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            details.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+        ])
+    }
+
+    /// Progressive disclosure for the compact session window. The glanceable
+    /// card, options and per-connection diagnostics still exist, but they no
+    /// longer dominate every browser-captured download by default.
+    private func makeCompactDetailsPane() -> NSView {
+        revealButton.bezelStyle = .flexiblePush
+        revealButton.isBordered = true
+        revealButton.target = self
+        revealButton.action = #selector(revealClicked)
+        revealButton.toolTip = L10n.showInFinder
+
+        overallProgress.progress = 0
+        overallProgress.translatesAutoresizingMaskIntoConstraints = false
+        segmentStrip.translatesAutoresizingMaskIntoConstraints = false
+
+        segmentsCaption.font = .systemFont(ofSize: 12, weight: .semibold)
+        segmentsCaption.textColor = .tertiaryLabelColor
+        let stripBlock = NSStackView(views: [segmentsCaption, segmentStrip])
+        stripBlock.orientation = .vertical
+        stripBlock.alignment = .leading
+        stripBlock.spacing = 6
+        stripBlock.isHidden = true
+        segmentBlock = stripBlock
+
+        smartlineLabel.font = .systemFont(ofSize: 11.5)
+        smartlineLabel.textColor = .secondaryLabelColor
+        smartlineLabel.isHidden = true
+
+        let card = makeStatsCard()
+        let stack = NSStackView(views: [card, overallProgress, stripBlock, smartlineLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        downloadStack = stack
+
+        let pane = NSView()
+        pane.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: pane.topAnchor, constant: 4),
+            stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: pane.bottomAnchor),
+            card.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            overallProgress.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            overallProgress.heightAnchor.constraint(equalToConstant: 4),
+            stripBlock.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            segmentStrip.widthAnchor.constraint(equalTo: stripBlock.widthAnchor),
+            segmentStrip.heightAnchor.constraint(equalToConstant: 8),
+            smartlineLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        return pane
     }
 
     private let progressRing = ProgressRingView()
@@ -363,39 +531,174 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         return pane
     }
 
-    /// Called when the download finishes while this window is already open.
-    /// Keeps completion in-window so a modal alert cannot block Close.
+    /// The compact transfer card and the polished result card are one journey.
+    /// The live card itself stays visually untouched; at the finish line a
+    /// snapshot of it morphs into the result frame while the file's cover/icon
+    /// travels as a shared element into the completed hero.
     func presentCompleted(task: DownloadTask) {
-        filename = task.filename.isEmpty ? filename : task.filename
-        nameLabel.stringValue = filename
-        percentLabel.stringValue = "100%"
-        window?.title = L10n.doneTitle(filename)
-        overallProgress.progress = 1
-        progressRing.progress = 1
-        statusPill.setStatus(.complete, error: nil)
-        celebratePercentLabel()
-        smartlineLabel.isHidden = true
-        smartlineLabel.stringValue = ""
-        speedValue.stringValue = L10n.emDash
-        etaValue.stringValue = L10n.emDash
-        if task.fileSize > 0 {
-            sizeValue.stringValue = TaskPresentationFormatting.byteCount(task.fileSize)
-            downloadedValue.stringValue = "\(TaskPresentationFormatting.byteCount(task.fileSize))  (100%)"
+        if completionController != nil {
+            presentWindow()
+            return
         }
-        // File is merged — paint a solid strip even if the last live snapshot
-        // still had unfinished Range chunks.
-        let total = max(0, task.fileSize)
-        segmentStrip.update(segments: [], totalBytes: total, forceFilled: true)
-        segmentsCaption.stringValue = L10n.segments
-        segmentBlock?.isHidden = true
-        speedSparkline.isHidden = true
+        filename = task.filename.isEmpty ? filename : task.filename
+        currentTask = task
         lastStatus = .complete
-        applyCompletionStack(for: task)
-        configureActionButtons(for: .complete, task: task)
         pollTask?.cancel()
         pollTask = nil
-        showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+
+        let previousFrame = window?.frame
+        let completion = CompletionWindowController(task: task) { [weak self] in
+            self?.dismissCompletionDuringHandoff()
+        }
+        completionController = completion
+
+        guard let sourceWindow = window,
+              let sourceContent = sourceWindow.contentView,
+              let resultWindow = completion.window,
+              let previousFrame else {
+            completion.showWindow(nil)
+            return
+        }
+        var resultFrame = resultWindow.frame
+        resultFrame.origin.x = previousFrame.midX - resultFrame.width / 2
+        resultFrame.origin.y = previousFrame.maxY - resultFrame.height
+        if let visible = sourceWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            resultFrame.origin.x = min(
+                max(resultFrame.origin.x, visible.minX + 12),
+                visible.maxX - resultFrame.width - 12
+            )
+            resultFrame.origin.y = min(
+                max(resultFrame.origin.y, visible.minY + 12),
+                visible.maxY - resultFrame.height - 12
+            )
+        }
+        resultWindow.setFrame(resultFrame, display: false)
+        // The result is taller and slightly narrower than the transfer card.
+        // Place that real destination in its quiet slot before snapshot
+        // geometry is captured, so the handoff lands without a final jump.
+        applyQuietStackPosition()
+        resultFrame = resultWindow.frame
+        completionHandoffIsActive = true
+
+        let preview = sessionHero.completionHandoffPreview()
+        completion.prepareForAnimatedHandoff(preview)
+        resultWindow.alphaValue = 0
+        completion.showWindow(nil)
+        if quietlyPresented {
+            resultWindow.orderFrontRegardless()
+        } else {
+            resultWindow.orderFront(nil)
+        }
+        if QAPreviewOverrides.dismissCompletionDuringHandoff {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak completion] in
+                completion?.window?.close()
+            }
+        }
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard !reduceMotion,
+              let sourceImage = Self.snapshot(of: sourceContent) else {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                resultWindow.animator().alphaValue = 1
+                sourceWindow.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.completionHandoffIsActive,
+                          resultWindow.isVisible else { return }
+                    sourceWindow.orderOut(nil)
+                    sourceWindow.alphaValue = 1
+                    completion.finishAnimatedHandoff()
+                    self.completionHandoffIsActive = false
+                    self.applyQuietStackPosition()
+                    self.focusCompletionWindowIfNeeded(resultWindow)
+                }
+            })
+            return
+        }
+
+        sourceContent.layoutSubtreeIfNeeded()
+        let sourceContentRect = sourceWindow.convertToScreen(
+            sourceContent.convert(sourceContent.bounds, to: nil)
+        )
+        let sourcePreviewRect = preview.map {
+            let rectInContent = sourceContent.convert($0.rectInHero, from: sessionHero)
+            return sourceWindow.convertToScreen(sourceContent.convert(rectInContent, to: nil))
+        }
+        let destinationPreviewRect = preview.flatMap {
+            completion.handoffDestinationRect(isArtwork: $0.isArtwork)
+        }
+
+        let overlay = CompletionHandoffOverlay(
+            sourceImage: sourceImage,
+            sourceRect: sourceContentRect,
+            destinationRect: resultFrame,
+            previewImage: preview?.image,
+            sourcePreviewRect: sourcePreviewRect,
+            destinationPreviewRect: destinationPreviewRect,
+            level: NSWindow.Level(
+                rawValue: max(sourceWindow.level.rawValue, resultWindow.level.rawValue) + 1
+            )
+        )
+        completionHandoffOverlay = overlay
+        overlay.show()
+        sourceWindow.orderOut(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) { [weak self, weak completion] in
+            guard let self,
+                  let completion,
+                  self.completionHandoffIsActive,
+                  completion.window?.isVisible == true else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.36
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                resultWindow.animator().alphaValue = 1
+            }
+        }
+
+        overlay.run(duration: 0.62) { [weak self, weak completion] in
+            guard let self,
+                  let completion,
+                  self.completionHandoffIsActive,
+                  completion.window?.isVisible == true else { return }
+            self.completionHandoffOverlay = nil
+            completion.finishAnimatedHandoff()
+            self.completionHandoffIsActive = false
+            self.applyQuietStackPosition()
+            self.focusCompletionWindowIfNeeded(resultWindow)
+        }
+    }
+
+    private func dismissCompletionDuringHandoff() {
+        completionHandoffIsActive = false
+        completionHandoffOverlay?.cancel()
+        completionHandoffOverlay = nil
+        window?.close()
+    }
+
+    private func focusCompletionWindowIfNeeded(_ resultWindow: NSWindow) {
+        if quietlyPresented {
+            resultWindow.orderFrontRegardless()
+        } else {
+            resultWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private static func snapshot(of view: NSView) -> NSImage? {
+        view.layoutSubtreeIfNeeded()
+        guard view.bounds.width > 0,
+              view.bounds.height > 0,
+              let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return nil
+        }
+        representation.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: representation)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(representation)
+        return image
     }
 
     /// Design-suite statgrid: four glanceable cells up top, then the quiet
@@ -559,6 +862,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             ? L10n.segments
             : L10n.segmentsCount(displayedConnectionIDs.count)
         cancelButton.title = L10n.close
+        detailsButton.title = detailsVisible ? L10n.hideDetails : L10n.detailsEllipsis
         openButton.title = L10n.open
         revealActionButton.title = L10n.showInFinder
         revealButton.toolTip = L10n.showInFinder
@@ -619,7 +923,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         downloadPane.isHidden = index != 0
         optionsPane.isHidden = index != 1
         connectionsPane.isHidden = index != 2
-        if changed, window?.isVisible == true {
+        if changed,
+           window?.isVisible == true,
+           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             let fade = CATransition()
             fade.type = .fade
             fade.duration = 0.15
@@ -632,10 +938,107 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         showTab(tabControl.selectedSegment)
     }
 
+    @objc private func toggleDetails() {
+        guard let window, let detailsSection else { return }
+        detailsVisible.toggle()
+        compactBottomConstraint?.isActive = !detailsVisible
+        expandedBottomConstraint?.isActive = detailsVisible
+        detailsSection.isHidden = !detailsVisible
+        detailsButton.title = detailsVisible ? L10n.hideDetails : L10n.detailsEllipsis
+        detailsButton.image = NDMChrome.symbol(
+            detailsVisible ? "chevron.up" : "slider.horizontal.3",
+            pointSize: 12,
+            weight: .medium
+        )
+
+        var frame = window.frame
+        let top = frame.maxY
+        let requested = detailsVisible ? Self.expandedFrameHeight : Self.compactFrameHeight
+        let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        frame.size.height = min(requested, max(Self.compactFrameHeight, (visible?.height ?? requested) - 24))
+        frame.origin.y = top - frame.height
+        window.setFrame(
+            frame,
+            display: true,
+            animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+    }
+
+    /// Presents only this lightweight session surface. Browser captures use
+    /// `orderFrontRegardless` so the browser keeps keyboard focus and the main
+    /// library window stays exactly where the user left it.
+    func presentWindow(activating explicitlyActivate: Bool? = nil) {
+        let shouldActivate = explicitlyActivate ?? !quietlyPresented
+        if let completionController {
+            completionController.showWindow(nil)
+            if shouldActivate {
+                completionController.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                completionController.window?.orderFrontRegardless()
+            }
+            return
+        }
+        showWindow(nil)
+        if shouldActivate {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            window?.orderFrontRegardless()
+        }
+    }
+
+    /// Once the user explicitly opens a browser-created session card, it is no
+    /// longer ambient UI. Leave its position under user control and treat its
+    /// eventual completion like any other interactive progress window.
+    func promoteToInteractivePresentation() {
+        quietlyPresented = false
+        quietStackIndex = nil
+    }
+
+    func positionInQuietStack(index: Int) {
+        guard quietlyPresented else { return }
+        quietStackIndex = max(0, index)
+        // Never move the handoff's live destination underneath its snapshot.
+        // A reflow requested during those 620 ms is applied when it lands.
+        guard !completionHandoffIsActive else { return }
+        applyQuietStackPosition()
+    }
+
+    private func applyQuietStackPosition() {
+        guard quietlyPresented,
+              let index = quietStackIndex,
+              let targetWindow = completionController?.window ?? window else { return }
+        let screen = targetWindow.screen ?? window?.screen ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
+        var frame = targetWindow.frame
+        let margin: CGFloat = 24
+        let stepX: CGFloat = 18
+        let stepY: CGFloat = 22
+        let availableRows = max(
+            1,
+            Int(max(0, visible.height - frame.height - margin * 2) / stepY) + 1
+        )
+        // Six visible ledges per band keep the cluster compact. Further tasks
+        // start a new band to the left instead of colliding with slot zero.
+        let rowsPerBand = min(6, availableRows)
+        let slot = index % rowsPerBand
+        let band = index / rowsPerBand
+        let bandStride = CGFloat(rowsPerBand) * stepX + 28
+        frame.origin.x = visible.maxX - frame.width - margin
+            - CGFloat(slot) * stepX
+            - CGFloat(band) * bandStride
+        frame.origin.y = visible.maxY - frame.height - margin - CGFloat(slot) * stepY
+        frame.origin.x = max(visible.minX + 12, frame.origin.x)
+        frame.origin.y = max(visible.minY + 12, frame.origin.y)
+        targetWindow.setFrame(frame, display: false)
+    }
+
     // MARK: - Data
 
     private func bootstrap() async {
         if let task = try? await manager.task(id: taskID) {
+            currentTask = task
             filename = task.filename.isEmpty ? filename : task.filename
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
@@ -677,6 +1080,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private func refresh() async {
         let task = try? await manager.task(id: taskID)
         if let task {
+            currentTask = task
             filename = task.filename.isEmpty ? filename : task.filename
             nameLabel.stringValue = filename
             urlValue.setURL(task.url)
@@ -725,13 +1129,25 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
     private func apply(progress: DownloadProgress, task: DownloadTask?) {
         lastStatus = progress.status
+        if let task {
+            currentTask = task
+            let row = TaskRowPresentation.make(task: task, progress: progress)
+            sessionHero.update(primary: row, activeCount: 1)
+        }
+        if progress.status == .complete, let task {
+            presentCompleted(task: task)
+            return
+        }
         let fraction = progress.status == .complete ? 1 : progress.fractionCompleted
         let pct = Int((fraction * 100).rounded(.down))
         percentLabel.stringValue = "\(pct)%"
         if progress.status == .complete {
             window?.title = L10n.doneTitle(filename)
         } else if progress.status == .downloading, progress.bytesPerSecond > 0 {
-            let speed = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: .downloading)
+            let speed = TaskPresentationFormatting.speed(
+                progress.bytesPerSecond,
+                status: .downloading
+            )
             window?.title = "\(pct)% \(filename) — \(speed)"
         } else {
             window?.title = "\(pct)% \(filename)"
@@ -786,15 +1202,30 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             speedValue.stringValue = L10n.emDash
             etaValue.stringValue = L10n.emDash
         } else {
-            speedValue.stringValue = TaskPresentationFormatting.speed(progress.bytesPerSecond, status: progress.status)
-            etaValue.stringValue = TaskPresentationFormatting.eta(progress.remainingTime, status: progress.status)
+            let sampledRemainingTime = progress.bytesPerSecond > 0 && total > done
+                ? Double(total - done) / progress.bytesPerSecond
+                : nil
+            speedValue.stringValue = TaskPresentationFormatting.speed(
+                progress.bytesPerSecond,
+                status: progress.status
+            )
+            etaValue.stringValue = TaskPresentationFormatting.eta(
+                sampledRemainingTime,
+                status: progress.status
+            )
         }
 
         if progress.status == .downloading {
-            speedSparkline.addSample(progress.bytesPerSecond)
+            let now = ProcessInfo.processInfo.systemUptime
+            if progress.bytesPerSecond > 0,
+               lastSparklineSampleUptime.map({ now - $0 >= 0.95 }) ?? true {
+                speedSparkline.addSample(progress.bytesPerSecond)
+                lastSparklineSampleUptime = now
+            }
             speedSparkline.isHidden = false
         } else {
             // Paused/queued included: a frozen (or empty) speed curve is noise.
+            lastSparklineSampleUptime = nil
             speedSparkline.isHidden = true
         }
 
@@ -894,31 +1325,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         sizeWindowToFitInitially()
     }
 
-    private var didCelebrateCompletion = false
-
-    private func celebratePercentLabel() {
-        percentLabel.wantsLayer = true
-        if let layer = percentLabel.layer {
-            let spring = CASpringAnimation(keyPath: "transform.scale")
-            spring.fromValue = 1.0
-            spring.toValue = 1.08
-            spring.mass = 1
-            spring.stiffness = 300
-            spring.damping = 12
-            spring.initialVelocity = 8
-            spring.autoreverses = true
-            spring.duration = spring.settlingDuration / 2
-            layer.add(spring, forKey: "celebrate")
-        }
-        // Emoji confetti + pop, fired from the hero ring — once per window.
-        guard !didCelebrateCompletion, let content = window?.contentView else { return }
-        didCelebrateCompletion = true
-        let ringCenter = percentLabel.superview.map {
-            content.convert(CGPoint(x: $0.frame.midX, y: $0.frame.midY), from: $0.superview)
-        } ?? CGPoint(x: content.bounds.midX, y: content.bounds.maxY - 140)
-        CelebrationEffect.burst(in: content, at: ringCenter)
-    }
-
     private func applyCompletionStack(for task: DownloadTask) {
         guard !completionStackApplied else { return }
         completionStackApplied = true
@@ -971,7 +1377,11 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let top = frame.maxY
         frame.size.height = targetHeight
         frame.origin.y = top - targetHeight
-        window.setFrame(frame, display: true, animate: animate)
+        window.setFrame(
+            frame,
+            display: true,
+            animate: animate && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     private func configureActionButtons(for status: DownloadStatus, task: DownloadTask?) {
@@ -1056,15 +1466,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func cancelClicked() {
-        // Close always works — including after completion. Active transfers pause first.
-        if lastStatus == .downloading || lastStatus == .waiting {
-            Task {
-                await manager.pause(taskID: taskID)
-                window?.close()
-            }
-        } else {
-            window?.close()
-        }
+        // The lightweight window is a monitor, not the transfer itself.
+        // Closing it must never surprise the user by pausing the download;
+        // Pause remains an explicit, separately labelled action.
+        window?.close()
     }
 
     @objc private func openClicked() {
@@ -1072,7 +1477,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             guard let task = try? await manager.task(id: taskID),
                   let url = task.destinationFileURL,
                   FileManager.default.fileExists(atPath: url.path) else { return }
-            NSWorkspace.shared.open(url)
+            if !NSWorkspace.shared.open(url) {
+                showActionFailure(message: L10n.openFileFailed, detail: url.path)
+            }
         }
     }
 
@@ -1086,6 +1493,17 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             } else if FileManager.default.fileExists(atPath: parent.path) {
                 NSWorkspace.shared.open(parent)
             }
+        }
+    }
+
+    private func showActionFailure(message: String, detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
         }
     }
 
@@ -1258,7 +1676,12 @@ private final class SegmentStripView: NSView {
         CATransaction.setDisableActions(true)
         unifiedFillLayer.transform = CATransform3DMakeScale(target, 1, 1)
         CATransaction.commit()
-        guard window != nil, abs(target - current) > 0.001 else { return }
+        guard window != nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              abs(target - current) > 0.001 else {
+            unifiedFillLayer.removeAnimation(forKey: "progress")
+            return
+        }
         let animation = CABasicAnimation(keyPath: "transform.scale.x")
         animation.fromValue = current
         animation.toValue = target
@@ -1537,6 +1960,259 @@ private final class ConnectionProgressRowView: NSView {
         formatter.numberStyle = .decimal
         formatter.maximumFractionDigits = 0
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
+/// Temporary, click-through bridge between two real windows. It owns only
+/// snapshots/layers and disappears after the handoff, so the live download
+/// card never gets stretched, relaid out, or restyled.
+@MainActor
+private final class CompletionHandoffOverlay {
+    private let window: NSPanel
+    private let rootLayer: CALayer
+    private let cardLayer = CALayer()
+    private let previewLayer: CALayer?
+    private let outlineLayer = CAShapeLayer()
+    private let shineContainer = CALayer()
+    private let shineLayer = CAGradientLayer()
+    private let sourceCardFrame: CGRect
+    private let destinationCardFrame: CGRect
+    private let sourcePreviewFrame: CGRect?
+    private let destinationPreviewFrame: CGRect?
+
+    init(
+        sourceImage: NSImage,
+        sourceRect: NSRect,
+        destinationRect: NSRect,
+        previewImage: NSImage?,
+        sourcePreviewRect: NSRect?,
+        destinationPreviewRect: NSRect?,
+        level: NSWindow.Level
+    ) {
+        let union = sourceRect.union(destinationRect).insetBy(dx: -28, dy: -28)
+        window = NSPanel(
+            contentRect: union,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.level = level
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+
+        let host = NSView(frame: NSRect(origin: .zero, size: union.size))
+        host.wantsLayer = true
+        let layer = CALayer()
+        layer.frame = host.bounds
+        host.layer = layer
+        window.contentView = host
+        rootLayer = layer
+
+        func local(_ rect: NSRect) -> CGRect {
+            CGRect(
+                x: rect.minX - union.minX,
+                y: rect.minY - union.minY,
+                width: rect.width,
+                height: rect.height
+            )
+        }
+        sourceCardFrame = local(sourceRect)
+        destinationCardFrame = local(destinationRect)
+        sourcePreviewFrame = sourcePreviewRect.map(local)
+        destinationPreviewFrame = destinationPreviewRect.map(local)
+
+        cardLayer.contents = Self.cgImage(from: sourceImage)
+        cardLayer.contentsGravity = .resizeAspect
+        cardLayer.contentsScale = window.backingScaleFactor
+        cardLayer.frame = sourceCardFrame
+        cardLayer.cornerRadius = 16
+        cardLayer.masksToBounds = true
+        cardLayer.shadowColor = NSColor.black.cgColor
+        cardLayer.shadowOpacity = 0.22
+        cardLayer.shadowRadius = 22
+        cardLayer.shadowOffset = CGSize(width: 0, height: -8)
+        rootLayer.addSublayer(cardLayer)
+
+        if let previewImage,
+           let sourcePreviewFrame,
+           let destinationPreviewFrame,
+           let previewCGImage = Self.cgImage(from: previewImage) {
+            let preview = CALayer()
+            preview.contents = previewCGImage
+            preview.contentsGravity = .resizeAspect
+            preview.contentsScale = window.backingScaleFactor
+            preview.frame = sourcePreviewFrame
+            preview.cornerRadius = min(10, sourcePreviewFrame.height * 0.12)
+            preview.masksToBounds = true
+            preview.shadowColor = NSColor.black.cgColor
+            preview.shadowOpacity = 0.28
+            preview.shadowRadius = 16
+            preview.shadowOffset = CGSize(width: 0, height: -5)
+            rootLayer.addSublayer(preview)
+            previewLayer = preview
+
+            outlineLayer.path = CGPath(
+                roundedRect: destinationPreviewFrame.insetBy(dx: -3, dy: -3),
+                cornerWidth: preview.cornerRadius + 3,
+                cornerHeight: preview.cornerRadius + 3,
+                transform: nil
+            )
+            outlineLayer.fillColor = NSColor.clear.cgColor
+            outlineLayer.strokeColor = NDMChrome.accent.withAlphaComponent(0.75).cgColor
+            outlineLayer.lineWidth = 2
+            outlineLayer.opacity = 0
+            rootLayer.insertSublayer(outlineLayer, below: preview)
+        } else {
+            previewLayer = nil
+        }
+
+        shineContainer.frame = destinationCardFrame
+        shineContainer.masksToBounds = true
+        shineContainer.cornerRadius = 16
+        shineContainer.opacity = 0
+        rootLayer.addSublayer(shineContainer)
+
+        shineLayer.colors = [
+            NSColor.clear.cgColor,
+            NSColor.white.withAlphaComponent(0.2).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        shineLayer.locations = [0, 0.5, 1]
+        shineLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        shineLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        shineLayer.frame = CGRect(
+            x: -140,
+            y: -40,
+            width: 100,
+            height: destinationCardFrame.height + 80
+        )
+        shineLayer.setAffineTransform(CGAffineTransform(rotationAngle: -0.14))
+        shineContainer.addSublayer(shineLayer)
+    }
+
+    func show() {
+        window.orderFrontRegardless()
+    }
+
+    func run(duration: TimeInterval, completion: @escaping () -> Void) {
+        let begin = CACurrentMediaTime() + 0.015
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cardLayer.frame = destinationCardFrame
+        cardLayer.opacity = 0
+        previewLayer?.frame = destinationPreviewFrame ?? previewLayer?.frame ?? .zero
+        previewLayer?.opacity = 0
+        outlineLayer.opacity = 0
+        shineContainer.opacity = 0
+        CATransaction.commit()
+
+        let cardPosition = CAKeyframeAnimation(keyPath: "position")
+        cardPosition.values = [
+            NSValue(point: CGPoint(x: sourceCardFrame.midX, y: sourceCardFrame.midY)),
+            NSValue(point: CGPoint(
+                x: (sourceCardFrame.midX + destinationCardFrame.midX) / 2,
+                y: max(sourceCardFrame.midY, destinationCardFrame.midY) + 8
+            )),
+            NSValue(point: CGPoint(x: destinationCardFrame.midX, y: destinationCardFrame.midY)),
+        ]
+        cardPosition.keyTimes = [0, 0.46, 1]
+
+        let cardBounds = CABasicAnimation(keyPath: "bounds")
+        cardBounds.fromValue = NSValue(rect: CGRect(origin: .zero, size: sourceCardFrame.size))
+        cardBounds.toValue = NSValue(rect: CGRect(origin: .zero, size: destinationCardFrame.size))
+
+        let cardFade = CAKeyframeAnimation(keyPath: "opacity")
+        cardFade.values = [1, 0.92, 0]
+        cardFade.keyTimes = [0, 0.4, 1]
+
+        let cardGroup = CAAnimationGroup()
+        cardGroup.animations = [cardPosition, cardBounds, cardFade]
+        cardGroup.duration = duration
+        cardGroup.beginTime = begin
+        cardGroup.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        cardLayer.add(cardGroup, forKey: "resultCardHandoff")
+
+        if let previewLayer,
+           let sourcePreviewFrame,
+           let destinationPreviewFrame {
+            let previewPosition = CAKeyframeAnimation(keyPath: "position")
+            previewPosition.values = [
+                NSValue(point: CGPoint(x: sourcePreviewFrame.midX, y: sourcePreviewFrame.midY)),
+                NSValue(point: CGPoint(
+                    x: (sourcePreviewFrame.midX + destinationPreviewFrame.midX) / 2,
+                    y: max(sourcePreviewFrame.midY, destinationPreviewFrame.midY) + 14
+                )),
+                NSValue(point: CGPoint(
+                    x: destinationPreviewFrame.midX,
+                    y: destinationPreviewFrame.midY
+                )),
+            ]
+            previewPosition.keyTimes = [0, 0.5, 1]
+
+            let previewBounds = CABasicAnimation(keyPath: "bounds")
+            previewBounds.fromValue = NSValue(
+                rect: CGRect(origin: .zero, size: sourcePreviewFrame.size)
+            )
+            previewBounds.toValue = NSValue(
+                rect: CGRect(origin: .zero, size: destinationPreviewFrame.size)
+            )
+
+            let previewFade = CAKeyframeAnimation(keyPath: "opacity")
+            previewFade.values = [1, 1, 0]
+            previewFade.keyTimes = [0, 0.78, 1]
+
+            let previewGroup = CAAnimationGroup()
+            previewGroup.animations = [previewPosition, previewBounds, previewFade]
+            previewGroup.duration = duration
+            previewGroup.beginTime = begin
+            previewGroup.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            previewLayer.add(previewGroup, forKey: "sharedFilePreview")
+
+            let outline = CAKeyframeAnimation(keyPath: "opacity")
+            outline.values = [0, 0, 0.72, 0]
+            outline.keyTimes = [0, 0.58, 0.8, 1]
+            outline.duration = duration
+            outline.beginTime = begin
+            outlineLayer.add(outline, forKey: "sharedPreviewLanding")
+        }
+
+        let containerFade = CAKeyframeAnimation(keyPath: "opacity")
+        containerFade.values = [0, 0, 1, 0]
+        containerFade.keyTimes = [0, 0.48, 0.7, 1]
+        containerFade.duration = duration
+        containerFade.beginTime = begin
+        shineContainer.add(containerFade, forKey: "handoffShineVisibility")
+
+        let wipe = CABasicAnimation(keyPath: "position.x")
+        wipe.fromValue = -100
+        wipe.toValue = destinationCardFrame.width + 150
+        wipe.duration = duration * 0.48
+        wipe.beginTime = begin + duration * 0.42
+        wipe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        shineLayer.add(wipe, forKey: "handoffShine")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.04) { [weak self] in
+            self?.window.orderOut(nil)
+            completion()
+        }
+    }
+
+    func cancel() {
+        cardLayer.removeAllAnimations()
+        previewLayer?.removeAllAnimations()
+        outlineLayer.removeAllAnimations()
+        shineContainer.removeAllAnimations()
+        shineLayer.removeAllAnimations()
+        window.orderOut(nil)
+    }
+
+    private static func cgImage(from image: NSImage) -> CGImage? {
+        var rect = CGRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 }
 

@@ -28,6 +28,34 @@ final class DownloadStoreTests: XCTestCase {
         ])
     }
 
+    func testAllDownloadsOrdersByLatestRetryOrCompletionActivity() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-download-recency-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = try DownloadStore(directory: directory)
+        let base = Date(timeIntervalSince1970: 1_750_000_000)
+        var older = try store.insert(DownloadTask(
+            url: "https://example.com/older",
+            lastTry: base
+        ))
+        var newer = try store.insert(DownloadTask(
+            url: "https://example.com/newer",
+            lastTry: base.addingTimeInterval(10)
+        ))
+
+        XCTAssertEqual(try store.allDownloads().map(\.id), [newer.id, older.id])
+
+        older.lastTry = base.addingTimeInterval(20)
+        try store.update(older)
+        XCTAssertEqual(try store.allDownloads().map(\.id), [older.id, newer.id])
+
+        newer.status = .complete
+        newer.completedAt = base.addingTimeInterval(30)
+        try store.update(newer)
+        XCTAssertEqual(try store.allDownloads().map(\.id), [newer.id, older.id])
+    }
+
     func testRecoverInterruptedTasksPreservesOnlyDurableCollectionQueue() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ndm-download-recovery-\(UUID().uuidString)", isDirectory: true)

@@ -35,6 +35,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private let fileSharePresenter = FileSharePresenter()
 
     private var progressWindows: [Int64: ProgressWindowController] = [:]
+    /// Browser-captured session cards have their own newest-first visual
+    /// stack. Ordinary progress windows must never consume one of these slots.
+    private var quietProgressWindowOrder: [Int64] = []
     private var propsWindow: TaskPropertiesWindowController?
     private var browsersWindow: BrowsersWindowController?
     private var refreshTask: Task<Void, Never>?
@@ -341,6 +344,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         inspectorController.onAction = { [weak self] action in
             guard let self, let id = self.selectedTaskID else { return }
             self.handleContextAction(action, taskID: id)
+        }
+        inspectorController.onCopyURL = { [weak self] in
+            guard let self, let id = self.selectedTaskID else { return false }
+            return self.copyURL(for: id)
         }
         inspectorController.onShare = { [weak self] anchor in
             guard let self, let id = self.selectedTaskID else { return }
@@ -650,7 +657,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 if (a.status == .downloading) != (b.status == .downloading) {
                     return a.status == .downloading
                 }
-                return a.id > b.id
+                return TaskPresentationFormatting.isMoreRecentlyActive(a, than: b)
             }
             .prefix(limit)
             .map { task in
@@ -710,11 +717,23 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         toggleQuickLook(for: id)
     }
     @objc func menuCopyURLSelected() {
-        guard let id = selectedTaskID,
-              let url = allTasks.first(where: { $0.id == id })?.url,
-              !url.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
+        guard let id = selectedTaskID else { return }
+        _ = copyURL(for: id, reportFailure: true)
+    }
+
+    @discardableResult
+    private func copyURL(for taskID: Int64, reportFailure: Bool = false) -> Bool {
+        guard let url = allTasks.first(where: { $0.id == taskID })?.url else {
+            if reportFailure {
+                showAlert(message: L10n.copyFailed, detail: L10n.copyFailedDetail)
+            }
+            return false
+        }
+        let succeeded = DownloadClipboard.copy(url)
+        if reportFailure, !succeeded {
+            showAlert(message: L10n.copyFailed, detail: L10n.copyFailedDetail)
+        }
+        return succeeded
     }
 
     private func selectedRow() -> TaskRowPresentation? {
@@ -777,7 +796,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refreshLiveProgress()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // The manager's user-facing speed target still changes only
+                // once per completed second. A lighter 250 ms pickup while
+                // active lets the main hero, title and menu snapshot receive
+                // that shared target promptly instead of visibly trailing the
+                // compact progress window by another whole second.
+                let hasActiveTransfer = self.allTasks.contains {
+                    $0.status == .downloading
+                }
+                try? await Task.sleep(
+                    nanoseconds: hasActiveTransfer ? 250_000_000 : 1_000_000_000
+                )
             }
         }
     }
@@ -888,24 +917,54 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         onOpenSettings?()
     }
 
-    func showProgress(for taskID: Int64) {
+    func showProgress(for taskID: Int64, quietly: Bool = false) {
         if let existing = progressWindows[taskID] {
-            existing.showWindow(nil)
-            existing.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            if quietly, quietProgressWindowOrder.contains(taskID) {
+                quietProgressWindowOrder.removeAll { $0 == taskID }
+                quietProgressWindowOrder.append(taskID)
+                reflowQuietProgressWindows()
+            } else if !quietly, quietProgressWindowOrder.contains(taskID) {
+                quietProgressWindowOrder.removeAll { $0 == taskID }
+                existing.promoteToInteractivePresentation()
+                reflowQuietProgressWindows()
+            }
+            // A user explicitly choosing "Show Progress" should promote even
+            // a browser-created quiet card into a key, interactive window.
+            existing.presentWindow(activating: !quietly)
             return
         }
         let name = allTasks.first(where: { $0.id == taskID })?.filename
             ?? displayedRows.first(where: { $0.taskID == taskID })?.filename
             ?? L10n.downloadFallback(taskID)
-        let wc = ProgressWindowController(manager: manager, taskID: taskID, filename: name)
+        let wc = ProgressWindowController(
+            manager: manager,
+            taskID: taskID,
+            filename: name,
+            quietlyPresented: quietly
+        )
         wc.onWindowClose = { [weak self] in
-            self?.progressWindows.removeValue(forKey: taskID)
+            guard let self else { return }
+            self.progressWindows.removeValue(forKey: taskID)
+            self.quietProgressWindowOrder.removeAll { $0 == taskID }
+            self.reflowQuietProgressWindows()
         }
         progressWindows[taskID] = wc
-        wc.showWindow(nil)
-        wc.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if quietly {
+            quietProgressWindowOrder.removeAll { $0 == taskID }
+            quietProgressWindowOrder.append(taskID)
+            reflowQuietProgressWindows()
+        }
+        wc.presentWindow()
+    }
+
+    /// New captures occupy slot zero; older cards fan away from it. Reflowing
+    /// on every close removes dead gaps and makes the next-most-recent task the
+    /// immediately reachable card.
+    private func reflowQuietProgressWindows() {
+        quietProgressWindowOrder.removeAll { progressWindows[$0] == nil }
+        for (index, taskID) in quietProgressWindowOrder.reversed().enumerated() {
+            progressWindows[taskID]?.positionInQuietStack(index: index)
+        }
     }
 
     /// If a progress window is already open for this task, morph it into the
@@ -1273,7 +1332,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             showAlert(message: L10n.fileNotFound, detail: url.path)
             return
         }
-        NSWorkspace.shared.open(url)
+        if !NSWorkspace.shared.open(url) {
+            showAlert(message: L10n.openFileFailed, detail: url.path)
+        }
     }
 
     private func existingFileURL(for id: Int64) -> URL? {
@@ -1371,7 +1432,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             return
         }
         let source = anchor ?? inspectorController.view
-        _ = fileSharePresenter.present(fileURL: url, from: source)
+        if !fileSharePresenter.present(fileURL: url, from: source) {
+            showAlert(message: L10n.fileNotFound, detail: url.path)
+        }
     }
 
     private func showProperties(for id: Int64) {
@@ -1437,10 +1500,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         case .properties:
             showProperties(for: taskID)
         case .copyURL:
-            if let url = allTasks.first(where: { $0.id == taskID })?.url, !url.isEmpty {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url, forType: .string)
-            }
+            _ = copyURL(for: taskID, reportFailure: true)
         case .delete:
             deleteTask(taskID)
         }
@@ -2522,6 +2582,10 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let previousRows = self.rows
         let previousIDs = previousRows.map(\.taskID)
         let nextIDs = rows.map(\.taskID)
+        let scrollAnchor = scrollAnchorBeforeStructuralUpdate(
+            previousRows: previousRows,
+            structuralChange: previousIDs != nextIDs
+        )
         self.rows = rows
         self.selectedTaskID = selectedTaskID
         emptyLabel.stringValue = emptyTitle
@@ -2552,6 +2616,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             // explicitly notifying every row height forces AppKit to create and
             // measure all cells (several thousand in real user libraries).
             tableView.reloadData()
+            restoreScrollAnchor(scrollAnchor, in: rows)
         } else if !rows.isEmpty {
             var changedRows = IndexSet()
             var heightChangedRows = IndexSet()
@@ -2582,7 +2647,6 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                   previousRows[index].taskID == rows[index].taskID else { continue }
             if let rowView = tableView.rowView(atRow: index, makeIfNecessary: false) as? QuietFinderRowView {
                 rowView.celebrateCompletion()
-                NSSound(named: .init("Glass"))?.play()
             }
         }
 
@@ -2612,13 +2676,53 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         }
     }
 
+    /// Preserve the task under the user's eye when a newly completed/retried
+    /// item moves to the front. Keeping only the clip view's pixel offset makes
+    /// the visible content silently change identity after every structural
+    /// reload, which is especially disorienting in long download histories.
+    private func scrollAnchorBeforeStructuralUpdate(
+        previousRows: [TaskRowPresentation],
+        structuralChange: Bool
+    ) -> (taskID: Int64, offset: CGFloat)? {
+        guard structuralChange,
+              !previousRows.isEmpty,
+              !scrollView.isHidden,
+              tableView.numberOfRows == previousRows.count else { return nil }
+        let visible = tableView.visibleRect
+        guard visible.height > 0 else { return nil }
+        let probe = NSPoint(x: visible.midX, y: visible.minY + 1)
+        let row = tableView.row(at: probe)
+        guard row >= 0, row < previousRows.count else { return nil }
+        let offset = visible.minY - tableView.rect(ofRow: row).minY
+        return (previousRows[row].taskID, offset)
+    }
+
+    private func restoreScrollAnchor(
+        _ anchor: (taskID: Int64, offset: CGFloat)?,
+        in rows: [TaskRowPresentation]
+    ) {
+        guard let anchor,
+              let row = rows.firstIndex(where: { $0.taskID == anchor.taskID }) else { return }
+        tableView.layoutSubtreeIfNeeded()
+        let visibleHeight = scrollView.contentView.bounds.height
+        let targetY = tableView.rect(ofRow: row).minY + anchor.offset
+        let maximumY = max(0, tableView.bounds.height - visibleHeight)
+        var origin = scrollView.contentView.bounds.origin
+        origin.y = min(max(0, targetY), maximumY)
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     /// Raise / collapse the Now Downloading cinema strip. The primary slot
-    /// goes to the fastest live transfer; everything else is a small "+N".
+    /// follows the list's activity order, so a newly captured or retried task
+    /// takes the stage immediately. Other live transfers remain as rich rows
+    /// directly underneath instead of silently replacing the user's newest
+    /// action with whichever socket happens to be fastest.
     /// Returns the task the strip is presenting so the list can exclude it.
     @discardableResult
     private func updateHero(_ rows: [TaskRowPresentation]) -> Int64? {
         let active = rows.filter(\.isDownloading)
-        let primary = active.max { $0.speedBytesPerSecond < $1.speedBytesPerSecond }
+        let primary = active.first
         heroView.update(primary: primary, activeCount: active.count)
         let targetHeight: CGFloat = primary == nil ? 0 : 150
         guard heroHeight?.constant != targetHeight else { return primary?.taskID }
@@ -2732,6 +2836,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         guard row < rows.count else { return 70 * contentScale }
+        if rows[row].isDownloading {
+            return 92 * contentScale
+        }
         return (rows[row].showsProgressBar ? 74 : 66) * contentScale
     }
 
@@ -2784,7 +2891,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         // No category washes: with thousands of rows they read as a muddy
         // rainbow (already killed once in c7213c5); the ambient preview and
         // file icon carry the category.
-        rowView.washColor = nil
+        rowView.washColor = item.isDownloading ? NDMChrome.accent : nil
         // Ambient trailing artwork only when there is a real preview to show.
         // Echoing the leading file icon as a big faint copy adds no
         // information — six rows of ghost icons read as smudge, not design.
@@ -3339,13 +3446,17 @@ private final class TaskRowCellView: NSTableCellView {
             trailingLabel.alphaValue = 1
         }
 
-        glyph.setContentScale(scale)
-        titleLabel.font = .systemFont(ofSize: 13 * scale, weight: .semibold)
+        let liveScale = row.isDownloading ? scale * 1.22 : scale
+        glyph.setContentScale(liveScale)
+        titleLabel.font = .systemFont(
+            ofSize: (row.isDownloading ? 14 : 13) * scale,
+            weight: .semibold
+        )
         badgeLabel.font = .systemFont(ofSize: 12 * scale, weight: .bold)
         subtitleLabel.font = .systemFont(ofSize: 12 * scale)
         trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
         renewButton.setContentScale(scale)
-        titleTop?.constant = 12 * scale
+        titleTop?.constant = (row.isDownloading ? 15 : 12) * scale
         badgeHeight?.constant = 18 * scale
 
         let cover = CoverArtCache.shared.image(for: row.taskID)
@@ -3371,14 +3482,20 @@ private final class TaskRowCellView: NSTableCellView {
             let detail = row.statusDetail.isEmpty || row.statusDetail == L10n.completed
                 ? L10n.completed
                 : row.statusDetail
-            check.append(NSAttributedString(string: detail, attributes: [
+            let datedDetail = row.activityDateText.isEmpty
+                ? detail
+                : "\(detail) · \(row.activityDateText)"
+            check.append(NSAttributedString(string: datedDetail, attributes: [
                 .font: NSFont.systemFont(ofSize: 11.5 * scale),
                 .foregroundColor: NSColor.tertiaryLabelColor,
             ]))
             subtitleLabel.attributedStringValue = check
         } else {
             subtitleLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .regular)
-            subtitleLabel.stringValue = row.statusDetail
+            let addsDate = !row.isDownloading && !row.isQueued && !row.activityDateText.isEmpty
+            subtitleLabel.stringValue = addsDate
+                ? "\(row.statusDetail) · \(row.activityDateText)"
+                : row.statusDetail
             subtitleLabel.textColor = .secondaryLabelColor
         }
 
@@ -3420,8 +3537,11 @@ private final class TaskRowCellView: NSTableCellView {
             } else {
                 trailingLabel.stringValue = row.progressText
             }
-            trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .bold)
-            trailingLabel.textColor = .labelColor
+            trailingLabel.font = .monospacedDigitSystemFont(
+                ofSize: 16 * scale,
+                weight: .medium
+            )
+            trailingLabel.textColor = NDMChrome.accent
         } else if !showRenew {
             trailingLabel.stringValue = row.sizeText
             trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
@@ -3578,6 +3698,7 @@ private final class HeroPreviewView: NSView {
 private final class InspectorViewController: NSViewController {
     var onAction: ((TaskListContextAction) -> Void)?
     var onShare: ((NSView) -> Void)?
+    var onCopyURL: (() -> Bool)?
 
     private let titleLabel = NSTextField(labelWithString: L10n.details)
     private let glanceValueLabel = NSTextField(labelWithString: "")
@@ -4306,6 +4427,9 @@ private final class InspectorViewController: NSViewController {
             progressBar.isHidden = true
             progressBar.isActive = false
             var pairs: [(String, String)] = [(L10n.size, row.sizeText)]
+            if !row.activityDateText.isEmpty {
+                pairs.append((L10n.downloadTime, row.activityDateText))
+            }
             if !row.host.isEmpty { pairs.append((L10n.source, row.host)) }
             pairs.append((L10n.type, fileTypeText(for: row)))
             if let location = locationText(for: row) {
@@ -4327,6 +4451,9 @@ private final class InspectorViewController: NSViewController {
             }
             if row.isDownloading, let n = Int(row.connectionsText), n > 0 {
                 pairs.append((L10n.connections, "\(n) / \(n)"))
+            }
+            if !row.activityDateText.isEmpty {
+                pairs.append((L10n.lastAttempt, row.activityDateText))
             }
             pairs.append((L10n.type, fileTypeText(for: row)))
             reloadKV(pairs)
@@ -4444,20 +4571,23 @@ private final class InspectorViewController: NSViewController {
         if utilityButtonSharesFile {
             onShare?(copyURLButton)
         } else {
-            onAction?(.copyURL)
-            flashCopied(copyURLButton)
+            let succeeded = onCopyURL?() ?? false
+            flashCopyResult(copyURLButton, succeeded: succeeded)
         }
     }
 
-    /// Momentary "✓ Copied" confirmation on the button, then restore. Confirms
-    /// the click landed without a disruptive alert.
-    private func flashCopied(_ button: InspectorActionButton) {
+    /// Momentary confirmation after a verified pasteboard read-back.
+    private func flashCopyResult(_ button: InspectorActionButton, succeeded: Bool) {
         let title = button.title
         let image = button.image
         let tint = button.contentTintColor
-        button.title = L10n.copiedToClipboard
-        button.image = NDMChrome.symbol("checkmark", pointSize: 12, weight: .semibold)
-        button.contentTintColor = .systemGreen
+        button.title = succeeded ? L10n.copiedToClipboard : L10n.copyFailed
+        button.image = NDMChrome.symbol(
+            succeeded ? "checkmark" : "exclamationmark.triangle",
+            pointSize: 12,
+            weight: .semibold
+        )
+        button.contentTintColor = succeeded ? .systemGreen : .systemOrange
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak button] in
             guard let button else { return }
             button.title = title

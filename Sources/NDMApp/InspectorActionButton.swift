@@ -8,6 +8,17 @@ import AppKit
 final class InspectorActionButton: NSButton {
     enum Style { case flat, filled }
 
+    /// Image-only AppKit buttons can report a larger alignment rect than their
+    /// visible siblings. Opt into exact bounds when a compact action row needs
+    /// every outlined control to share one physical height.
+    var usesExactAlignmentRect = false
+
+    override var alignmentRectInsets: NSEdgeInsets {
+        usesExactAlignmentRect
+            ? NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+            : super.alignmentRectInsets
+    }
+
     /// `.filled` is a confident accent pill (primary actions); `.flat` is a
     /// borderless action with a hover cushion (secondary actions).
     var style: Style = .flat {
@@ -90,6 +101,10 @@ final class InspectorActionButton: NSButton {
     private func setHovering(_ hovering: Bool) {
         guard isHovering != hovering else { return }
         isHovering = hovering
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            needsDisplay = true
+            return
+        }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             ctx.allowsImplicitAnimation = true
@@ -112,7 +127,9 @@ final class InspectorActionButton: NSButton {
         // and setting it to this view's bounds-center teleported the button to
         // the top-left corner (the "renew/copy jumps over retry" overlap bug).
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = down ? 0.09 : 0.28
+            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                ? 0
+                : (down ? 0.09 : 0.28)
             ctx.timingFunction = down
                 ? CAMediaTimingFunction(name: .easeOut)
                 : CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)

@@ -17,6 +17,11 @@ public actor DownloadManager {
     private var mkvEngines: [Int64: MKVMergeEngine] = [:]
     private var ytDlpEngines: [Int64: YtDlpEngine] = [:]
     private var runningTasks: [Int64: Task<Void, Never>] = [:]
+    /// One user-facing transfer rate per task. Every window receives this same
+    /// cached one-second sample instead of independently sampling the same byte
+    /// counter on slightly different clocks.
+    private var presentationSpeedSamplers: [Int64: OneSecondSpeedSampler] = [:]
+    private var presentationSpeeds: [Int64: Double] = [:]
     /// Optional UI hook when a download completes successfully.
     public var onTaskCompleted: (@Sendable (DownloadTask) -> Void)?
     /// Optional UI hook when settings change (for ShowPanel push).
@@ -32,7 +37,8 @@ public actor DownloadManager {
         },
         sameVolumeProvider: @escaping @Sendable (URL, URL) -> Bool = {
             VolumeCapacity.areOnSameVolume($0, $1)
-        }
+        },
+        onTaskCompleted: (@Sendable (DownloadTask) -> Void)? = nil
     ) {
         self.store = store
         self.settings = settings
@@ -40,6 +46,7 @@ public actor DownloadManager {
         self.fileRecycler = fileRecycler
         self.capacityProvider = capacityProvider
         self.sameVolumeProvider = sameVolumeProvider
+        self.onTaskCompleted = onTaskCompleted
     }
 
     public func updateSettings(_ settings: AppSettings) {
@@ -61,21 +68,65 @@ public actor DownloadManager {
 
     public func progress(taskID: Int64) async -> DownloadProgress? {
         if let engine = engines[taskID] {
-            return await engine.currentProgress()
+            return progressForPresentation(
+                await engine.currentProgress(),
+                taskID: taskID
+            )
         }
         if let engine = hlsEngines[taskID] {
-            return await engine.currentProgress()
+            return progressForPresentation(
+                await engine.currentProgress(),
+                taskID: taskID
+            )
         }
         if let engine = ftpEngines[taskID] {
-            return await engine.currentProgress()
+            return progressForPresentation(
+                await engine.currentProgress(),
+                taskID: taskID
+            )
         }
         if let engine = mkvEngines[taskID] {
-            return await engine.currentProgress()
+            return progressForPresentation(
+                await engine.currentProgress(),
+                taskID: taskID
+            )
         }
         if let engine = ytDlpEngines[taskID] {
-            return await engine.currentProgress()
+            return progressForPresentation(
+                await engine.currentProgress(),
+                taskID: taskID
+            )
         }
         return nil
+    }
+
+    /// Internal for deterministic tests. The raw engine snapshot remains
+    /// untouched except for its presentation rate.
+    func progressForPresentation(
+        _ progress: DownloadProgress,
+        taskID: Int64,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> DownloadProgress {
+        var sampler = presentationSpeedSamplers[taskID] ?? OneSecondSpeedSampler()
+        let isFirstSample = presentationSpeedSamplers[taskID] == nil
+        let average = sampler.consume(
+            completedBytes: progress.completedBytes,
+            reset: isFirstSample,
+            now: now
+        )
+        presentationSpeedSamplers[taskID] = sampler
+        if let average {
+            presentationSpeeds[taskID] = average
+        }
+
+        var presented = progress
+        presented.bytesPerSecond = presentationSpeeds[taskID] ?? 0
+        return presented
+    }
+
+    private func resetPresentationSpeed(taskID: Int64) {
+        presentationSpeedSamplers[taskID] = nil
+        presentationSpeeds[taskID] = nil
     }
 
     public func addURL(
@@ -143,6 +194,7 @@ public actor DownloadManager {
             connections: 1,
             lastTry: Date(),
             firstTry: Date(),
+            completedAt: Date(),
             resumable: true,
             pageTitle: pageTitle,
             mimeType: "video/mp4",
@@ -348,6 +400,7 @@ public actor DownloadManager {
             task.errorText = nil
             task.status = .incomplete
             task.lastTry = Date()
+            task.completedAt = nil
             if !message.pageURL.isEmpty {
                 task.pageURL = message.pageURL
             } else if !message.referer.isEmpty {
@@ -449,6 +502,7 @@ public actor DownloadManager {
     /// Fire-and-forget start (UI / bridge). Does not wait for completion.
     public func start(taskID: Int64) async throws {
         if runningTasks[taskID] != nil { return }
+        resetPresentationSpeed(taskID: taskID)
         // One-by-one queue (original radioOneByOne): wait until no other engine is active.
         if !settings.downloadAllAtOnce, !runningTasks.isEmpty {
             throw ManagerError.queueBusy
@@ -502,6 +556,7 @@ public actor DownloadManager {
             ytDlpEngines[taskID] = engine
             task.status = .downloading
             task.lastTry = Date()
+            task.completedAt = nil
             try store.update(task)
             let onComplete = onTaskCompleted
             let pageTitle = task.pageTitle
@@ -579,6 +634,7 @@ public actor DownloadManager {
             && (task.linkType.lowercased() == "media" || (task.alternateURL ?? "").contains("://"))
         task.status = .downloading
         task.lastTry = Date()
+        task.completedAt = nil
         try store.update(task)
 
         let onComplete = onTaskCompleted
@@ -683,6 +739,7 @@ public actor DownloadManager {
             // stale task snapshot captured at start.
             var done = (try? store.allDownloads().first { $0.id == taskID }) ?? task
             done.status = .complete
+            done.completedAt = Date()
             let producedCategory = DownloadCategory.infer(
                 filename: fileURL.lastPathComponent,
                 mimeType: done.mimeType
@@ -779,6 +836,7 @@ public actor DownloadManager {
 
     private func clearRunning(_ taskID: Int64) {
         runningTasks[taskID] = nil
+        resetPresentationSpeed(taskID: taskID)
         guard runningTasks.isEmpty,
               let tasks = try? store.allDownloads(),
               let next = Self.queuedCollectionCandidate(in: tasks) else { return }
@@ -906,6 +964,7 @@ public actor DownloadManager {
             mkvEngines[taskID] = nil
             ytDlpEngines[taskID] = nil
             runningTasks[taskID] = nil
+            resetPresentationSpeed(taskID: taskID)
             try? FileManager.default.removeItem(
                 at: supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)
             )

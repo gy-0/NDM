@@ -9,6 +9,10 @@ public final class BrowserBridge: @unchecked Sendable {
     public var onClientCountChanged: (@Sendable (Int) -> Void)?
 
     private let requestedPort: NWEndpoint.Port
+    /// Exposes configuration to `@testable` tests without forcing a bind to a
+    /// fixed port that the OS may legitimately be using as an ephemeral
+    /// outbound source port. Actual listening is covered with port 0.
+    var configuredPort: UInt16 { requestedPort.rawValue }
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "dev.ndm.bridge", qos: .userInitiated)
     private let queueKey = DispatchSpecificKey<UInt8>()

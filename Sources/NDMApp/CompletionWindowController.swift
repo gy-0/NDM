@@ -4,7 +4,8 @@ import NDMCore
 import NDMEngine
 import QuickLookThumbnailing
 
-/// Non-modal completion panel — used only when no progress window is open.
+/// Non-modal completion panel — shown standalone or used as the destination
+/// of the progress window's shared-element handoff.
 ///
 /// Cinema layout: a full-bleed dark hero carries the finished file's own
 /// artwork with the "Download Complete" headline and an accent underline laid
@@ -29,6 +30,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private weak var shareButton: InspectorActionButton?
     private weak var moreButton: InspectorActionButton?
     private weak var noticeLabel: NSTextField?
+    private var hasCelebrated = false
+    private var handoffPrepared = false
     /// Resolved asynchronously and folded into the meta line; kept so the line
     /// can be rebuilt in place on a language switch without losing the runtime.
     private var durationText: String?
@@ -83,6 +86,57 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        guard !handoffPrepared, !hasCelebrated else { return }
+        hasCelebrated = true
+        // Let the window finish its first layout (and any progress-window
+        // crossfade begin) before the single completion flourish.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { [weak self] in
+            self?.hero?.celebrateCompletion()
+        }
+    }
+
+    /// Stage the result card before the progress card morphs into it. The hero
+    /// is available immediately, while the file details and actions wait until
+    /// the shared preview has landed.
+    func prepareForAnimatedHandoff(_ preview: CompletionHandoffPreview?) {
+        handoffPrepared = true
+        deckStack?.alphaValue = 0
+        if let preview, preview.isArtwork {
+            hero?.showThumbnail(preview.image)
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// Destination for the shared visual in screen coordinates.
+    func handoffDestinationRect(isArtwork: Bool) -> NSRect? {
+        guard let window, let content = window.contentView, let hero else { return nil }
+        content.layoutSubtreeIfNeeded()
+        let rectInContent = hero.handoffDestinationRect(in: content, isArtwork: isArtwork)
+        let rectInWindow = content.convert(rectInContent, to: nil)
+        return window.convertToScreen(rectInWindow)
+    }
+
+    /// Finish the state change only after the shared preview has arrived.
+    func finishAnimatedHandoff() {
+        handoffPrepared = false
+        guard !hasCelebrated else { return }
+        hasCelebrated = true
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            deckStack?.alphaValue = 1
+        } else {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.24
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                deckStack?.animator().alphaValue = 1
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            self?.hero?.celebrateCompletion()
+        }
+    }
+
     private func resizeForCompletionStack(expanded: Bool) {
         guard let window else { return }
         var frame = window.frame
@@ -100,7 +154,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             completionExpansionAddedHeight = 0
         }
         frame.origin.y = oldTop - frame.height
-        window.setFrame(frame, display: true, animate: true)
+        window.setFrame(
+            frame,
+            display: true,
+            animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     /// Successful finishing work stays silent. Only surface a result when the
@@ -213,6 +271,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         share.image = NDMChrome.symbol("square.and.arrow.up", pointSize: 14, weight: .medium)
         share.imagePosition = .imageOnly
         share.contentTintColor = .secondaryLabelColor
+        share.usesExactAlignmentRect = true
         share.setAccessibilityLabel(L10n.share)
 
         let more = outlinedButton(title: "")
@@ -221,6 +280,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         more.image = NDMChrome.symbol("ellipsis", pointSize: 14, weight: .semibold)
         more.imagePosition = .imageOnly
         more.contentTintColor = .secondaryLabelColor
+        more.usesExactAlignmentRect = true
         more.setAccessibilityLabel(L10n.moreActions)
         more.isHidden = !SmartFinalize.supportsDeliveryRecipes(input: task.destinationFileURL)
 
@@ -335,7 +395,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         let top = frame.maxY
         frame.size.height = targetHeight
         frame.origin.y = top - targetHeight
-        window.setFrame(frame, display: true, animate: animate)
+        window.setFrame(
+            frame,
+            display: true,
+            animate: animate && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     /// Fill the hero backdrop with a real Quick Look thumbnail once ready.
@@ -381,7 +445,10 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             ? TaskPresentationFormatting.byteCount(task.fileSize)
             : ""
         let typeText = L10n.fileTypeDisplay(ext: (task.filename as NSString).pathExtension)
-        metaLabel.stringValue = [sizeText, typeText, durationText]
+        let dateText = TaskPresentationFormatting.activityDate(
+            task.completedAt ?? task.lastTry ?? task.firstTry
+        )
+        metaLabel.stringValue = [sizeText, typeText, durationText, dateText]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: "  ·  ")
@@ -414,17 +481,49 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func openClicked() {
-        guard let url = task.destinationFileURL else { return }
-        NSWorkspace.shared.open(url)
+        guard let url = destinationFileForAction() else { return }
+        if !NSWorkspace.shared.open(url) {
+            showActionFailure(message: L10n.openFileFailed, detail: url.path)
+        }
     }
 
     @objc private func revealClicked() {
-        guard let url = task.destinationFileURL else { return }
+        guard let url = destinationFileForAction() else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     @objc private func shareClicked(_ sender: NSButton) {
-        _ = fileSharePresenter.present(fileURL: task.destinationFileURL, from: sender)
+        guard let url = destinationFileForAction() else { return }
+        if !fileSharePresenter.present(fileURL: url, from: sender) {
+            showActionFailure(message: L10n.fileNotFound, detail: url.path)
+        }
+    }
+
+    private func destinationFileForAction() -> URL? {
+        guard let url = task.destinationFileURL,
+              FileManager.default.fileExists(atPath: url.path) else {
+            openButton?.isEnabled = false
+            revealButton?.isEnabled = false
+            shareButton?.isEnabled = false
+            moreButton?.isEnabled = false
+            showActionFailure(
+                message: L10n.fileNotFound,
+                detail: task.destinationFileURL?.path ?? task.filename
+            )
+            return nil
+        }
+        return url
+    }
+
+    private func showActionFailure(message: String, detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
     }
 
     @objc private func showMoreActions(_ sender: NSButton) {
@@ -595,6 +694,146 @@ final class CompletionCinemaHero: NSView {
     func showThumbnail(_ image: NSImage) {
         backdrop.setImage(image)
         restGlyph.isHidden = true
+    }
+
+    func handoffDestinationRect(in ancestor: NSView, isArtwork: Bool) -> NSRect {
+        let target: NSView = isArtwork ? self : restGlyph
+        return ancestor.convert(target.bounds, from: target)
+    }
+
+    /// One restrained, native-layer completion flourish: a highlight wipes
+    /// across the finished artwork and a handful of tiny sparks break outward.
+    /// No emoji, looping confetti, sound, or interaction-blocking overlay.
+    func celebrateCompletion() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let hostLayer = layer,
+              bounds.width > 0,
+              bounds.height > 0 else { return }
+
+        let shine = CAGradientLayer()
+        shine.colors = [
+            NSColor.clear.cgColor,
+            NSColor.white.withAlphaComponent(0.26).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        shine.locations = [0, 0.5, 1]
+        shine.startPoint = CGPoint(x: 0, y: 0.5)
+        shine.endPoint = CGPoint(x: 1, y: 0.5)
+        shine.frame = CGRect(x: -110, y: -30, width: 90, height: bounds.height + 60)
+        shine.setAffineTransform(CGAffineTransform(rotationAngle: -0.16))
+        hostLayer.addSublayer(shine)
+
+        let wipe = CABasicAnimation(keyPath: "position.x")
+        wipe.fromValue = -90
+        wipe.toValue = bounds.width + 150
+        wipe.duration = 0.72
+        wipe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        wipe.fillMode = .forwards
+        wipe.isRemovedOnCompletion = false
+        shine.add(wipe, forKey: "completionShine")
+
+        let origin = CGPoint(x: bounds.midX, y: bounds.midY - 10)
+        let colors = [
+            NDMChrome.accent,
+            NSColor.white,
+            NSColor.systemTeal,
+            NSColor.systemYellow,
+            NSColor.systemPink,
+        ]
+
+        let ring = CAShapeLayer()
+        ring.bounds = CGRect(x: 0, y: 0, width: 34, height: 34)
+        ring.position = origin
+        ring.path = CGPath(
+            ellipseIn: CGRect(x: 1, y: 1, width: 32, height: 32),
+            transform: nil
+        )
+        ring.fillColor = NSColor.clear.cgColor
+        ring.strokeColor = NDMChrome.accent.withAlphaComponent(0.9).cgColor
+        ring.lineWidth = 2
+        hostLayer.addSublayer(ring)
+        let ringScale = CABasicAnimation(keyPath: "transform.scale")
+        ringScale.fromValue = 0.55
+        ringScale.toValue = 4.2
+        let ringFade = CABasicAnimation(keyPath: "opacity")
+        ringFade.fromValue = 0.9
+        ringFade.toValue = 0
+        let ringBurst = CAAnimationGroup()
+        ringBurst.animations = [ringScale, ringFade]
+        ringBurst.duration = 0.58
+        ringBurst.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ringBurst.fillMode = .forwards
+        ringBurst.isRemovedOnCompletion = false
+        ring.add(ringBurst, forKey: "completionRing")
+
+        titleLabel.wantsLayer = true
+        let titlePop = CAKeyframeAnimation(keyPath: "transform.scale")
+        titlePop.values = [0.96, 1.035, 1]
+        titlePop.keyTimes = [0, 0.46, 1]
+        titlePop.duration = 0.48
+        titlePop.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        titleLabel.layer?.add(titlePop, forKey: "completionTitlePop")
+
+        for index in 0..<18 {
+            let spark = CALayer()
+            let width: CGFloat = index.isMultiple(of: 3) ? 4 : 3
+            let height: CGFloat = index.isMultiple(of: 2) ? 10 : 7
+            spark.bounds = CGRect(x: 0, y: 0, width: width, height: height)
+            spark.position = origin
+            spark.cornerRadius = width / 2
+            spark.backgroundColor = colors[index % colors.count]
+                .withAlphaComponent(0.92)
+                .cgColor
+            hostLayer.addSublayer(spark)
+
+            let angle = (-CGFloat.pi * 0.88)
+                + (CGFloat(index) / 13) * CGFloat.pi * 1.76
+            let distance: CGFloat = 76 + CGFloat((index * 17) % 64)
+            let destination = CGPoint(
+                x: origin.x + cos(angle) * distance,
+                y: origin.y + sin(angle) * distance + 12
+            )
+            let path = CGMutablePath()
+            path.move(to: origin)
+            path.addQuadCurve(
+                to: destination,
+                control: CGPoint(
+                    x: (origin.x + destination.x) / 2,
+                    y: max(origin.y, destination.y) + 38
+                )
+            )
+
+            let flight = CAKeyframeAnimation(keyPath: "position")
+            flight.path = path
+            flight.calculationMode = .paced
+
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 1, 1, 0]
+            fade.keyTimes = [0, 0.08, 0.62, 1]
+
+            let spin = CABasicAnimation(keyPath: "transform.rotation")
+            spin.fromValue = 0
+            spin.toValue = CGFloat.pi * CGFloat(index.isMultiple(of: 2) ? 2 : -2)
+
+            let burst = CAAnimationGroup()
+            burst.animations = [flight, fade, spin]
+            burst.duration = 0.82 + Double(index % 4) * 0.045
+            burst.beginTime = spark.convertTime(CACurrentMediaTime(), from: nil)
+                + Double(index % 3) * 0.018
+            burst.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            burst.fillMode = .forwards
+            burst.isRemovedOnCompletion = false
+            spark.add(burst, forKey: "completionBurst")
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                spark.removeFromSuperlayer()
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+            shine.removeFromSuperlayer()
+            ring.removeFromSuperlayer()
+        }
     }
 
     @objc private func closePressed() {

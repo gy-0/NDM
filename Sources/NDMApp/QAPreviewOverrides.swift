@@ -46,10 +46,25 @@ enum QAPreviewOverrides {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
+    /// Keeps live QA downloads out of the user's real Downloads directory.
+    static var downloadDirectory: URL? {
+        guard isEnabled,
+              let path = environment["NDM_QA_DOWNLOAD_ROOT"],
+              !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
     static var bridgePort: UInt16? {
         guard isEnabled,
               let raw = environment["NDM_QA_BRIDGE_PORT"] else { return nil }
         return UInt16(raw)
+    }
+
+    static var maxConnections: Int? {
+        guard isEnabled,
+              let raw = environment["NDM_QA_MAX_CONNECTIONS"],
+              let value = Int(raw) else { return nil }
+        return min(32, max(1, value))
     }
 
     static var windowSize: NSSize? {
@@ -116,6 +131,14 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_PROGRESS"] == "1"
     }
 
+    /// Deterministically exercises the narrow interval where the completed
+    /// result is already visible but the shared-element handoff is still
+    /// running. This remains debug-only and is used to catch window-revival
+    /// races without timing an Accessibility click by hand.
+    static var dismissCompletionDuringHandoff: Bool {
+        isEnabled && environment["NDM_QA_DISMISS_COMPLETION_DURING_HANDOFF"] == "1"
+    }
+
     /// Launch with a sidebar filter preselected, e.g. `NDM_QA_FILTER=video`.
     static var initialFilter: SidebarFilter? {
         guard isEnabled, let raw = environment["NDM_QA_FILTER"] else { return nil }
@@ -153,7 +176,9 @@ enum QAPreviewOverrides {
     static let interfaceScale: CGFloat? = nil
     static let clipboardText: String? = nil
     static let supportDirectory: URL? = nil
+    static let downloadDirectory: URL? = nil
     static let bridgePort: UInt16? = nil
+    static let maxConnections: Int? = nil
     static let windowSize: NSSize? = nil
     static let performanceTaskCount: Int? = nil
     static let selectedFilenameContains: String? = nil
@@ -165,6 +190,7 @@ enum QAPreviewOverrides {
     static let settingsSection: String? = nil
     static let showNewDownload = false
     static let showProgress = false
+    static let dismissCompletionDuringHandoff = false
     static let initialFilter: SidebarFilter? = nil
     static let showMediaPreparation = false
     static let includeFailure = false
@@ -178,6 +204,8 @@ enum QAPreviewOverrides {
         if let languageMode { settings.languageMode = languageMode }
         if let accentTheme { settings.accentTheme = accentTheme }
         if let bridgePort { settings.bridgePort = bridgePort }
+        if let downloadDirectory { settings.downloadDirectory = downloadDirectory }
+        if let maxConnections { settings.maxConnections = maxConnections }
         settings.clipboardWatch = true
         settings.onboardingCompleted = !showOnboarding
         if showCompletion { settings.showCompletionDialog = true }

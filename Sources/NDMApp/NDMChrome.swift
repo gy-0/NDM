@@ -419,6 +419,7 @@ final class ThinProgressView: NSView {
             if clamped != progress { progress = clamped; return }
             updateAccessibilityValue()
             updateFill(animated: window != nil)
+            refreshActiveAnimation()
         }
     }
 
@@ -462,20 +463,26 @@ final class ThinProgressView: NSView {
     var isActive: Bool = false {
         didSet {
             guard oldValue != isActive else { return }
-            if isActive {
-                let pulse = CABasicAnimation(keyPath: "opacity")
-                pulse.fromValue = 1.0
-                pulse.toValue = 0.55
-                pulse.duration = 1.2
-                pulse.autoreverses = true
-                pulse.repeatCount = .infinity
-                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                fillLayer.add(pulse, forKey: "breathe")
-            } else {
-                fillLayer.removeAnimation(forKey: "breathe")
-                fillLayer.opacity = 1.0
-            }
+            refreshActiveAnimation()
         }
+    }
+
+    private func refreshActiveAnimation() {
+        guard isActive,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            fillLayer.removeAnimation(forKey: "breathe")
+            fillLayer.opacity = 1.0
+            return
+        }
+        guard fillLayer.animation(forKey: "breathe") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.55
+        pulse.duration = 1.2
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        fillLayer.add(pulse, forKey: "breathe")
     }
 
     private func refreshColors() {
@@ -510,7 +517,13 @@ final class ThinProgressView: NSView {
         CATransaction.setDisableActions(true)
         fillLayer.transform = CATransform3DMakeScale(target, 1, 1)
         CATransaction.commit()
-        guard animated, abs(target - current) > 0.001 else { return }
+        guard animated,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              abs(target - current) > 0.001 else {
+            fillLayer.removeAnimation(forKey: "progress")
+            fillLayer.removeAnimation(forKey: "completionFlash")
+            return
+        }
 
         if target >= 1.0, !didCelebrate, current < 1.0 {
             didCelebrate = true

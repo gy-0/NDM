@@ -201,6 +201,7 @@ final class QuietFinderRowView: NSTableRowView {
     }
 
     func celebrateCompletion() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         wantsLayer = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let layer = self?.layer else { return }

@@ -101,17 +101,7 @@ public actor MKVMergeEngine {
             while !Task.isCancelled {
                 let vp = await videoEngine.currentProgress()
                 let ap = await audioEngine.currentProgress()
-                var combined = vp
-                combined.totalBytes = vp.totalBytes + ap.totalBytes
-                combined.completedBytes = vp.completedBytes + ap.completedBytes
-                combined.bytesPerSecond = vp.bytesPerSecond + ap.bytesPerSecond
-                combined.segmentStates = vp.segmentStates + ap.segmentStates.map {
-                    var s = $0
-                    s.id += 1000
-                    return s
-                }
-                combined.status = .downloading
-                progress = combined
+                progress = Self.combineProgress(video: vp, audio: ap)
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
@@ -169,6 +159,36 @@ public actor MKVMergeEngine {
         progress.completedBytes = size
         progress.status = .complete
         return finalURL
+    }
+
+    /// Represent two physical files as one continuous logical byte space for
+    /// UI progress. Audio ranges start after the final video byte; merely
+    /// changing their connection IDs would leave both tracks starting at zero,
+    /// causing the detailed segment strip to paint them on top of each other.
+    static func combineProgress(
+        video: DownloadProgress,
+        audio: DownloadProgress
+    ) -> DownloadProgress {
+        func extent(_ progress: DownloadProgress) -> Int64 {
+            let segmentExtent = progress.segmentStates.map(\.end).max().map { $0 + 1 } ?? 0
+            return [0, progress.totalBytes, progress.completedBytes, segmentExtent].max() ?? 0
+        }
+
+        let videoExtent = extent(video)
+        let audioExtent = extent(audio)
+        var combined = video
+        combined.totalBytes = videoExtent + audioExtent
+        combined.completedBytes = video.completedBytes + audio.completedBytes
+        combined.bytesPerSecond = video.bytesPerSecond + audio.bytesPerSecond
+        combined.segmentStates = video.segmentStates + audio.segmentStates.map {
+            var segment = $0
+            segment.id += 1000
+            segment.start += videoExtent
+            segment.end += videoExtent
+            return segment
+        }
+        combined.status = .downloading
+        return combined
     }
 
     private func preferredOutputExtension(video: URL, audio: URL) -> String {
