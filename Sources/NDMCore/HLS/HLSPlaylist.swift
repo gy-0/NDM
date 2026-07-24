@@ -8,22 +8,31 @@ public enum HLSPlaylist {
         public var mediaSequence: Int
         public var endList: Bool
         public var segments: [Segment]
-        public var key: EncryptionKey?
+
+        /// Informational: the first key the playlist declares. Derived rather than
+        /// stored so it cannot drift from what the segments actually say. Keys
+        /// rotate mid-playlist, so decryption must always use `Segment.key` — a
+        /// single playlist-wide key silently produces garbage for every segment it
+        /// does not belong to.
+        public var key: EncryptionKey? { segments.first?.key }
+
+        /// Whether any segment is AES-128 encrypted.
+        public var hasEncryptedSegments: Bool {
+            segments.contains { $0.key?.isAES128 == true }
+        }
 
         public init(
             version: Int = 3,
             targetDuration: Double = 0,
             mediaSequence: Int = 0,
             endList: Bool = false,
-            segments: [Segment] = [],
-            key: EncryptionKey? = nil
+            segments: [Segment] = []
         ) {
             self.version = version
             self.targetDuration = targetDuration
             self.mediaSequence = mediaSequence
             self.endList = endList
             self.segments = segments
-            self.key = key
         }
     }
 
@@ -32,12 +41,21 @@ public enum HLSPlaylist {
         public var uri: String
         public var duration: Double
         public var byteRange: ByteRange?
+        /// The key in force at this segment's position, or nil when it is clear.
+        public var key: EncryptionKey?
 
-        public init(id: Int, uri: String, duration: Double, byteRange: ByteRange? = nil) {
+        public init(
+            id: Int,
+            uri: String,
+            duration: Double,
+            byteRange: ByteRange? = nil,
+            key: EncryptionKey? = nil
+        ) {
             self.id = id
             self.uri = uri
             self.duration = duration
             self.byteRange = byteRange
+            self.key = key
         }
     }
 
@@ -187,6 +205,8 @@ public enum HLSPlaylist {
         var pendingDuration: Double?
         var pendingRange: ByteRange?
         var segID = 0
+        /// The key declared most recently, applied to each following segment.
+        var currentKey: EncryptionKey?
         var i = 0
         while i < lines.count {
             let line = lines[i]
@@ -200,8 +220,12 @@ public enum HLSPlaylist {
             } else if line == "#EXT-X-ENDLIST" {
                 media.endList = true
             } else if line.hasPrefix("#EXT-X-KEY:") {
+                // A KEY tag applies to every segment that follows it until the next
+                // one, so it updates the running key rather than the playlist. Both
+                // rotation and a mid-playlist METHOD=NONE (ad splices, trailing
+                // clear content) depend on that.
                 let attrs = parseAttributes(String(line.dropFirst("#EXT-X-KEY:".count)))
-                media.key = EncryptionKey(
+                currentKey = EncryptionKey(
                     method: attrs["METHOD"] ?? "NONE",
                     uri: attrs["URI"],
                     ivHex: attrs["IV"].map { $0.hasPrefix("0x") || $0.hasPrefix("0X") ? String($0.dropFirst(2)) : $0 }
@@ -221,7 +245,8 @@ public enum HLSPlaylist {
                     id: segID,
                     uri: line,
                     duration: dur,
-                    byteRange: pendingRange
+                    byteRange: pendingRange,
+                    key: currentKey
                 ))
                 segID += 1
                 pendingDuration = nil

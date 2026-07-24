@@ -61,6 +61,75 @@ final class HLSPlaylistTests: XCTestCase {
         XCTAssertTrue(media.key?.isAES128 == true)
         XCTAssertEqual(media.segments[0].byteRange?.length, 1000)
         XCTAssertEqual(media.segments[0].byteRange?.offset, 200)
+        XCTAssertEqual(
+            media.segments[0].key?.uri,
+            "https://cdn.example/key.bin",
+            "the key must be attached to the segment it governs"
+        )
+    }
+
+    /// A KEY tag governs the segments that follow it until the next one. Treating
+    /// the playlist as having a single key decrypts most of a rotating stream with
+    /// the wrong key and reports success.
+    func testKeyAppliesToFollowingSegmentsUntilReplaced() throws {
+        let text = """
+        #EXTM3U
+        #EXT-X-KEY:METHOD=AES-128,URI="k0.bin"
+        #EXTINF:4.0,
+        a.ts
+        #EXTINF:4.0,
+        b.ts
+        #EXT-X-KEY:METHOD=AES-128,URI="k1.bin"
+        #EXTINF:4.0,
+        c.ts
+        #EXT-X-ENDLIST
+        """
+        guard case .media(let media) = try HLSPlaylist.parse(text) else {
+            return XCTFail("expected media")
+        }
+        XCTAssertEqual(media.segments.map { $0.key?.uri }, ["k0.bin", "k0.bin", "k1.bin"])
+        XCTAssertTrue(media.hasEncryptedSegments)
+    }
+
+    /// `METHOD=NONE` mid-playlist marks the rest as clear — ad splices rely on it.
+    func testMethodNoneClearsTheKeyForLaterSegmentsOnly() throws {
+        let text = """
+        #EXTM3U
+        #EXT-X-KEY:METHOD=AES-128,URI="k.bin"
+        #EXTINF:4.0,
+        enc.ts
+        #EXT-X-KEY:METHOD=NONE
+        #EXTINF:4.0,
+        clear.ts
+        #EXT-X-ENDLIST
+        """
+        guard case .media(let media) = try HLSPlaylist.parse(text) else {
+            return XCTFail("expected media")
+        }
+        XCTAssertTrue(media.segments[0].key?.isAES128 == true)
+        XCTAssertFalse(
+            media.segments[1].key?.isAES128 == true,
+            "a segment after METHOD=NONE must not be decrypted"
+        )
+        XCTAssertTrue(media.hasEncryptedSegments)
+    }
+
+    /// Segments before any KEY tag are clear even when the playlist encrypts later.
+    func testSegmentsBeforeAnyKeyTagStayClear() throws {
+        let text = """
+        #EXTM3U
+        #EXTINF:4.0,
+        clear.ts
+        #EXT-X-KEY:METHOD=AES-128,URI="k.bin"
+        #EXTINF:4.0,
+        enc.ts
+        #EXT-X-ENDLIST
+        """
+        guard case .media(let media) = try HLSPlaylist.parse(text) else {
+            return XCTFail("expected media")
+        }
+        XCTAssertNil(media.segments[0].key)
+        XCTAssertTrue(media.segments[1].key?.isAES128 == true)
     }
 
     func testResolveURL() {

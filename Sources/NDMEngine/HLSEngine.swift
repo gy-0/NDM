@@ -165,15 +165,21 @@ public actor HLSEngine {
         label: String,
         completedBase completed: inout Int64
     ) async throws {
-        var keyData: Data?
-        if let key = media.key, key.isAES128 {
+        // Keys are per segment because playlists rotate them, but the same URI is
+        // usually shared by a long run of segments — fetch each one once.
+        var keyCache: [String: Data] = [:]
+        func keyData(for key: HLSPlaylist.EncryptionKey) async throws -> Data {
             guard let uri = key.uri,
                   let keyURL = HLSPlaylist.resolveURL(uri, against: request.url) else {
                 throw HLSError.missingKey
             }
-            keyData = try await fetchData(keyURL)
-            log("Loaded AES-128 key for \(label) (\(keyData?.count ?? 0) bytes)")
+            if let cached = keyCache[keyURL.absoluteString] { return cached }
+            let data = try await fetchData(keyURL)
+            keyCache[keyURL.absoluteString] = data
+            log("Loaded AES-128 key for \(label) (\(data.count) bytes)")
+            return data
         }
+
         for (index, seg) in media.segments.enumerated() {
             if token.isCancelled {
                 if token.isPaused { throw EngineError.paused }
@@ -191,9 +197,9 @@ public actor HLSEngine {
                 throw HLSError.unresolvedURL(seg.uri)
             }
             var data = try await fetchData(segURL, byteRange: seg.byteRange)
-            if let keyData, let key = media.key, key.isAES128 {
+            if let key = seg.key, key.isAES128 {
                 let iv = Self.ivData(hex: key.ivHex, mediaSequence: seg.id)
-                data = try Self.decryptAES128(data, key: keyData, iv: iv)
+                data = try Self.decryptAES128(data, key: try await keyData(for: key), iv: iv)
             }
             try data.write(to: partURL, options: .atomic)
             completed += 1
@@ -250,11 +256,14 @@ public actor HLSEngine {
             if let abs = HLSPlaylist.resolveURL(seg.uri, against: base) {
                 s.uri = abs.absoluteString
             }
+            // Each segment carries its own key, so every key URI needs resolving
+            // against the media playlist — not just the first one.
+            if var key = s.key, let uri = key.uri,
+               let abs = HLSPlaylist.resolveURL(uri, against: base) {
+                key.uri = abs.absoluteString
+                s.key = key
+            }
             return s
-        }
-        if var key = copy.key, let uri = key.uri, let abs = HLSPlaylist.resolveURL(uri, against: base) {
-            key.uri = abs.absoluteString
-            copy.key = key
         }
         return copy
     }

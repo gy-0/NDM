@@ -113,6 +113,164 @@ final class HLSEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent(done.filename)), plain)
     }
 
+    /// Playlists may rotate keys, and CDNs that splice ads do it routinely. Each
+    /// segment must be decrypted with the key that was in force at its position;
+    /// applying one key to the whole playlist yields a file that is byte-garbage
+    /// for every segment the key does not belong to, with no error raised.
+    func testRotatingKeysDecryptEachSegmentWithItsOwnKey() async throws {
+        let plain0 = Data("SEGMENT-ZERO----".utf8)
+        let plain1 = Data("SEGMENT-ONE-----".utf8)
+        let key0 = Data((0..<16).map { UInt8($0) })
+        let key1 = Data((0..<16).map { UInt8(0xF0 &- $0) })
+        let iv0 = Data(repeating: 0xA1, count: 16)
+        let iv1 = Data(repeating: 0xB2, count: 16)
+
+        let playlist = """
+        #EXTM3U
+        #EXT-X-KEY:METHOD=AES-128,URI="k0.bin",IV=0xA1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1
+        #EXTINF:1.0,
+        s0.ts
+        #EXT-X-KEY:METHOD=AES-128,URI="k1.bin",IV=0xB2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2
+        #EXTINF:1.0,
+        s1.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(files: [
+            "rot.m3u8": Data(playlist.utf8),
+            "k0.bin": key0,
+            "k1.bin": key1,
+            "s0.ts": try encryptAES128(plain0, key: key0, iv: iv0),
+            "s1.ts": try encryptAES128(plain1, key: key1, iv: iv1),
+        ])
+        try server.start()
+        defer { server.stop() }
+
+        let (manager, dest) = try makeManager()
+        let task = try await manager.addURL(server.url(path: "rot.m3u8").absoluteString, ltype: "hls")
+        try await manager.startAndWait(taskID: task.id)
+
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(
+            try Data(contentsOf: dest.appendingPathComponent(done.filename)),
+            plain0 + plain1,
+            "each segment must use the key in force at its own position"
+        )
+    }
+
+    /// `METHOD=NONE` mid-playlist is how ad breaks and trailing clear content are
+    /// signalled. The earlier segments stay encrypted and must still be decrypted;
+    /// the later ones must be left alone.
+    func testMethodNoneMidPlaylistLeavesOnlyLaterSegmentsClear() async throws {
+        let encryptedPlain = Data("ENCRYPTED-PART--".utf8)
+        let clearPart = Data("CLEAR-PART".utf8)
+        let key = Data((0..<16).map { UInt8($0 &* 3) })
+        let iv = Data(repeating: 0x5C, count: 16)
+
+        let playlist = """
+        #EXTM3U
+        #EXT-X-KEY:METHOD=AES-128,URI="k.bin",IV=0x5C5C5C5C5C5C5C5C5C5C5C5C5C5C5C5C
+        #EXTINF:1.0,
+        enc.ts
+        #EXT-X-KEY:METHOD=NONE
+        #EXTINF:1.0,
+        clear.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(files: [
+            "mix.m3u8": Data(playlist.utf8),
+            "k.bin": key,
+            "enc.ts": try encryptAES128(encryptedPlain, key: key, iv: iv),
+            "clear.ts": clearPart,
+        ])
+        try server.start()
+        defer { server.stop() }
+
+        let (manager, dest) = try makeManager()
+        let task = try await manager.addURL(server.url(path: "mix.m3u8").absoluteString, ltype: "hls")
+        try await manager.startAndWait(taskID: task.id)
+
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(
+            try Data(contentsOf: dest.appendingPathComponent(done.filename)),
+            encryptedPlain + clearPart
+        )
+    }
+
+    /// Without an explicit IV the spec uses the segment's media sequence number,
+    /// which starts from `#EXT-X-MEDIA-SEQUENCE`, not from zero. Counting from
+    /// zero decrypts to garbage without complaining.
+    func testAbsentIVUsesMediaSequenceNotSegmentIndex() async throws {
+        let plain = Data("SEQUENCE-DERIVED".utf8)
+        let key = Data((0..<16).map { UInt8(0x20 &+ $0) })
+        var iv = Data(repeating: 0, count: 16)
+        iv[15] = 7 // #EXT-X-MEDIA-SEQUENCE:7, first segment
+
+        let playlist = """
+        #EXTM3U
+        #EXT-X-MEDIA-SEQUENCE:7
+        #EXT-X-KEY:METHOD=AES-128,URI="k.bin"
+        #EXTINF:1.0,
+        s.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(files: [
+            "seq.m3u8": Data(playlist.utf8),
+            "k.bin": key,
+            "s.ts": try encryptAES128(plain, key: key, iv: iv),
+        ])
+        try server.start()
+        defer { server.stop() }
+
+        let (manager, dest) = try makeManager()
+        let task = try await manager.addURL(server.url(path: "seq.m3u8").absoluteString, ltype: "hls")
+        try await manager.startAndWait(taskID: task.id)
+
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent(done.filename)), plain)
+    }
+
+    /// An unreachable key must fail the download. Writing the ciphertext to disk
+    /// would hand the user a file that opens in nothing and explains nothing.
+    func testUnreachableKeyFailsInsteadOfWritingCiphertext() async throws {
+        let playlist = """
+        #EXTM3U
+        #EXT-X-KEY:METHOD=AES-128,URI="missing-key.bin"
+        #EXTINF:1.0,
+        s.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(files: [
+            "nokey.m3u8": Data(playlist.utf8),
+            "s.ts": Data("ciphertext-here-".utf8),
+        ])
+        try server.start()
+        defer { server.stop() }
+
+        let (manager, dest) = try makeManager()
+        let task = try await manager.addURL(server.url(path: "nokey.m3u8").absoluteString, ltype: "hls")
+        do {
+            try await manager.startAndWait(taskID: task.id)
+            XCTFail("a missing decryption key must not report success")
+        } catch {
+            // Expected.
+        }
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertNotEqual(done.status, .complete)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: dest.appendingPathComponent(done.filename).path
+            ),
+            "no output file may be left behind when decryption was impossible"
+        )
+    }
+
     func testRealTSStreamRemuxesToMP4() async throws {
         guard let ffmpeg = FFmpegTool.find() else {
             throw XCTSkip("ffmpeg not installed; MP4 remux path not exercisable")
