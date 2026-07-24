@@ -87,13 +87,15 @@ final class InspectorActionButton: NSButton {
     }
 
     private func applyCornerRadius() {
-        // Flat rail: tight radius so hover doesn't read as a floating card.
-        // Outlined pills keep a slightly rounder silhouette; filled stay soft.
+        // Flat 4–6 system: rail stays tight; filled / outlined share one
+        // control radius so completion "打开" and sheet secondaries match.
         switch style {
         case .filled:
-            layer?.cornerRadius = 8
+            layer?.cornerRadius = NDMChrome.controlCornerRadius
         case .flat:
-            layer?.cornerRadius = usesOutlinedHover ? 9 : 4
+            layer?.cornerRadius = usesOutlinedHover
+                ? NDMChrome.controlCornerRadius
+                : NDMChrome.railCornerRadius
         }
     }
 

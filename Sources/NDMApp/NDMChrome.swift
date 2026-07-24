@@ -259,6 +259,21 @@ enum NDMChrome {
         accent.withAlphaComponent(0.10)
     }
 
+    // MARK: Action control metrics (flat 4–6 system)
+    //
+    // Rail text actions stay tight (radius 4) so hover never reads as a card.
+    // Filled / outlined sheet controls share radius 6 — never half-height
+    // capsules, never a one-off 8–9 that fights the rail.
+
+    /// Flat text-rail hover pad radius.
+    static let railCornerRadius: CGFloat = 4
+    /// Filled primary + outlined secondary action radius.
+    static let controlCornerRadius: CGFloat = 6
+    /// Compact inspector / progress text-rail hit height.
+    static let railActionHeight: CGFloat = 28
+    /// Sheet action row height (completion / progress primaries).
+    static let sheetActionHeight: CGFloat = 36
+
     /// Selected task row wash (Design Suite `--row-active`).
     static var rowActive: NSColor {
         accent.withAlphaComponent(0.10)

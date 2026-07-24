@@ -197,11 +197,14 @@
             ".better-ndm-youtube-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:40px;padding:0 16px;border-radius:20px;background:var(--yt-spec-badge-chip-background,rgba(0,0,0,.05));color:var(--yt-spec-text-primary,#0f0f0f);cursor:pointer;font:500 14px/40px Roboto,Arial,sans-serif;white-space:nowrap;transition:background-color .15s ease}",
             ".better-ndm-youtube-button:hover,.better-ndm-youtube-button:focus-visible{background:var(--yt-spec-button-chip-background-hover,rgba(0,0,0,.1));outline:none}",
             ".better-ndm-youtube-button svg{width:24px;height:24px;fill:currentColor;flex:none;margin-left:-4px}",
-            // Sit in .video-toolbar-right as a peer of 举报/笔记, left of .video-tool-more.
-            ".better-ndm-bilibili-action{display:inline-flex;align-items:center;flex:none;margin-left:18px}",
-            ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:7px;color:#61666d;cursor:pointer;font:500 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;transition:color .15s}",
-            ".better-ndm-bilibili-button:hover,.better-ndm-bilibili-button:focus-visible{color:#00aeec;outline:none}",
-            ".better-ndm-bilibili-button svg{width:20px;height:20px;fill:currentColor}",
+            // Peer of 举报/笔记: reuse native .video-toolbar-right-item (font/icon/hover).
+            // Spacing matches .toolbar-right-note before .video-tool-more — no extra
+            // margin-left / flex:none / min-width (those squeezed 记笔记 off-screen).
+            ".better-ndm-bilibili-action{margin-right:12px}",
+            "@media (min-width:1681px){.better-ndm-bilibili-action{margin-right:20px}}",
+            ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;color:inherit;cursor:pointer;font:inherit;line-height:inherit;white-space:nowrap}",
+            ".better-ndm-bilibili-button:focus-visible{outline:none}",
+            ".better-ndm-bilibili-button .video-toolbar-item-icon{fill:currentColor}",
             ".better-ndm-site-inline-action{display:inline-flex;align-items:center;margin-left:8px}",
             ".better-ndm-site-inline-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid rgba(120,120,128,.25);border-radius:8px;background:rgba(120,120,128,.08);color:inherit;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap}",
             ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(53,120,246,.12);border-color:rgba(53,120,246,.45);color:#3478f6;outline:none}",
@@ -327,12 +330,23 @@
         button.type = "button";
         button.dataset.betterNdmSiteAction = site;
         button.className = site === "x" ? "better-ndm-x-button" : site === "youtube" ? "better-ndm-youtube-button" : site === "bilibili" ? "better-ndm-bilibili-button" : "better-ndm-site-inline-button";
-        var label = site === "x" ? "NDM" : site === "bilibili" ? text("NDM 下载", "NDM Download") : text("使用 NDM 下载", "Download with NDM");
+        var label = site === "x" ? "NDM" : site === "bilibili" ? text("NDM下载", "NDM Download") : text("使用 NDM 下载", "Download with NDM");
         var labelNode = document.createElement("span");
         labelNode.className = "better-ndm-" + site + "-label";
         labelNode.textContent = label;
         button.appendChild(makeIcon());
         button.appendChild(labelNode);
+        if (site === "bilibili") {
+            // Mirror 稿件举报 / 记笔记: native icon + text classes drive size/gap.
+            var icon = button.querySelector("svg");
+            if (icon) {
+                icon.setAttribute("class", "video-toolbar-item-icon");
+                icon.setAttribute("fill", "currentColor");
+                icon.setAttribute("width", "20");
+                icon.setAttribute("height", "20");
+            }
+            labelNode.className = "better-ndm-bilibili-label video-toolbar-item-text";
+        }
         button.title = text("使用 NDM 下载此视频", "Download this video with NDM");
         button.setAttribute("aria-label", button.title);
         button.addEventListener("click", function(event) {
@@ -444,8 +458,8 @@
         if (document.querySelector('[data-better-ndm-site-action="bilibili"]')) return;
 
         var wrapper = document.createElement("div");
-        // video-toolbar-right-item keeps flex alignment with native right chips;
-        // remaining outside .video-tool-more keeps us visible when 举报/笔记 fold away.
+        // Native .video-toolbar-right-item supplies display/font/color/hover; stay a
+        // sibling of more (never a descendant) so the fold cannot swallow the chip.
         wrapper.className = "better-ndm-bilibili-action video-toolbar-right-item";
         wrapper.dataset.betterNdmSiteAction = "bilibili-wrapper";
         wrapper.appendChild(this.makeButton("bilibili", function() { return canonicalBilibiliURL(window.location.href) || pageURL; }));

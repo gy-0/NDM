@@ -684,7 +684,7 @@ private final class NewDownloadActionButton: NSButton {
         font = .systemFont(ofSize: 12.5, weight: style == .primary ? .semibold : .medium)
         contentTintColor = style == .primary ? .white : .labelColor
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = NDMChrome.controlCornerRadius
         layer?.masksToBounds = true
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.required, for: .horizontal)

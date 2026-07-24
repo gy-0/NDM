@@ -48,6 +48,11 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate, AccentChromeRef
     private let hairline = ChromeBox(fill: NDMChrome.hairline)
     private var contentScale: CGFloat = InterfaceScale.default
     private var searchFocused = false
+    /// While the search field is editing, blank clicks elsewhere in the window
+    /// do not become first responder on their own — AppKit leaves the field
+    /// editor focused. A local mouse-down monitor resigns editing so the
+    /// shell matches native macOS click-away behavior.
+    private var searchClickAwayMonitor: Any?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -371,6 +376,56 @@ final class DesignSuiteToolbarView: NSView, NSTextFieldDelegate, AccentChromeRef
         searchShell.fill = focused ? NDMChrome.searchSurfaceFocused : NDMChrome.searchSurface
         searchShell.borderColor = focused ? NDMChrome.accent : NDMChrome.hairline
         searchShell.borderWidth = focused ? 2 : 1
+        updateSearchClickAwayMonitor()
+    }
+
+    private func updateSearchClickAwayMonitor() {
+        // Never remove a local monitor from inside its own callback — resigning
+        // first responder below re-enters here via textDidEndEditing. Defer.
+        if let existing = searchClickAwayMonitor {
+            searchClickAwayMonitor = nil
+            DispatchQueue.main.async {
+                NSEvent.removeMonitor(existing)
+            }
+        }
+        guard searchFocused else { return }
+        searchClickAwayMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.resignSearchIfClickOutside(event)
+            return event
+        }
+    }
+
+    private func resignSearchIfClickOutside(_ event: NSEvent) {
+        guard let window, event.window === window else { return }
+        guard let contentView = window.contentView else { return }
+        let point = contentView.convert(event.locationInWindow, from: nil)
+        // Keep editing when the hit is inside the search capsule (field,
+        // magnifying-glass padding, clear button) or the field editor overlay.
+        if let hit = contentView.hitTest(point) {
+            if hit.isDescendant(of: searchShell) {
+                return
+            }
+            if let editor = searchField.currentEditor(),
+               hit === editor || hit.isDescendant(of: editor) {
+                return
+            }
+        }
+        window.makeFirstResponder(nil)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil, let existing = searchClickAwayMonitor {
+            searchClickAwayMonitor = nil
+            NSEvent.removeMonitor(existing)
+        }
+    }
+
+    /// Toolbar whitespace between chips — hit-testing lands here, not on a
+    /// control, so resign search editing the same way blank content does.
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(nil)
+        super.mouseDown(with: event)
     }
 
     private func refreshClipboardOffer() {
@@ -441,7 +496,7 @@ private final class ClipboardOfferButton: NSButton {
         contentTintColor = NDMChrome.accent
         lineBreakMode = .byTruncatingTail
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = NDMChrome.controlCornerRadius
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.defaultHigh, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -494,7 +549,7 @@ private final class PaneToggleButton: NSButton {
         bezelStyle = .inline
         focusRingType = .none
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = NDMChrome.controlCornerRadius
         target = self
         action = #selector(fire)
     }

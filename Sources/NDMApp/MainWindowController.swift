@@ -960,9 +960,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         wc.presentWindow()
     }
 
-    /// New captures occupy slot zero; older cards fan away from it. Reflowing
-    /// on every close removes dead gaps and makes the next-most-recent task the
-    /// immediately reachable card.
+    /// New captures occupy centered slot zero; older cards cascade slightly
+    /// away from it. Reflowing on every close removes dead gaps and makes the
+    /// next-most-recent task the immediately reachable card.
     private func reflowQuietProgressWindows() {
         quietProgressWindowOrder.removeAll { progressWindows[$0] == nil }
         for (index, taskID) in quietProgressWindowOrder.reversed().enumerated() {
@@ -2155,6 +2155,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private var heroHeight: NSLayoutConstraint?
     private var heroTaskIDs: Set<Int64> = []
     private var heroOrderedIDs: [Int64] = []
+    /// Shared-element morph when a Hero settles into its list row.
+    private let heroLandingAnimator = HeroListLandingAnimator()
+    private var heroLandingCoveredRow: Int?
     // Editorial header — the content column opens with the filter's name in
     // display type, not with a bare file list.
     private let headerTitleLabel = NSTextField(labelWithString: "")
@@ -2616,16 +2619,55 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         // rows underneath would mix two visual languages for the same work.
         // Completed / queued / failed tasks remain in the table below.
         let previousHeroIDs = heroTaskIDs
-        let heroIDs = updateHero(rows)
-        let rows = rows.filter { !heroIDs.contains($0.taskID) }
-
+        let previousHeroOrdered = heroOrderedIDs
         let previousRows = self.rows
+        let nextHeroIDs = Set(rows.filter(\.isDownloading).map(\.taskID))
+        let landedFromHero = previousHeroIDs.subtracting(nextHeroIDs)
+
+        // Decide reveal intent before collapsing the strip, so we only suppress
+        // height animation when a Hero→list morph will actually run.
+        let provisionalListRows = rows.filter { !nextHeroIDs.contains($0.taskID) }
+        let earlyScrollAnchor = scrollAnchorBeforeStructuralUpdate(
+            previousRows: previousRows,
+            structuralChange: !landedFromHero.isEmpty
+                || previousRows.map(\.taskID) != provisionalListRows.map(\.taskID)
+        )
+        let wasViewingTop = isViewingListTop(
+            previousRows: previousRows,
+            scrollAnchor: earlyScrollAnchor
+        )
+        let revealLandingID = isGalleryActive
+            ? nil
+            : heroLandingRevealTaskID(
+                landedFromHero: landedFromHero,
+                rows: provisionalListRows,
+                selectedTaskID: selectedTaskID,
+                wasViewingTop: wasViewingTop
+            )
+
+        // Capture landing geometry *before* heroes are reassigned / collapsed.
+        let landingSource: HeroListLandingSource? = {
+            guard let revealLandingID else { return nil }
+            return captureHeroLandingSource(
+                landedFromHero: landedFromHero,
+                previousOrdered: previousHeroOrdered,
+                preferredTaskID: revealLandingID
+            )
+        }()
+
+        // Cover the live Hero with a frozen snapshot *before* height collapses.
+        // Otherwise the user sees the cinema card snap away (height twitch) and
+        // the list jump up — then the morph "pops" back in. Cover first, morph later.
+        if let landingSource {
+            heroLandingAnimator.installCover(in: view, source: landingSource)
+        }
+
+        let heroIDs = updateHero(rows, heightAnimated: landingSource == nil)
+        let rows = provisionalListRows
+
         let previousIDs = previousRows.map(\.taskID)
         let nextIDs = rows.map(\.taskID)
-        let scrollAnchor = scrollAnchorBeforeStructuralUpdate(
-            previousRows: previousRows,
-            structuralChange: previousIDs != nextIDs
-        )
+        let scrollAnchor = earlyScrollAnchor
         self.rows = rows
         self.selectedTaskID = selectedTaskID
         emptyLabel.stringValue = emptyTitle
@@ -2652,51 +2694,70 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         }
 
         if previousIDs != nextIDs {
+            // A mid-flight morph must not leave a covered ghost row after a
+            // filter / sort / other structural change.
+            if heroLandingAnimator.isRunning,
+               landingSource?.taskID != heroLandingAnimator.animatingTaskID {
+                clearHeroLandingCover()
+                heroLandingAnimator.cancel()
+            }
             // NSTableView is virtualized. A structural reload is sufficient;
             // explicitly notifying every row height forces AppKit to create and
             // measure all cells (several thousand in real user libraries).
-            let landedFromHero = previousHeroIDs.subtracting(heroIDs)
-            // Capture before reloadData — AppKit may reset the clip origin.
-            let wasViewingTop = isViewingListTop(
-                previousRows: previousRows,
-                scrollAnchor: scrollAnchor
-            )
-            tableView.reloadData()
-            // Hero→list completion inserts at the top. Restoring the old scroll
-            // anchor would keep the *previous* first row under the eye and hide
-            // the just-finished task above the fold — reveal it when the user
-            // was watching the top / that task; otherwise keep the history anchor.
-            if !isGalleryActive,
-               let revealID = heroLandingRevealTaskID(
-                landedFromHero: landedFromHero,
-                rows: rows,
-                selectedTaskID: selectedTaskID,
-                wasViewingTop: wasViewingTop
-               ) {
-                revealListRow(for: revealID, in: rows)
-            } else {
-                restoreScrollAnchor(scrollAnchor, in: rows)
+            // Decide the *final* pin before reload. Hero→list completion inserts
+            // at the top: restoring the pre-reload anchor would keep the old
+            // first row under the eye (a downward jump), and a later
+            // scrollRowToVisible would bounce back up. One target, one set.
+            let revealID = revealLandingID
+            let scrollPin: (taskID: Int64, offset: CGFloat)? = revealID.map { ($0, 0) }
+                ?? scrollAnchor
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0
+                ctx.allowsImplicitAnimation = false
+                tableView.reloadData()
+                restoreScrollAnchor(scrollPin, in: rows)
             }
-        } else if !rows.isEmpty {
-            var changedRows = IndexSet()
-            var heightChangedRows = IndexSet()
-            for index in rows.indices where previousRows[index] != rows[index] {
-                changedRows.insert(index)
-                if previousRows[index].showsProgressBar != rows[index].showsProgressBar {
-                    heightChangedRows.insert(index)
+
+            // After the one-shot pin, morph the finishing Hero into its row.
+            // If we installed a cover but won't morph (edge case), tear it down
+            // so a frozen snapshot never sticks on screen.
+            if let landingSource, revealID == landingSource.taskID {
+                startHeroListLanding(source: landingSource, rows: rows)
+            } else {
+                if landingSource != nil || heroLandingAnimator.isRunning {
+                    clearHeroLandingCover()
+                    heroLandingAnimator.cancel()
+                }
+                if let revealID,
+                   NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    fadeInLandedRow(taskID: revealID)
                 }
             }
-            let visibleRows = visibleRowIndexes()
-            let visibleChangedRows = changedRows.intersection(visibleRows)
-            if !visibleChangedRows.isEmpty {
-                tableView.reloadData(
-                    forRowIndexes: visibleChangedRows,
-                    columnIndexes: IndexSet(integer: 0)
-                )
+        } else {
+            if landingSource != nil {
+                heroLandingAnimator.cancel()
             }
-            let visibleHeightChanges = heightChangedRows.intersection(visibleRows)
-            if !visibleHeightChanges.isEmpty {
-                tableView.noteHeightOfRows(withIndexesChanged: visibleHeightChanges)
+            if !rows.isEmpty {
+                var changedRows = IndexSet()
+                var heightChangedRows = IndexSet()
+                for index in rows.indices where previousRows[index] != rows[index] {
+                    changedRows.insert(index)
+                    if previousRows[index].showsProgressBar != rows[index].showsProgressBar {
+                        heightChangedRows.insert(index)
+                    }
+                }
+                let visibleRows = visibleRowIndexes()
+                let visibleChangedRows = changedRows.intersection(visibleRows)
+                if !visibleChangedRows.isEmpty {
+                    tableView.reloadData(
+                        forRowIndexes: visibleChangedRows,
+                        columnIndexes: IndexSet(integer: 0)
+                    )
+                }
+                let visibleHeightChanges = heightChangedRows.intersection(visibleRows)
+                if !visibleHeightChanges.isEmpty {
+                    tableView.noteHeightOfRows(withIndexesChanged: visibleHeightChanges)
+                }
             }
         }
 
@@ -2705,6 +2766,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                   !previousRows[index].isComplete,
                   rows[index].isComplete,
                   previousRows[index].taskID == rows[index].taskID else { continue }
+            // Skip celebrate while a Hero→list morph owns this row (no spring after land).
+            if heroLandingAnimator.animatingTaskID == rows[index].taskID { continue }
             if let rowView = tableView.rowView(atRow: index, makeIfNecessary: false) as? QuietFinderRowView {
                 rowView.celebrateCompletion()
             }
@@ -2771,12 +2834,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let maximumY = max(0, tableView.bounds.height - visibleHeight)
         var origin = scrollView.contentView.bounds.origin
         origin.y = min(max(0, targetY), maximumY)
+        // Caller wraps this in a zero-duration context so the pin is not animated
+        // (avoids a visible down-then-up after reloadData re-pins the old top).
         scrollView.contentView.scroll(to: origin)
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// A finished download leaves the Hero strip and reappears in the table
-    /// (usually as row 0). Return that task when we should scroll it into view
+    /// (usually as row 0). Return that task when we should pin it at the top
     /// instead of restoring the pre-reload scroll anchor.
     private func heroLandingRevealTaskID(
         landedFromHero: Set<Int64>,
@@ -2800,6 +2865,116 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         return landedCompleted.first?.taskID
     }
 
+    /// Snapshot the finishing Hero before `updateHero` reassigns the strip.
+    /// Only one card animates even if several leave in the same tick.
+    private func captureHeroLandingSource(
+        landedFromHero: Set<Int64>,
+        previousOrdered: [Int64],
+        preferredTaskID: Int64
+    ) -> HeroListLandingSource? {
+        guard landedFromHero.contains(preferredTaskID),
+              view.window != nil,
+              !isGalleryActive,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              !heroLandingAnimator.isRunning,
+              let index = previousOrdered.firstIndex(of: preferredTaskID),
+              index < heroViews.count else { return nil }
+        let hero = heroViews[index]
+        guard !hero.isHidden else { return nil }
+        return hero.captureListLandingSource(in: view)
+    }
+
+    /// After the one-shot scroll pin, morph the pre-installed Hero cover into
+    /// the landed row. Cover must already be on screen (see `installCover`
+    /// before `updateHero`); this only drives destination geometry + ease.
+    private func startHeroListLanding(
+        source: HeroListLandingSource,
+        rows: [TaskRowPresentation]
+    ) {
+        guard heroLandingAnimator.animatingTaskID == source.taskID,
+              let rowIndex = rows.firstIndex(where: { $0.taskID == source.taskID }) else {
+            heroLandingAnimator.cancel()
+            return
+        }
+
+        view.layoutSubtreeIfNeeded()
+        tableView.layoutSubtreeIfNeeded()
+
+        guard let cell = tableView.view(atColumn: 0, row: rowIndex, makeIfNecessary: true)
+                as? TaskRowCellView,
+              let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: true)
+                as? QuietFinderRowView,
+              let destination = cell.captureLandingDestination(in: view, taskID: source.taskID)
+        else {
+            heroLandingAnimator.cancel()
+            return
+        }
+
+        // Live row stays invisible until the overlay hands off — no spring bounce.
+        clearHeroLandingCover()
+        cell.setLandingCovered(true)
+        rowView.alphaValue = 0
+        heroLandingCoveredRow = rowIndex
+
+        heroLandingAnimator.morphToDestination(
+            destination,
+            onReveal: { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.handOffHeroLandingRow(taskID: source.taskID)
+                }
+            },
+            completion: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // Soft land only — no celebrate spring (that was a second bounce).
+                    if self.heroLandingCoveredRow != nil {
+                        self.handOffHeroLandingRow(taskID: source.taskID)
+                    }
+                }
+            }
+        )
+    }
+
+    /// Swap overlay → live row mid-morph so the handoff never flashes empty.
+    private func handOffHeroLandingRow(taskID: Int64) {
+        guard let rowIndex = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
+        if let cell = tableView.view(atColumn: 0, row: rowIndex, makeIfNecessary: false)
+            as? TaskRowCellView {
+            cell.setLandingCovered(false)
+        }
+        if let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: false) {
+            rowView.alphaValue = 1
+        }
+        heroLandingCoveredRow = nil
+    }
+
+    private func clearHeroLandingCover() {
+        if let row = heroLandingCoveredRow {
+            if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+                as? TaskRowCellView {
+                cell.setLandingCovered(false)
+            }
+            if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) {
+                rowView.alphaValue = 1
+            }
+        }
+        heroLandingCoveredRow = nil
+    }
+
+    /// Reduce Motion: brief fade instead of the shared-element morph.
+    private func fadeInLandedRow(taskID: Int64) {
+        guard let rowIndex = rows.firstIndex(where: { $0.taskID == taskID }),
+              let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: true) else {
+            return
+        }
+        rowView.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            rowView.animator().alphaValue = 1
+        }
+    }
+
     private func isViewingListTop(
         previousRows: [TaskRowPresentation],
         scrollAnchor: (taskID: Int64, offset: CGFloat)?
@@ -2817,18 +2992,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         return false
     }
 
-    private func revealListRow(for taskID: Int64, in rows: [TaskRowPresentation]) {
-        guard let index = rows.firstIndex(where: { $0.taskID == taskID }) else { return }
-        tableView.layoutSubtreeIfNeeded()
-        tableView.scrollRowToVisible(index)
-    }
-
     /// Raise / collapse the Now Downloading cinema strip(s). Every live
     /// transfer gets its own hero card — concurrent downloads no longer mix
     /// a featured strip with ordinary progress rows. Returns the task IDs
     /// currently on stage so the list can exclude them.
+    ///
+    /// When `heightAnimated` is false the strip snaps to its final height
+    /// under a pre-installed landing cover (so the user never sees the twitch).
     @discardableResult
-    private func updateHero(_ rows: [TaskRowPresentation]) -> Set<Int64> {
+    private func updateHero(_ rows: [TaskRowPresentation], heightAnimated: Bool = true) -> Set<Int64> {
         let active = rows.filter(\.isDownloading)
         heroOrderedIDs = active.map(\.taskID)
         heroTaskIDs = Set(heroOrderedIDs)
@@ -2850,7 +3022,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let targetHeight: CGFloat = CGFloat(active.count) * Self.heroCardHeight
         let targetAlpha: CGFloat = active.isEmpty ? 0 : 1
         guard heroHeight?.constant != targetHeight else { return heroTaskIDs }
-        guard view.window != nil else {
+        guard view.window != nil, heightAnimated else {
             heroHeight?.constant = targetHeight
             heroContainer.alphaValue = targetAlpha
             return heroTaskIDs
@@ -3360,7 +3532,7 @@ private final class HoverIconButton: NSButton {
         imagePosition = .imageOnly
         contentTintColor = .secondaryLabelColor
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = NDMChrome.controlCornerRadius
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: 26).isActive = true
         heightAnchor.constraint(equalToConstant: 26).isActive = true
@@ -3717,6 +3889,50 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
             trailingLabel.textColor = NDMChrome.accent
         }
     }
+
+    /// Hide live cell content while the Hero landing overlay owns the pixels.
+    func setLandingCovered(_ covered: Bool) {
+        let alpha: CGFloat = covered ? 0 : 1
+        for view in [glyph, titleLabel, badgeLabel, subtitleLabel, progressBar, trailingLabel, hoverStack] {
+            view.alphaValue = alpha
+        }
+    }
+
+    /// Destination geometry for Hero → row morph, converted into `host`.
+    func captureLandingDestination(in host: NSView, taskID: Int64) -> HeroListLandingDestination? {
+        layoutSubtreeIfNeeded()
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        let rowView = superview
+        let rowFrame: NSRect
+        if let rowView {
+            rowFrame = host.convert(rowView.bounds, from: rowView)
+        } else {
+            rowFrame = host.convert(bounds, from: self)
+        }
+        return HeroListLandingDestination(
+            taskID: taskID,
+            rowFrame: rowFrame,
+            glyphFrame: host.convert(glyph.bounds, from: glyph),
+            nameFrame: host.convert(titleLabel.bounds, from: titleLabel),
+            statusFrame: host.convert(subtitleLabel.bounds, from: subtitleLabel),
+            nameSnapshot: Self.snapshot(of: titleLabel),
+            statusSnapshot: Self.snapshot(of: subtitleLabel)
+        )
+    }
+
+    private static func snapshot(of view: NSView) -> NSImage? {
+        view.layoutSubtreeIfNeeded()
+        guard view.bounds.width > 0.5,
+              view.bounds.height > 0.5,
+              let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return nil
+        }
+        representation.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: representation)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(representation)
+        return image
+    }
 }
 
 // MARK: - Inspector
@@ -3929,10 +4145,14 @@ private final class InspectorViewController: NSViewController {
         placeholderLabel.alignment = .center
         placeholderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        NDMChrome.styleMainButton(primaryButton)
-        NDMChrome.styleGhostButton(secondaryButton)
-        NDMChrome.styleGhostButton(tertiaryButton)
-        NDMChrome.styleGhostButton(copyURLButton)
+        // Rail actions are custom flat controls (`InspectorActionButton`) —
+        // do not apply AppKit `.rounded` main/ghost bezels; they fight the
+        // shared 4–6 radius + rail hover metrics.
+        for button in [primaryButton, secondaryButton, tertiaryButton, copyURLButton] {
+            button.isBordered = false
+            button.bezelStyle = .inline
+            button.controlSize = .regular
+        }
         NDMChrome.styleDangerButton(deleteButton)
         primaryButton.keyEquivalent = "\r"
 
@@ -4043,7 +4263,7 @@ private final class InspectorViewController: NSViewController {
         glanceRow.isHidden = true
         glanceCaptionLabel.isHidden = true
         let actionButtonHeights = [primaryButton, secondaryButton, copyURLButton, moreButton].map {
-            $0.heightAnchor.constraint(equalToConstant: 34)
+            $0.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight)
         }
         self.actionButtonHeights = actionButtonHeights
         iconSizeConstraints = [
@@ -4122,9 +4342,9 @@ private final class InspectorViewController: NSViewController {
             audioActionCard.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             scribeStudioCard.widthAnchor.constraint(equalTo: contentStack.widthAnchor, constant: -28),
             firstActionSeparator.widthAnchor.constraint(equalToConstant: 1),
-            firstActionSeparator.heightAnchor.constraint(equalToConstant: 22),
+            firstActionSeparator.heightAnchor.constraint(equalToConstant: 16),
             secondActionSeparator.widthAnchor.constraint(equalToConstant: 1),
-            secondActionSeparator.heightAnchor.constraint(equalToConstant: 22),
+            secondActionSeparator.heightAnchor.constraint(equalToConstant: 16),
             moreButton.widthAnchor.constraint(equalToConstant: 28),
             actionButtonHeights[0],
             actionButtonHeights[1],
@@ -4179,7 +4399,7 @@ private final class InspectorViewController: NSViewController {
         kvStack.spacing = 8 * layoutScale
         contentStack.spacing = 12 * layoutScale
         actionsStack.spacing = 10 * layoutScale
-        actionButtonHeights.forEach { $0.constant = 34 * layoutScale }
+        actionButtonHeights.forEach { $0.constant = NDMChrome.railActionHeight * layoutScale }
         moreButton.image = NDMChrome.symbol("ellipsis", pointSize: 12 * layoutScale, weight: .semibold)
         iconSizeConstraints.forEach { $0.constant = 54 * layoutScale }
         update(row: currentRow)
@@ -4588,8 +4808,8 @@ private final class InspectorViewController: NSViewController {
             if row.etaText != L10n.emDash && row.etaText != "—" {
                 pairs.append((L10n.timeLeft, row.etaText))
             }
-            if row.isDownloading, let n = Int(row.connectionsText), n > 0 {
-                pairs.append((L10n.connections, "\(n) / \(n)"))
+            if row.isDownloading, !row.connectionsText.isEmpty {
+                pairs.append((L10n.connections, row.connectionsText))
             }
             if !row.activityDateText.isEmpty {
                 pairs.append((L10n.lastAttempt, row.activityDateText))

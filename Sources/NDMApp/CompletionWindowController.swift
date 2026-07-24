@@ -304,15 +304,16 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         actions.orientation = .horizontal
         actions.spacing = 9
         actions.alignment = .centerY
+        let actionH = NDMChrome.sheetActionHeight
         NSLayoutConstraint.activate([
             open.widthAnchor.constraint(greaterThanOrEqualToConstant: 104),
             reveal.widthAnchor.constraint(greaterThanOrEqualToConstant: 128),
             share.widthAnchor.constraint(equalToConstant: 42),
             more.widthAnchor.constraint(equalToConstant: 42),
-            open.heightAnchor.constraint(equalToConstant: 38),
-            reveal.heightAnchor.constraint(equalToConstant: 38),
-            share.heightAnchor.constraint(equalToConstant: 38),
-            more.heightAnchor.constraint(equalToConstant: 38),
+            open.heightAnchor.constraint(equalToConstant: actionH),
+            reveal.heightAnchor.constraint(equalToConstant: actionH),
+            share.heightAnchor.constraint(equalToConstant: actionH),
+            more.heightAnchor.constraint(equalToConstant: actionH),
         ])
 
         // MARK: Deck assembly (everything under the hero).
@@ -369,15 +370,15 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         return line
     }
 
-    /// Quiet outlined control — hairline pill; hover deepens the ring, not a
-    /// rail-style gray cushion (see `usesOutlinedHover`).
+    /// Quiet outlined control — hairline ring; hover deepens the ring, not a
+    /// rail-style gray cushion. Radius comes from `InspectorActionButton`
+    /// (`NDMChrome.controlCornerRadius`).
     private func outlinedButton(title: String) -> InspectorActionButton {
         let button = InspectorActionButton(title: title, style: .flat)
         button.usesOutlinedHover = true
         button.wantsLayer = true
         button.layer?.borderWidth = 1
         button.layer?.borderColor = NDMChrome.hairline.cgColor
-        button.layer?.cornerRadius = 9
         return button
     }
 
@@ -622,25 +623,23 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 // MARK: - Cinema hero
 
 /// A full-bleed dark band: the finished file's own artwork fills it (aspect
-/// fill, clipped), a top scrim keeps the white headline legible over any
-/// image, and an accent underline plus a translucent close puck sit on top.
+/// fill, clipped). Title legibility comes only from a text shadow — no dark
+/// overlay / scrim — with an accent underline and a translucent close puck.
 @MainActor
 final class CompletionCinemaHero: NSView {
     var onClose: (() -> Void)?
 
     private let backdrop = ThumbnailBackdropView()
     private let restGlyph = NSImageView()
-    private let scrim = TopScrimView()
     private let closeButton = HeroCloseButton()
     private let titleLabel = NSTextField(labelWithString: "")
 
     func setTitle(_ title: String) {
-        // A soft shadow travels with the glyphs, so the headline never dissolves
-        // into a light patch of the artwork — legibility that doesn't depend on
-        // the scrim alone.
+        // No dark overlay: a slightly stronger shadow keeps white type readable
+        // on busy covers without the old muddy 12pt / 0.55 halo.
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-        shadow.shadowBlurRadius = 12
+        shadow.shadowBlurRadius = 8
         shadow.shadowOffset = NSSize(width: 0, height: -1)
         titleLabel.attributedStringValue = NSAttributedString(
             string: title,
@@ -666,8 +665,6 @@ final class CompletionCinemaHero: NSView {
         restGlyph.translatesAutoresizingMaskIntoConstraints = false
         restGlyph.setAccessibilityElement(false)
 
-        scrim.translatesAutoresizingMaskIntoConstraints = false
-
         setTitle(title)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -682,7 +679,6 @@ final class CompletionCinemaHero: NSView {
 
         addSubview(backdrop)
         addSubview(restGlyph)
-        addSubview(scrim)
         addSubview(titleLabel)
         addSubview(underline)
         addSubview(closeButton)
@@ -697,11 +693,6 @@ final class CompletionCinemaHero: NSView {
             restGlyph.centerYAnchor.constraint(equalTo: centerYAnchor),
             restGlyph.widthAnchor.constraint(equalToConstant: 60),
             restGlyph.heightAnchor.constraint(equalToConstant: 60),
-
-            scrim.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrim.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrim.topAnchor.constraint(equalTo: topAnchor),
-            scrim.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 26),
@@ -906,35 +897,6 @@ private final class ThumbnailBackdropView: NSView {
     func setImage(_ image: NSImage) {
         var rect = CGRect(origin: .zero, size: image.size)
         layer?.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
-    }
-}
-
-/// Vertical scrim: dark at the top so a white headline reads over bright
-/// artwork, fading to clear across the upper half.
-private final class TopScrimView: NSView {
-    private let gradient = CAGradientLayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        // Anchored to the headline zone: genuinely dark at the very top so a
-        // white title and the close puck read over *any* artwork — bright,
-        // busy, or dark — then fades to clear so the cover still shines below.
-        gradient.colors = [
-            NSColor.black.withAlphaComponent(0.82).cgColor,
-            NSColor.black.withAlphaComponent(0.42).cgColor,
-            NSColor.clear.cgColor,
-        ]
-        gradient.locations = [0, 0.30, 0.60]
-        layer?.addSublayer(gradient)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        gradient.frame = bounds
     }
 }
 

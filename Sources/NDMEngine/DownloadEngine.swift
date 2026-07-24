@@ -113,7 +113,11 @@ public actor DownloadEngine {
         self.tuneConfig = tuneConfig
         self.connectionCap = max(1, min(request.connections, 32))
         self.currentConnections = max(1, min(request.connections, 32))
-        self.progress = DownloadProgress(taskID: taskID, status: .waiting)
+        self.progress = DownloadProgress(
+            taskID: taskID,
+            status: .waiting,
+            currentConnections: self.currentConnections
+        )
         let perTask = request.bandwidthLimitBytesPerSecond
         let limit = perTask > 0 ? perTask : globalBandwidthLimit
         self.limiter = BandwidthLimiter(bytesPerSecond: limit)
@@ -220,9 +224,15 @@ public actor DownloadEngine {
         // Smart tuning: big resumable files start low and double while it pays off.
         let tuningActive = autoTune && acceptRanges && total >= tuneConfig.minTotalBytes
         if tuningActive {
-            currentConnections = max(1, min(tuneConfig.startConnections, connectionCap))
+            setCurrentConnections(max(1, min(tuneConfig.startConnections, connectionCap)))
+            progress.tuning = ConnectionTuning(
+                steps: [],
+                currentConnections: currentConnections,
+                outcome: .tuning
+            )
             log("SmartTune enabled: starting at \(currentConnections), cap \(connectionCap)")
         } else if autoTune && !acceptRanges {
+            setCurrentConnections(1)
             progress.tuning = ConnectionTuning(
                 steps: [],
                 currentConnections: 1,
@@ -300,6 +310,7 @@ public actor DownloadEngine {
                 tuneTask = nil
                 isBootstrappingDynamicPlan = false
                 if autoTune {
+                    setCurrentConnections(1)
                     progress.tuning = ConnectionTuning(
                         steps: progress.tuning?.steps ?? [],
                         currentConnections: 1,
@@ -478,7 +489,7 @@ public actor DownloadEngine {
     /// Replan unfinished ranges to a new concurrency (pause soft-stop not required).
     private func replanConnections(_ count: Int) throws {
         let n = max(1, min(count, 32))
-        currentConnections = n
+        setCurrentConnections(n)
         planGeneration &+= 1
         if isBootstrappingDynamicPlan {
             log("applyConnectionsCount: \(n) — deferred until initial Range bootstrap completes.")
@@ -684,11 +695,19 @@ public actor DownloadEngine {
 
     private func publishTuning(steps: [ConnectionTuning.Step], outcome: ConnectionTuning.Outcome) {
         guard !tuneAborted else { return }
+        progress.currentConnections = currentConnections
         progress.tuning = ConnectionTuning(
             steps: steps,
             currentConnections: currentConnections,
             outcome: outcome
         )
+    }
+
+    /// Keep the private worker target and the UI-facing progress field in lockstep.
+    private func setCurrentConnections(_ n: Int) {
+        let capped = max(1, min(n, 32))
+        currentConnections = capped
+        progress.currentConnections = capped
     }
 
     // MARK: - Download

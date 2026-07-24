@@ -59,6 +59,16 @@ test("bilibili NDM chip mounts left of video-tool-more outside the fold", () => 
     assert.doesNotMatch(adapters, /video-toolbar-left-main[\s\S]{0,200}appendChild\(wrapper\)/);
 });
 
+test("bilibili NDM chip reuses native right-item spacing instead of custom squeeze", () => {
+    const adapters = source("site-adapters.js");
+    assert.match(adapters, /video-toolbar-item-icon/);
+    assert.match(adapters, /video-toolbar-item-text/);
+    assert.match(adapters, /better-ndm-bilibili-action\{margin-right:12px\}/);
+    assert.doesNotMatch(adapters, /better-ndm-bilibili-action\{[^}]*margin-left/);
+    assert.doesNotMatch(adapters, /better-ndm-bilibili-action\{[^}]*flex:none/);
+    assert.doesNotMatch(adapters, /better-ndm-bilibili-action\{[^}]*min-width/);
+});
+
 test("content script keeps resource downloads as normal file handoffs", () => {
     const content = source("ct.js");
     assert.match(content, /downloadResource = function/);

@@ -162,6 +162,73 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertFalse(row.canStart)
         XCTAssertNotEqual(row.speedText, "—")
         XCTAssertNotEqual(row.etaText, "—")
+        XCTAssertEqual(row.connectionsText, "8 / 8")
+        XCTAssertTrue(row.statusDetail.contains(L10n.connectionsCount(8)))
+    }
+
+    func testLiveConnectionCountPrefersEngineReportOverConfiguredCeiling() {
+        defer { L10n.apply(.system) }
+        L10n.apply(.english)
+        let task = DownloadTask(
+            url: "https://cdn.example.com/big.bin",
+            filename: "big.bin",
+            fileSize: 10_000_000,
+            status: .downloading,
+            connections: 32
+        )
+        let progress = DownloadProgress(
+            taskID: 9,
+            totalBytes: 10_000_000,
+            completedBytes: 1_000_000,
+            bytesPerSecond: 800_000,
+            status: .downloading,
+            tuning: ConnectionTuning(
+                steps: [
+                    .init(connections: 2, bytesPerSecond: 200_000),
+                    .init(connections: 8, bytesPerSecond: 800_000),
+                ],
+                currentConnections: 8,
+                outcome: .settled
+            ),
+            currentConnections: 8
+        )
+
+        XCTAssertEqual(
+            TaskPresentationFormatting.liveConnectionCount(task: task, progress: progress),
+            8
+        )
+        let row = TaskRowPresentation.make(task: task, progress: progress)
+        XCTAssertEqual(row.connectionsText, "8 / 32")
+        XCTAssertTrue(row.statusDetail.contains(L10n.connectionsCount(8)))
+        XCTAssertFalse(row.statusDetail.contains(L10n.connectionsCount(32)))
+    }
+
+    func testLiveConnectionCountFallsBackToUnfinishedSegments() {
+        let task = DownloadTask(
+            url: "https://cdn.example.com/file.bin",
+            filename: "file.bin",
+            status: .downloading,
+            connections: 32
+        )
+        let progress = DownloadProgress(
+            taskID: 3,
+            totalBytes: 4_000,
+            completedBytes: 1_500,
+            segmentStates: [
+                SegmentState(id: 0, start: 0, end: 999, completed: 1_000, isFinished: true),
+                SegmentState(id: 1, start: 1_000, end: 1_999, completed: 500, isFinished: false),
+                SegmentState(id: 2, start: 2_000, end: 2_999, completed: 0, isFinished: false),
+                SegmentState(id: 3, start: 3_000, end: 3_999, completed: 0, isFinished: false),
+            ],
+            status: .downloading
+        )
+        XCTAssertEqual(
+            TaskPresentationFormatting.liveConnectionCount(task: task, progress: progress),
+            3
+        )
+        let row = TaskRowPresentation.make(task: task, progress: progress)
+        XCTAssertEqual(row.connectionsText, "3 / 32")
+        XCTAssertTrue(row.statusDetail.contains(L10n.connectionsCount(3)))
     }
 
     func testMediaJourneyKeepsTruthfulBytesAndOneSemanticProgress() {

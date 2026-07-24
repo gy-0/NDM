@@ -10,6 +10,25 @@ struct CompletionHandoffPreview {
     let isArtwork: Bool
 }
 
+/// Geometry + imagery for Hero → list-row shared-element landing.
+/// All frames are already converted into the host view's coordinate space.
+struct HeroListLandingSource {
+    let taskID: Int64
+    let filename: String
+    let coverImage: NSImage
+    let isArtwork: Bool
+    let heroFrame: NSRect
+    let coverFrame: NSRect
+    let nameFrame: NSRect
+    let eyebrowFrame: NSRect
+    let speedFrame: NSRect
+    let progressFrame: NSRect
+    let eyebrowSnapshot: NSImage?
+    let speedSnapshot: NSImage?
+    let progressSnapshot: NSImage?
+    let heroSnapshot: NSImage?
+}
+
 /// "Now Downloading" cinema strip — the stage at the top of the task list
 /// while bytes are moving. Each live transfer gets cover art, an ambient
 /// glow in the cover's dominant color, a large rolling speed numeral, and a
@@ -24,6 +43,9 @@ final class NowDownloadingHeroView: NSView {
     /// Right-click actions for the transfer on stage — the hero is not a table
     /// row, so it carries its own compact menu of in-flight actions.
     var onContextAction: ((TaskListContextAction, Int64) -> Void)?
+    /// When false, always use the single smooth progress bar — used by the
+    /// compact Progress popup, which should not visualize per-connection chunks.
+    var showsSegmentStrip: Bool = true
 
     private let atmosphere = AtmosphereView()
     private let coverView = NSImageView()
@@ -342,10 +364,11 @@ final class NowDownloadingHeroView: NSView {
         eyebrowLabel.stringValue = primary.isDownloading ? L10n.nowDownloading : primary.statusTitle
         speedLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .light)
 
-        // Multiple live connections → show the parallel segment strip; a
-        // single stream keeps the clean accent bar.
+        // Multiple live connections → show the parallel segment strip on the
+        // list hero; a single stream (or hosts that opt out) keeps the clean
+        // accent bar. The Progress popup sets showsSegmentStrip = false.
         let segments = primary.segmentStates
-        if segments.count > 1 {
+        if showsSegmentStrip, segments.count > 1 {
             segmentStrip.update(segments: segments)
             segmentStrip.isHidden = false
             segmentStrip.isActive = primary.isDownloading
@@ -453,6 +476,62 @@ final class NowDownloadingHeroView: NSView {
             rectInHero: convert(coverSymbol.bounds, from: coverSymbol),
             isArtwork: false
         )
+    }
+
+    /// Capture everything the list landing morph needs *before* this hero is
+    /// reassigned or collapsed. Frames are converted into `host`.
+    func captureListLandingSource(in host: NSView) -> HeroListLandingSource? {
+        layoutSubtreeIfNeeded()
+        guard let currentTaskID, bounds.width > 1, bounds.height > 1 else { return nil }
+
+        let coverImage: NSImage
+        let coverFrame: NSRect
+        let isArtwork: Bool
+        if let image = coverView.image, !coverView.isHidden {
+            coverImage = image
+            coverFrame = host.convert(coverView.bounds, from: coverView)
+            isArtwork = true
+        } else if let image = coverSymbol.image, !coverSymbol.isHidden {
+            coverImage = image
+            coverFrame = host.convert(coverSymbol.bounds, from: coverSymbol)
+            isArtwork = false
+        } else {
+            let filename = nameLabel.stringValue
+            coverImage = NDMChrome.fileIcon(filename: filename, pointSize: 40)
+            coverFrame = host.convert(coverPlate.bounds, from: coverPlate)
+            isArtwork = false
+        }
+
+        return HeroListLandingSource(
+            taskID: currentTaskID,
+            filename: nameLabel.stringValue,
+            coverImage: coverImage,
+            isArtwork: isArtwork,
+            heroFrame: host.convert(bounds, from: self),
+            coverFrame: coverFrame,
+            nameFrame: host.convert(nameLabel.bounds, from: nameLabel),
+            eyebrowFrame: host.convert(eyebrowLabel.bounds, from: eyebrowLabel),
+            speedFrame: host.convert(speedLabel.bounds, from: speedLabel),
+            progressFrame: host.convert(progressBar.bounds, from: progressBar),
+            eyebrowSnapshot: Self.snapshot(of: eyebrowLabel),
+            speedSnapshot: Self.snapshot(of: speedLabel),
+            progressSnapshot: Self.snapshot(of: progressBar.isHidden ? segmentStrip : progressBar),
+            heroSnapshot: Self.snapshot(of: self)
+        )
+    }
+
+    private static func snapshot(of view: NSView) -> NSImage? {
+        view.layoutSubtreeIfNeeded()
+        guard view.bounds.width > 0.5,
+              view.bounds.height > 0.5,
+              let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return nil
+        }
+        representation.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: representation)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(representation)
+        return image
     }
 
     // MARK: - One-second average, display-rate rolling numeral

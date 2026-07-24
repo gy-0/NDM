@@ -17,6 +17,10 @@ public struct DownloadProgress: Sendable, Equatable {
     public var journeyFraction: Double?
     /// Smart connection tuning trace (multi-connection HTTP tasks only).
     public var tuning: ConnectionTuning?
+    /// Live engine concurrency target (active / allowed sockets).
+    /// `0` means the engine has not reported yet — UI falls back to
+    /// `DownloadTask.connections` (configured ceiling), never a magic max.
+    public var currentConnections: Int
 
     public init(
         taskID: Int64,
@@ -28,7 +32,8 @@ public struct DownloadProgress: Sendable, Equatable {
         errorDescription: String? = nil,
         phase: DownloadPhase? = nil,
         journeyFraction: Double? = nil,
-        tuning: ConnectionTuning? = nil
+        tuning: ConnectionTuning? = nil,
+        currentConnections: Int = 0
     ) {
         self.taskID = taskID
         self.totalBytes = totalBytes
@@ -40,6 +45,7 @@ public struct DownloadProgress: Sendable, Equatable {
         self.phase = phase
         self.journeyFraction = journeyFraction
         self.tuning = tuning
+        self.currentConnections = max(0, currentConnections)
     }
 
     public var fractionCompleted: Double {

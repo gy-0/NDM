@@ -24,7 +24,7 @@
    "manifest_version": 3,
    "name": "NDM Relay",
    "permissions": [ "webRequest", "webNavigation", "cookies", "contextMenus", "storage", "downloads" ],
-   "version": "1.3.3",
+   "version": "1.3.4",
    "web_accessible_resources": [ {
       "matches": [ "\u003Call_urls>" ],
       "resources": [ "img/icon16.png", "img/icon16_2x.png", "img/close16.png", "img/close16_2x.png" ]

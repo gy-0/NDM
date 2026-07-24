@@ -346,8 +346,12 @@ public struct TaskRowPresentation: Equatable, Sendable {
             } else {
                 parts.append(TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes))
             }
-            if task.connections > 1 {
-                parts.append(L10n.connectionsCount(task.connections))
+            let liveConnections = TaskPresentationFormatting.liveConnectionCount(
+                task: task,
+                progress: progress
+            )
+            if liveConnections > 1 {
+                parts.append(L10n.connectionsCount(liveConnections))
             }
             let etaText = TaskPresentationFormatting.eta(eta, status: task.status)
             if etaText != L10n.emDash && etaText != "—" {
@@ -367,6 +371,22 @@ public struct TaskRowPresentation: Equatable, Sendable {
             sizeText = TaskPresentationFormatting.sizePair(completed: completedBytes, total: totalBytes)
         }
 
+        let configuredConnections = max(0, task.connections)
+        let liveConnections = TaskPresentationFormatting.liveConnectionCount(
+            task: task,
+            progress: progress
+        )
+        // Inspector shows active / configured while downloading; elsewhere the
+        // configured ceiling alone is enough.
+        let connectionsText: String
+        if task.status == .downloading, liveConnections > 0, configuredConnections > 0 {
+            connectionsText = "\(liveConnections) / \(configuredConnections)"
+        } else if configuredConnections > 0 {
+            connectionsText = "\(configuredConnections)"
+        } else {
+            connectionsText = ""
+        }
+
         return TaskRowPresentation(
             taskID: task.id,
             filename: task.filename.isEmpty ? L10n.untitled : task.filename,
@@ -381,7 +401,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
             sizeText: sizeText,
             speedText: TaskPresentationFormatting.speed(speed, status: task.status),
             etaText: TaskPresentationFormatting.eta(eta, status: task.status),
-            connectionsText: "\(task.connections)",
+            connectionsText: connectionsText,
             urlText: task.url,
             localFileURL: task.destinationFileURL,
             errorText: errorText,
@@ -419,6 +439,36 @@ public struct TaskRowPresentation: Equatable, Sendable {
 }
 
 public enum TaskPresentationFormatting {
+    /// Connection count for Hero / Progress / Inspector while a transfer is live.
+    ///
+    /// Prefer the engine's reported concurrency over `DownloadTask.connections`
+    /// (that field is the configured ceiling — often the settings max of 32 —
+    /// and must not be shown as if every socket were already open).
+    public static func liveConnectionCount(
+        task: DownloadTask,
+        progress: DownloadProgress?
+    ) -> Int {
+        let configured = max(0, task.connections)
+        guard let progress else { return configured }
+
+        if progress.currentConnections > 0 {
+            return progress.currentConnections
+        }
+        if let tuning = progress.tuning, tuning.currentConnections > 0 {
+            return tuning.currentConnections
+        }
+        // Multi-segment HTTP without an explicit report: unfinished ranges are
+        // the best proxy for live workers. Cap by the task ceiling.
+        let segments = progress.segmentStates
+        if segments.count > 1 {
+            let unfinished = segments.filter { !$0.isFinished }.count
+            if unfinished > 0 {
+                return configured > 0 ? min(unfinished, configured) : unfinished
+            }
+        }
+        return configured
+    }
+
     /// Deterministic counterpart to DownloadStore's SQL ordering. UI surfaces
     /// that regroup tasks must still put a newly created or retried task first.
     public static func isMoreRecentlyActive(

@@ -175,6 +175,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         content.wantsLayer = true
 
         sessionHero.translatesAutoresizingMaskIntoConstraints = false
+        // Compact Progress popup: one continuous bar, not multi-connection chunks.
+        sessionHero.showsSegmentStrip = false
         sessionHero.onActivateTask = { [weak self] _ in
             self?.toggleDetails()
         }
@@ -205,7 +207,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         detailsButton.imagePosition = .imageLeading
         detailsButton.imageHugsTitle = true
         detailsButton.font = .systemFont(ofSize: 13, weight: .medium)
-        detailsButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        detailsButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
 
         pauseButton.target = self
         pauseButton.action = #selector(pauseClicked)
@@ -213,13 +215,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         pauseButton.imagePosition = .imageLeading
         pauseButton.imageHugsTitle = true
         pauseButton.font = .systemFont(ofSize: 13, weight: .semibold)
-        pauseButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        pauseButton.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight).isActive = true
         pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108).isActive = true
 
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
         cancelButton.font = .systemFont(ofSize: 13, weight: .medium)
-        cancelButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        cancelButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
 
         let actionSpacer = NSView()
         actionSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
@@ -418,6 +420,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         revealActionButton.target = self
         revealActionButton.action = #selector(revealClicked)
         revealActionButton.image = NDMChrome.symbol("folder", pointSize: 12, weight: .medium)
+        revealActionButton.usesOutlinedHover = true
+        revealActionButton.layer?.borderWidth = 1
+        revealActionButton.layer?.borderColor = NDMChrome.hairline.cgColor
         revealActionButton.isHidden = true
 
         moreActionsButton.isBordered = false
@@ -515,15 +520,15 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             nameLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
             header.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            pauseButton.heightAnchor.constraint(equalToConstant: 34),
+            pauseButton.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight),
             pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
-            openButton.heightAnchor.constraint(equalToConstant: 34),
+            openButton.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight),
             openButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
-            revealActionButton.heightAnchor.constraint(equalToConstant: 34),
+            revealActionButton.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight),
             revealActionButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 128),
             moreActionsButton.widthAnchor.constraint(equalToConstant: 34),
-            moreActionsButton.heightAnchor.constraint(equalToConstant: 34),
-            cancelButton.heightAnchor.constraint(equalToConstant: 34),
+            moreActionsButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight),
+            cancelButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight),
             cancelButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 78),
         ])
         completionStackView.apply(nil)
@@ -574,8 +579,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
         resultWindow.setFrame(resultFrame, display: false)
         // The result is taller and slightly narrower than the transfer card.
-        // Place that real destination in its quiet slot before snapshot
-        // geometry is captured, so the handoff lands without a final jump.
+        // Place that real destination in its centered quiet slot before
+        // snapshot geometry is captured, so the handoff lands without a jump.
         applyQuietStackPosition()
         resultFrame = resultWindow.frame
         completionHandoffIsActive = true
@@ -826,9 +831,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         connRow.orientation = .horizontal
         connRow.spacing = 10
         connRow.alignment = .centerY
-        applyConnButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        applyConnButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
         applyConnButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 72).isActive = true
-        renewButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        renewButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
 
         let stack = NSStackView(views: [connRow, renewButton, optionsNote])
         stack.orientation = .vertical
@@ -1005,32 +1010,33 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         applyQuietStackPosition()
     }
 
+    /// Browser captures stay ambient (`orderFrontRegardless`) but still open
+    /// centered like manual New Download / Progress — not pinned to the
+    /// menu-bar corner. Older cards cascade slightly so simultaneous captures
+    /// remain individually reachable.
     private func applyQuietStackPosition() {
         guard quietlyPresented,
               let index = quietStackIndex,
               let targetWindow = completionController?.window ?? window else { return }
-        let screen = targetWindow.screen ?? window?.screen ?? NSScreen.main
+        let screen = NSApp.keyWindow?.screen
+            ?? targetWindow.screen
+            ?? window?.screen
+            ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         var frame = targetWindow.frame
-        let margin: CGFloat = 24
-        let stepX: CGFloat = 18
-        let stepY: CGFloat = 22
-        let availableRows = max(
-            1,
-            Int(max(0, visible.height - frame.height - margin * 2) / stepY) + 1
+        let stepX: CGFloat = 24
+        let stepY: CGFloat = 24
+        let inset: CGFloat = 12
+        frame.origin.x = visible.midX - frame.width / 2 + CGFloat(index) * stepX
+        frame.origin.y = visible.midY - frame.height / 2 - CGFloat(index) * stepY
+        frame.origin.x = min(
+            max(frame.origin.x, visible.minX + inset),
+            max(visible.minX + inset, visible.maxX - frame.width - inset)
         )
-        // Six visible ledges per band keep the cluster compact. Further tasks
-        // start a new band to the left instead of colliding with slot zero.
-        let rowsPerBand = min(6, availableRows)
-        let slot = index % rowsPerBand
-        let band = index / rowsPerBand
-        let bandStride = CGFloat(rowsPerBand) * stepX + 28
-        frame.origin.x = visible.maxX - frame.width - margin
-            - CGFloat(slot) * stepX
-            - CGFloat(band) * bandStride
-        frame.origin.y = visible.maxY - frame.height - margin - CGFloat(slot) * stepY
-        frame.origin.x = max(visible.minX + 12, frame.origin.x)
-        frame.origin.y = max(visible.minY + 12, frame.origin.y)
+        frame.origin.y = min(
+            max(frame.origin.y, visible.minY + inset),
+            max(visible.minY + inset, visible.maxY - frame.height - inset)
+        )
         targetWindow.setFrame(frame, display: false)
     }
 
@@ -1253,17 +1259,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         } else {
             segments = progress.segmentStates.sorted { $0.id < $1.id }
         }
-        let forceFilled = progress.status == .complete
-        segmentsCaption.stringValue = segments.isEmpty
-            ? L10n.segments
-            : L10n.segmentsCount(segments.count)
-        segmentBlock?.isHidden = segments.count <= 1
-        // On complete, always solid-fill: live Range snapshots can lag behind merge.
-        if isYtDlp {
-            segmentStrip.updateUnified(progress: fraction, forceFilled: forceFilled)
-        } else {
-            segmentStrip.update(segments: segments, totalBytes: total, forceFilled: forceFilled)
-        }
+        // Progress popup keeps a single overall bar; per-connection detail
+        // lives on the Connections tab. List heroes still show segment strips.
+        segmentBlock?.isHidden = true
 
         configureActionButtons(for: progress.status, task: task)
         renderConnections(segments, downloadStatus: progress.status)

@@ -44,7 +44,8 @@ public actor YtDlpEngine {
             segmentStates: Self.segment(total: max(0, estimatedBytes), completed: 0),
             status: .downloading,
             phase: .preparing,
-            journeyFraction: 0
+            journeyFraction: 0,
+            currentConnections: self.connections
         )
     }
 
