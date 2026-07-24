@@ -1,4 +1,5 @@
 import Foundation
+import NDMCore
 
 /// Metadata prepared before the quality picker opens. The original and
 /// resolved URL travel with the probe so short links are expanded only once.
@@ -161,20 +162,60 @@ public actor MediaPreflightStore {
 /// Shared URL classification keeps the entry sheet and the download path in
 /// agreement about which links should receive media recognition.
 public enum MediaLinkClassifier {
+    /// Installers, archives, documents, and other non-stream files. A capture
+    /// of one of these must keep its own URL even when the referring page is a
+    /// yt-dlp site (e.g. a `.dmg` clicked on app.bilibili.com).
+    private static let ordinaryFileExtensions: Set<String> = [
+        "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz",
+        "dmg", "pkg", "exe", "msi", "iso", "apk", "appimage",
+        "pdf", "epub", "mobi", "azw3", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "rtf", "txt", "md", "csv",
+        "jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "ico",
+        "json", "xml", "yaml", "yml", "toml", "js", "css", "sh", "py", "swift", "dat", "bin",
+        "ttf", "otf", "woff", "woff2",
+    ]
+
+    private static let mediaOrPageDirectExtensions: Set<String> = [
+        "mp4", "mkv", "mov", "m4v", "webm", "mp3", "m4a", "flac", "wav",
+        "aac", "ogg", "opus", "avi", "flv", "ts", "m3u8", "m3u",
+    ]
+
     public static func looksLikeMediaPage(_ raw: String) -> Bool {
         guard let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return false }
-        let directExtensions: Set<String> = [
-            "mp4", "mkv", "mov", "m4v", "webm", "mp3", "m4a", "flac", "wav",
-            "aac", "ogg", "opus", "avi", "flv", "ts", "m3u8", "m3u",
-            "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "dmg", "pkg", "exe", "msi", "iso", "apk",
-            "pdf", "epub", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "txt", "md", "csv",
-            "jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "ico",
-            "json", "xml", "yaml", "yml", "toml", "js", "css", "sh", "py", "swift", "dat", "bin",
-            "ttf", "otf", "woff", "woff2",
-        ]
-        return !directExtensions.contains(url.pathExtension.lowercased()) && url.host != nil
+        let ext = url.pathExtension.lowercased()
+        if ordinaryFileExtensions.contains(ext) || mediaOrPageDirectExtensions.contains(ext) {
+            return false
+        }
+        return url.host != nil
+    }
+
+    public static func looksLikeOrdinaryFileDownload(_ raw: String) -> Bool {
+        guard let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" || scheme == "ftp" else { return false }
+        return ordinaryFileExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    /// Browser captures from supported video sites used to always rewrite the
+    /// sniffed URL to the tab's page URL for yt-dlp. That is correct for short
+    /// MP4/TS sniffs, but wrong for resource-shelf rows and installer/document
+    /// direct links — those must keep field `2` as the download target.
+    public static func shouldPreferPageResolver(url: String, ltype: String, pageURL: String) -> Bool {
+        if looksLikeOrdinaryFileDownload(url) { return false }
+        switch ltype.lowercased() {
+        case "media-page":
+            return looksLikeMediaPage(url) || looksLikeMediaPage(pageURL)
+        case "media", "hls":
+            return true
+        case "normal", "":
+            // Context-menu / catcher of a video page link itself.
+            return looksLikeMediaPage(url)
+                && SharedLinkResolver.source(forURLString: url) != .web
+        default:
+            return false
+        }
     }
 
     public static func looksLikeCollectionURL(_ raw: String) -> Bool {

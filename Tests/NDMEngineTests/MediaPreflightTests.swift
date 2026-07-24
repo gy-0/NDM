@@ -196,4 +196,39 @@ final class MediaPreflightTests: XCTestCase {
             "https://www.youtube.com/playlist?list=PL123"
         ))
     }
+
+    func testPageResolverIsNotUsedForOrdinaryFilesOnVideoSites() {
+        let bilibiliPage = "https://www.bilibili.com/video/BV1GJ411x7h7"
+        let appPage = "https://app.bilibili.com/?spm_id_from=333.1007.0.0"
+        let dmg = "https://dl.hdslb.com/mobile/fixed/pc_electron_mac/bili_mac.dmg?v=1.17.9"
+        let telemetry = "https://data.bilibili.com/log/web.txt"
+
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload(dmg))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload(telemetry))
+        XCTAssertFalse(MediaLinkClassifier.shouldPreferPageResolver(
+            url: dmg,
+            ltype: "normal",
+            pageURL: appPage
+        ))
+        XCTAssertFalse(MediaLinkClassifier.shouldPreferPageResolver(
+            url: telemetry,
+            ltype: "normal",
+            pageURL: bilibiliPage
+        ))
+        XCTAssertTrue(MediaLinkClassifier.shouldPreferPageResolver(
+            url: "https://upos.example/segment.mp4",
+            ltype: "media",
+            pageURL: bilibiliPage
+        ))
+        XCTAssertTrue(MediaLinkClassifier.shouldPreferPageResolver(
+            url: bilibiliPage,
+            ltype: "media-page",
+            pageURL: bilibiliPage
+        ))
+        XCTAssertTrue(MediaLinkClassifier.shouldPreferPageResolver(
+            url: bilibiliPage,
+            ltype: "normal",
+            pageURL: bilibiliPage
+        ))
+    }
 }
