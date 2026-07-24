@@ -17,10 +17,21 @@
 ### 验证
 
 ```bash
-cd ~/NDM/reverse/tools && python3 test_re_specs.py
-cd ~/NDM && swift test
-swift run NDM   # 启动宿主（NDM 专用 WS :51873，可接 NDM Relay）
+cd ~/NDM && Scripts/check.sh   # 三道门禁：build + swift test + Relay node 测试
+swift run NDM                  # 启动宿主（NDM 专用 WS :51873，可接 NDM Relay）
+
+cd ~/NDM/reverse/tools && python3 test_re_specs.py   # 逆向规格自检
 ```
+
+触网的检查不在门禁里（它们会因为限流而失败，与代码无关），需要时单独跑：
+
+```bash
+swift run NDMProbe                    # 交付成功率与中位耗时
+swift run NDMSoak --duration 28800    # 8 小时长跑稳定性
+NDM_LIVE_NETWORK_TESTS=1 swift test --filter YtDlpToolIntegrationTests
+```
+
+优先级栈与进度见 [`docs/NORTHSTAR.md`](docs/NORTHSTAR.md)。
 
 ### NDM Relay 联调
 

@@ -33,7 +33,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | A8 | **`remove` 失败后任务状态可能滞留** —— 引擎已被无条件取消，但 DB 里的 status 可能仍是 `downloading` | ⬜ 从 A7 分出来的独立问题，需要先摸清 status 状态机再动 |
 | A4 | **HLS / MKV 边缘行为** —— AES-128、不连续码流、缺失分片、音视频时长不齐 | ⬜ |
 | A5 | **NDM Relay 实机 smoke** —— 扩展是最大入口漏斗，却是唯一没在真机验过的环节 | ⬜ |
-| A6 | **仓库没有任何 CI**（无 `.github/`），也没有一条命令能一次跑完三道门禁 | ⬜ 优先级低（循环目前由我在本地跑），但一个 `Scripts/check.sh` 能让门禁对人和对我都一致 |
+| A6 | **一条命令跑完三道门禁** | ✅ 2026-07-24 `Scripts/check.sh`。汇总真实总数（数测试用例，不读会骗人的 "Executed N tests" 末行），任一失败非零退出，末尾提示三条触网命令。三条退出路径都验证过。仓库仍无 CI，但门禁现在对人和对循环是同一条命令 |
 
 ### B · 可测量：不测就不能改进
 
@@ -69,9 +69,11 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 ## 3. 循环协议
 
 1. 读本文件，取最靠前的未完成项。一轮做一件，做完整。
-2. 三道门禁：`swift build` · `swift test` · `extension/NDMRelay` 的 node 测试。
-   触网测试不在默认套件里，需要时显式开：
-   `NDM_LIVE_NETWORK_TESTS=1 swift test --filter YtDlpToolIntegrationTests`
+2. 三道门禁：**`Scripts/check.sh`**（`swift build` · `swift test` · Relay node 测试；
+   任一失败非零退出）。触网的东西一律不在门禁里，需要时显式跑：
+   - `NDM_LIVE_NETWORK_TESTS=1 swift test --filter YtDlpToolIntegrationTests`
+   - `swift run NDMProbe` —— 交付成功率与中位耗时
+   - `swift run NDMSoak --duration 28800` —— 真正的 8 小时长跑
 3. 全绿且不涉及品牌/定价/购买 URL/许可证密钥/用户数据路径迁移 → 直接提交到当前工作分支。否则留分支等审阅。
 4. 纯视觉改动一律停下等审阅。
 5. 在下面追加日志。报告诚实：失败贴真实输出，跳过就说跳过。
@@ -84,6 +86,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | A6 统一门禁脚本 | `Scripts/check.sh`。发现原本打算复用的 "Executed N tests" 末行其实只是最后一个 target 的数字（显示 6，真实 345）——改成数测试用例。三条退出路径都真实验证过：植入临时失败测试（exit 1，报 345 passed/1 failed）、用 `NDM_RELAY_TESTS_DIR` 指向含失败用例的临时目录（exit 1）、目录不存在（exit 1）、全绿（exit 0）。README 验证段改为指向它 |
 | 2026-07-24 | A7 失败删除销毁续传数据 | 先写测试复现（植入真实 `segments.bin` + `seg.x0`，注入会抛错的 recycler）——确认两者都被删掉；修复后 7 个删除测试全过，包括原有那个断言"成功时必须删掉 support 目录"的测试。顺手扫了 `DownloadManager` 其余 `defer`，没有同类问题。分出 A8（status 可能滞留） |
 | 2026-07-24 | A3 长跑压测仪器 | `SoakAnalysis`（纯逻辑，19 个离线测试）+ `NDMSoak` 可执行，自带本地 origin。**150s 基线：472 轮 · fd 14→14 · 行 0→0 · 收敛后 746 KB/min · 无 finding**。三个过程发现：① 首跑显示"1452 行一个没删"——查明是我没注入 recycler 导致 `remove(deleteFile:true)` 抛 `fileRecyclingUnavailable`，而我用 `try?` 吞了错误；顺此发现真问题 A7（defer 在抛异常时仍拆除 support 目录，留下行在但分段已删的任务）；② 单条直线拟合会把正在收敛的曲线报成 8.3 MB/min 的可怕速率——改为用收敛后窗口下判断，同时两个数都显示；③ 失败路径用 `--max-growth-fraction 0.0001` 验证过真的会 exit 3。**注意：8 小时本身没验证，只证明了仪器有效** |
 | 2026-07-24 | B1 成功率 harness | 新增 `NDMDiagnostics` 库（纯逻辑，25 个离线测试进默认套件）+ `NDMProbe` 可执行（触网，永不进 `swift test`）。**首次真实基线 3/3 · 中位 0.43s**（直链 2/2 中位 0.39s，B站页面 1/1 3.71s / 9.2MB）。三个过程中的真实发现：① 清华镜像限流会返回 HTML 拦截页且 Content-Length 诚实——SHA-256 校验抓住了它，否则会被记成"成功交付"，据此换用阿里云源并新增 `interstitialHint` 直接指出"服务器给的是页面不是文件"；② `MediaPreflightStore` 只有共享实例，重复轮会命中探测缓存污染计时，加了 `uncached()`；③ 各轮不独立，首轮替后面付 yt-dlp 冷启动（21.8s vs 3.8s），加了 `--warmup` 丢弃轮，验证后两轮回到 3.54s/3.79s |
