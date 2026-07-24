@@ -256,14 +256,16 @@ final class HLSMergeEdgeTests: XCTestCase {
             "a playlist extension (or none) hides a real container: \(output.lastPathComponent)"
         )
         XCTAssertTrue(info.hasVideo)
-        // Open product question, recorded rather than asserted either way: an audio
-        // rendition that yields no audio currently ships a silent video as a
-        // success, because muxAV maps audio as `1:a:0?`. That is either a hard
-        // failure or a reported degradation; quietly shipping silence is neither.
-        // Pinned here so the day it changes, this test says so.
-        XCTAssertFalse(
-            info.hasAudio,
-            "current behaviour: an audio rendition without an audio stream yields silence"
+        // The video is still delivered — it is what the site offered, and a hard
+        // failure would leave the user with nothing. But it must not be presented
+        // as a clean success, so the silence is recorded on the task.
+        XCTAssertFalse(info.hasAudio)
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertEqual(
+            DeliveryNote(storageKey: done.deliveryNote),
+            .audioTrackMissing,
+            "a silent delivery must be recorded, not passed off as complete"
         )
     }
 
@@ -326,5 +328,11 @@ final class HLSMergeEdgeTests: XCTestCase {
             "the video must not be truncated to the short audio track; got \(info.seconds)s"
         )
         XCTAssertTrue(info.hasAudio, "the short audio track must still be present")
+        let fetched = try await manager.task(id: task.id)
+        let done = try XCTUnwrap(fetched)
+        XCTAssertNil(
+            done.deliveryNote,
+            "audio that is merely short is not missing; no note belongs here"
+        )
     }
 }

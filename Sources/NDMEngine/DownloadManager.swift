@@ -694,7 +694,8 @@ public actor DownloadManager {
                     taskID: taskID,
                     task: task,
                     store: store,
-                    onComplete: onComplete
+                    onComplete: onComplete,
+                    deliveryNote: { await engine.currentProgress().deliveryNote }
                 ) {
                     try await engine.start()
                 }
@@ -730,6 +731,9 @@ public actor DownloadManager {
         task: DownloadTask,
         store: DownloadStore,
         onComplete: (@Sendable (DownloadTask) -> Void)?,
+        /// Reads a non-fatal delivery note from the engine once it has finished.
+        /// Only engines that can degrade a successful delivery supply one.
+        deliveryNote: () async -> DeliveryNote? = { nil },
         start: () async throws -> URL
     ) async {
         do {
@@ -793,6 +797,7 @@ public actor DownloadManager {
             done.category = DownloadCategory.infer(filename: done.filename, mimeType: done.mimeType)
             done.resumable = true
             done.errorText = nil
+            done.deliveryNote = await deliveryNote()?.storageKey
             try? store.update(done)
             onComplete?(done)
         } catch {

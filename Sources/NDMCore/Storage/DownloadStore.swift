@@ -76,6 +76,9 @@ public final class DownloadStore: @unchecked Sendable {
         if !hasColumn("completedat", in: "downloads") {
             try exec("ALTER TABLE downloads ADD COLUMN completedat NUMERIC;")
         }
+        if !hasColumn("deliverynote", in: "downloads") {
+            try exec("ALTER TABLE downloads ADD COLUMN deliverynote TEXT;")
+        }
     }
 
     public func allDownloads() throws -> [DownloadTask] {
@@ -86,7 +89,7 @@ public final class DownloadStore: @unchecked Sendable {
             id, url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath
+            errortext, urla, postdata, folderpath, deliverynote
         FROM downloads
         ORDER BY
             MAX(
@@ -121,8 +124,8 @@ public final class DownloadStore: @unchecked Sendable {
             url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            errortext, urla, postdata, folderpath, deliverynote
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -146,7 +149,7 @@ public final class DownloadStore: @unchecked Sendable {
             url=?, method=?, filename=?, ltype=?, filesize=?, category=?, status=?,
             bandwidthlimit=?, connections=?, lasttry=?, firsttry=?, completedat=?,
             useragent=?, resumable=?, pageurl=?, pagetitle=?, hittitle=?, mimetype=?,
-            errortext=?, urla=?, postdata=?, folderpath=?
+            errortext=?, urla=?, postdata=?, folderpath=?, deliverynote=?
         WHERE id=?;
         """
         var stmt: OpaquePointer?
@@ -155,7 +158,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bind(task, to: stmt, includingID: false)
-        sqlite3_bind_int64(stmt, 23, task.id)
+        sqlite3_bind_int64(stmt, 24, task.id)
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.stepFailed }
         try replaceHeadersUnlocked(id: task.id, headers: task.headers)
     }
@@ -330,6 +333,7 @@ public final class DownloadStore: @unchecked Sendable {
             sqlite3_bind_null(stmt, 21)
         }
         text(22, task.folderPath)
+        text(23, task.deliveryNote)
         _ = includingID
     }
 
@@ -369,7 +373,8 @@ public final class DownloadStore: @unchecked Sendable {
             alternateURL: colText(20),
             postData: post,
             folderPath: colText(22),
-            headers: []
+            headers: [],
+            deliveryNote: colText(23)
         )
     }
 

@@ -205,6 +205,21 @@ public enum FFmpegTool {
         return hours * 3_600 + minutes * 60 + seconds
     }
 
+    /// Whether a delivered file actually carries audio.
+    ///
+    /// `muxAV` maps audio as `1:a:0?` — optional — so a broken or misrouted audio
+    /// rendition produces a silent video and no error. Asking the finished file is
+    /// the only truthful answer: it describes what was delivered rather than what
+    /// was attempted. Returns nil when the file cannot be inspected at all, so a
+    /// probe failure is never mistaken for confirmed silence.
+    static func deliveredAudioPresence(ffmpeg: String, output: URL) -> Bool? {
+        guard FileManager.default.fileExists(atPath: output.path) else { return nil }
+        guard let presence = try? streamPresence(ffmpeg: ffmpeg, input: output) else {
+            return nil
+        }
+        return presence.hasAudio
+    }
+
     private static func run(_ ffmpeg: String, _ args: [String], cleanupOnFailure: URL?) throws {
         if let output = cleanupOnFailure, FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)

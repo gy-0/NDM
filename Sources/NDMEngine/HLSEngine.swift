@@ -128,6 +128,14 @@ public actor HLSEngine {
                     try FFmpegTool.muxAV(ffmpeg: ffmpeg, video: mergedURL, audio: audioMergedURL, output: mp4URL)
                     try? FileManager.default.removeItem(at: audioMergedURL)
                     log("Muxed HLS video + separate audio -> MP4 (stream copy)")
+                    // An audio rendition was fetched on purpose, so a silent result
+                    // is not a clean success. Keep the video — it is what the site
+                    // offered — but record the fact so the user is told rather than
+                    // left to discover it on playback.
+                    if FFmpegTool.deliveredAudioPresence(ffmpeg: ffmpeg, output: mp4URL) == false {
+                        progress.deliveryNote = .audioTrackMissing
+                        log("Separate audio rendition produced no audio track; delivering video only")
+                    }
                 } else {
                     try FFmpegTool.remuxToMP4(ffmpeg: ffmpeg, input: mergedURL, output: mp4URL)
                     log("Remuxed TS -> MP4 (stream copy, faststart)")

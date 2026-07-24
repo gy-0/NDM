@@ -26,6 +26,9 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
     public var postData: Data?
     public var folderPath: String?
     public var headers: [String]
+    /// Stable `DeliveryNote.storageKey` for a delivery that succeeded but is not
+    /// what the user asked for. Nil on a clean delivery.
+    public var deliveryNote: String?
 
     public init(
         id: Int64 = 0,
@@ -51,7 +54,8 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         alternateURL: String? = nil,
         postData: Data? = nil,
         folderPath: String? = nil,
-        headers: [String] = []
+        headers: [String] = [],
+        deliveryNote: String? = nil
     ) {
         self.id = id
         self.url = url
@@ -77,6 +81,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         self.postData = postData
         self.folderPath = folderPath
         self.headers = headers
+        self.deliveryNote = deliveryNote
     }
 
     /// Final file URL when the download manager has persisted a destination.

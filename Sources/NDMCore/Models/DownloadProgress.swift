@@ -17,6 +17,10 @@ public struct DownloadProgress: Sendable, Equatable {
     public var journeyFraction: Double?
     /// Smart connection tuning trace (multi-connection HTTP tasks only).
     public var tuning: ConnectionTuning?
+
+    /// Set when the delivery succeeded but is not what the user asked for. The
+    /// manager persists it onto the task at completion.
+    public var deliveryNote: DeliveryNote?
     /// Live engine concurrency target (active / allowed sockets).
     /// `0` means the engine has not reported yet — UI falls back to
     /// `DownloadTask.connections` (configured ceiling), never a magic max.
