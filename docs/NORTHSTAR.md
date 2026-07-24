@@ -53,12 +53,71 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 
 | # | 事项 | 现状 |
 |---|---|---|
-| C1 | **转写内置化** | 现在 `ScribeStudioIntegration.swift` 只是 `NSWorkspace.open` 把文件丢给一个独立 Electron App（`dev.yuan.scribestudio`，在 `~/Documents/tinggao`）。用户为了拿文稿要装第二个 App，绝大多数人不会装 → 这条能力事实上等于没有 |
+| C1 | **转写内置化** | 🟡 2026-07-24 选型与拆解已定，见下方专节。现在 `ScribeStudioIntegration.swift` 只是 `NSWorkspace.open` 把文件丢给独立 Electron App（`dev.yuan.scribestudio`，在 `~/Documents/tinggao`），用户要装第二个 App → 这条能力事实上等于没有 |
 | C2 | **收件箱内容全文搜索** | 侧栏现在只按状态/类型/文件名搜。要能搜内容并定位到那一秒。沉淀越多越离不开 = 留存 |
 | C3 | **章节 + 摘要** | 成本最低感知最强；顺带解决"整个产品没有任何可截图传播的画面"这个增长问题 |
 | C4 | **订阅追更** | 关注 UP 主/频道自动下。把工具变成服务，也是订阅制收费唯一站得住的锚点 |
 | C5 | **Raycast / Shortcuts / CLI** | 对 Mac 极客口碑效率极高、成本极低；Raycast 商店是免费传播渠道 |
 | C6 | **投送到手机 / NAS** | 下完直接进相册或 NAS。国内高频真实需求 |
+
+## C1 转写内置化：选型与拆解
+
+> 2026-07-24 定。下面的数字全部是在本机实测得到的，不是查资料或凭印象。
+
+### 1. 引擎选型：macOS 26+ 的 `SpeechAnalyzer`，明确不用 whisper.cpp
+
+实测（macOS 27.0，Apple silicon）：
+
+| 事实 | 实测值 |
+|---|---|
+| `SpeechAnalyzer` / `SpeechTranscriber` / `AssetInventory` 可用版本 | `@available(anyAppleOS 26, *)` —— **macOS 26+** |
+| 支持语言数 | 45 |
+| 中文 | `zh_CN` · `zh_TW` · `zh_HK` 三个都支持；`zh-CN` 正确映射到 `zh_CN` |
+| 原装机器已安装语言 | 11 个，**含 `zh_CN`** —— 中国用户主语言很可能零下载 |
+| 中文端到端质量 | `这是一段中文测试语音用来验证本地转写是否可用。`（仅丢逗号） |
+| 速度 | 5.36s 音频耗时 0.33s ≈ **16 倍实时** |
+| 英文端到端 | `This is an English test of undevised transcription.`（"on device" 听成 "undevised"，TTS 合成音 + 难词） |
+
+**结论：用 Apple 的。** whisper.cpp 明确不做，理由是真实成本对比而非偏好：
+
+- 模型体积：base ≈142MB、small ≈466MB，而中文要到 small 以上才有可比质量；发行包已经背着 yt-dlp + ffmpeg + deno
+- 我们得自建一条签名模型分发通道（等于再做一个 `SiteCompatibilityUpdater`），是真工作量也是真风险
+- Apple 的模型免费、已装、由系统签名，中文实测质量足够好
+
+**代价必须写清楚**：`Package.swift` 最低是 macOS 13，所以转写**只能按功能门控**在 macOS 26+。低版本用户看不到这个功能，而不是看到一个坏的版本。不为了它抬高整个 App 的最低系统版本。
+
+### 2. 模型分发
+
+不需要我们分发。`AssetInventory.status(forModules:)` 报告就绪状态，`assetInstallationRequest(supporting:)` 让**系统**下载并管理，走 Apple 的签名与信任链。这比 `SiteCompatibilityUpdater` 那套自建 Ed25519 通道更强，因为我们根本不碰二进制。
+
+首次使用需要下载语言包时，必须呈现为一个明确阶段（"正在准备中文语音模型"），不能表现为卡住。
+
+### 3. 进度
+
+`prepareToAnalyze(in:withProgressReadyHandler:)` 会给出真实的 `Foundation.Progress`。所以**不需要伪造百分比**。转写并入现有 `DownloadProgress.phase` 的单调旅程，作为交付的最后一段，绝不新开第二条进度条与主进度打架。
+
+### 4. 字幕落盘
+
+用 `.timeIndexedTranscriptionWithAlternatives` preset 拿带时间轴的结果 → 写 SRT。命名与主文件严格同名 + 语言后缀（`片名.zh-Hans.srt`），并作为附属文件进入 `SmartFinalize` 的 CompletionStack，**不散成独立任务**。
+
+### 5. 隐私
+
+`SpeechAnalyzer` 完全本机推理，不上传。这是默认也是唯一路径。将来若有云端选项，必须显式开启并说明数据去向——但 v1 不做云端。
+
+### 6. 与 ScribeStudio 的关系：保留，但降级为"编辑棚"
+
+内置之后，NDM 自己交付文稿与字幕，不再依赖外部 App。但 ScribeStudio 能做的更多（说话人分离、口水词清理、逐段编辑、多格式导出），所以那条接力入口**保留**为"在 ScribeStudio 中编辑"，仅当用户已安装时出现。产品叙事：**NDM 给你可读可搜的文稿，ScribeStudio 是要精修时才进的棚。**
+
+### 7. 拆解（每步独立可交付、每步过门禁）
+
+| 步 | 内容 | 备注 |
+|---|---|---|
+| C1-1 | 纯逻辑：转写资格与计划（哪些文件能转、用哪个语言、macOS 26 门控），扩展现有 `TranscriptionWorkflow`；可用性由外部注入，纯层不 import Speech | 小，一轮可完成 |
+| C1-2 | 纯逻辑：带时间轴结果 → SRT 序列化（时间戳格式、CJK 断行、过短/过长 cue 合并） | 纯函数，极易测 |
+| C1-3 | `SpeechTranscriptionEngine`（NDMEngine，`@available(macOS 26, *)`）：音频转换管线 + 结果收集。探针已验证可行 | 集成测试用 `say` 生成音频，本地无网络，低版本 skip |
+| C1-4 | 语言包就绪：`AssetInventory` 状态与安装请求呈现为明确阶段 | |
+| C1-5 | 接入交付：字幕落盘命名 + 进入 CompletionStack + 进度并入单调旅程 | |
+| C1-6 | 设置开关（默认行为待定）+ ScribeStudio 入口降级为"编辑" | 含视觉改动，需停下等审阅 |
 
 ### 明确不做
 
@@ -88,6 +147,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | C1 选型与拆解（未写实现） | 本轮只做决策，不写实现代码。所有选型依据都是本机实测：写探针查到 `SpeechAnalyzer`/`SpeechTranscriber`/`AssetInventory` 是 `@available(anyAppleOS 26, *)`、45 语言、中文三档全支持、`zh_CN` 在原装机器上**已安装**；再用 `say` 生成真语音做端到端转写，中文近乎完美、约 16 倍实时。据此判定 **whisper.cpp 明确不做**（模型体积 + 需自建签名分发 vs Apple 免费已装已签名），并接受"转写只在 macOS 26+ 按功能门控"这个代价，不抬高整个 App 最低版本。拆成 C1-1…C1-6，第一步是纯逻辑的资格与计划层 |
 | 2026-07-24 | A9 无声交付要说出来 | 新增 `DeliveryNote`（成功但不是用户想要的交付事实，与描述失败的 `DownloadDiagnostic` 分开）+ `DownloadTask.deliveryNote` 列与迁移 + `DownloadProgress.deliveryNote` + `runEngine` 落库。HLS 混流后探测输出真实音频流；探测复用了仓库里**已有的** `FFmpegTool.streamPresence`（我先写了个重复的解析器，发现后删掉了）。探测失败返回 nil 而非 false，避免把"测不出来"当成"确认无声"。测试：存储往返、未知键、清除、迁移幂等、文案禁术语；原本钉住"静默无声"的测试改为断言必须落备注；音频只是偏短则明确断言**不**落备注。364 passed。`NDMProbe` 首跑 B站 失败（`下载失败`）——先核对手改的 SQL 占位符（23/23 正确），再单跑与全跑各一次均 3/3 通过，判定为该视频本会话被下载多次后的限流抖动，非回归 |
 | 2026-07-24 | A8 status 滞留（前提被推翻） | 两个测试分别验活跃与陈旧两条路：活跃路**本来就对**（先 await 运行任务，cancel 分支已写 `.incomplete`）；陈旧 `.downloading` 在隔离测试里能复现，但线上不可达——`recoverInterruptedTasks()` 启动时一条 UPDATE 就把所有 `downloading` 清成 `incomplete`。我上一轮凭 grep 没命中它就断言"没有启动修复"，是错的。保留 6 行守卫（让后置条件本地可验，不依赖远处的启动 SQL）并如实标注为补理论缺口。357 passed |
 | 2026-07-24 | A4 收尾：DISCONTINUITY 与容器名 | `#EXT-X-DISCONTINUITY` **本来就不需要处理**——用两段不同时间戳基准的真实 TS 验证，拼接后交付完整可播 MP4（用 AVFoundation 而非 ffprobe 验，因为"Mac 上能不能播"才是产品承诺）。没有为了有产出而加代码，改为写测试钉住。但顺手挖到一个更严重的：**master playlist 交付的文件叫 `download.m3u8`**，字节是真 MP4 但双击打不开。两层原因：① `DownloadFilename.extensionFromURL` 会把 `.m3u8`/`.mpd` 当成媒体扩展名拼上去；② `runEngine` 的"恢复名字"逻辑因为词干 `download` 在无用词表里而触发，把引擎 remux 好的 `.mp4` 改成 URL 派生的扩展名——本意是救无扩展名的 CDN token，实际把真实容器信息毁了。两处都修：播放列表后缀永不作为交付扩展名；恢复只换词干、绝不降级或丢弃磁盘上的真实扩展名。另立 A9（分轨音频无音频流时静默交付无声视频）。355 passed；`NDMProbe` 复跑 3/3 确认真实交付未回归 |
