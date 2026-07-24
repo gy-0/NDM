@@ -749,13 +749,25 @@ public actor DownloadManager {
             var workingURL = fileURL
             let diskName = fileURL.lastPathComponent
             if !DownloadFilename.isUseful(diskName) {
-                let recovered = DownloadFilename.resolve(
+                var recovered = DownloadFilename.resolve(
                     preferred: done.filename,
                     contentDispositionName: nil,
                     url: URL(string: done.url) ?? fileURL,
                     mimeType: done.mimeType,
                     pageTitle: done.pageTitle
                 )
+                // The engine already produced the real container — HLS in
+                // particular remuxes to MP4 — while `recovered` is derived from the
+                // request URL, whose extension may be a playlist or nothing at all.
+                // Recovery exists to replace a meaningless *stem*; it must never
+                // downgrade or drop the extension, or the delivered file stops
+                // opening despite holding perfectly good video.
+                let diskExtension = fileURL.pathExtension
+                if !diskExtension.isEmpty,
+                   (recovered as NSString).pathExtension.caseInsensitiveCompare(diskExtension) != .orderedSame {
+                    recovered = (recovered as NSString).deletingPathExtension
+                        + "." + diskExtension
+                }
                 if recovered != diskName {
                     let dest = fileURL.deletingLastPathComponent().appendingPathComponent(recovered)
                     let unique = uniqueDestination(dest)

@@ -176,10 +176,16 @@ public enum DownloadFilename {
         return String(cleaned.prefix(80))
     }
 
+    /// Extensions that name a *playlist*, never the media a download delivers.
+    /// Attaching one produces a file whose bytes are a real video but which macOS
+    /// will not open — the delivered name has to describe the payload.
+    private static let playlistExtensions: Set<String> = ["m3u8", "m3u", "mpd"]
+
     private static func extensionFromURL(_ url: URL?) -> String? {
         guard let url else { return nil }
         let ext = url.pathExtension.lowercased()
-        return ext.isEmpty ? nil : ext
+        if ext.isEmpty || playlistExtensions.contains(ext) { return nil }
+        return ext
     }
 
     private static func extensionForMIME(_ mimeType: String?) -> String? {

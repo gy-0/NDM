@@ -31,7 +31,8 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | A3 | **长时稳定性** | 🟡 2026-07-24 仪器建好：`swift run NDMSoak`（本地 origin，不打外网）。**150s 基线干净**：472 轮、1888 个任务走完创建/暂停/续传/交付/删除，fd 恒定 14，任务行回 0，收敛后 746 KB/min。**但 8 小时本身尚未验证** —— 需要你手动跑 `swift run NDMSoak --duration 28800`。短跑必然显示增长（60s 那次收敛后仍 38.9 MB/min，因为还在 warm-up），真信号只能来自长跑。休眠唤醒也还没覆盖 |
 | A7 | **`remove` 失败时销毁续传数据** | ✅ 2026-07-24 修复。不可逆的 support 目录删除移出 `defer`，只在 `store.delete` 成功后执行；引擎注册表清理留在 `defer`（引擎已无条件取消，留着更糟）。线上可达路径是 `AppFileRecycler` 走废纸篓失败（权限/锁定/iCloud） |
 | A8 | **`remove` 失败后任务状态可能滞留** —— 引擎已被无条件取消，但 DB 里的 status 可能仍是 `downloading` | ⬜ 从 A7 分出来的独立问题，需要先摸清 status 状态机再动 |
-| A4 | **HLS / MKV 边缘行为** | 🟡 2026-07-24 做完 AES-128 与缺失分片：修了**密钥轮换**和**中途 `METHOD=NONE`** 两个静默产出乱码的 bug（密钥改为按分片关联）；验证 IV 缺省用 media sequence、密钥取不到会失败、分片 404 会中止（这三条本来就对）。**仍未做**：`#EXT-X-DISCONTINUITY` 完全未解析（TS 直接拼接，remux 行为待验）、音视频时长明显不齐时的合并结果 |
+| A4 | **HLS / MKV 边缘行为** | ✅ 2026-07-24。修了**密钥轮换**、**中途 `METHOD=NONE`**、**交付文件名丢失真实容器**三个静默产出坏文件的 bug。验证本来就正确的：IV 缺省用 media sequence、密钥取不到会失败、分片 404 会中止、`#EXT-X-DISCONTINUITY` 不需要处理（不同时间戳基准拼接后仍交付完整可播 MP4，已写测试钉住） |
+| A9 | **分轨音频没有音频流时静默交付无声视频** —— `FFmpegTool.muxAV` 用 `-map 1:a:0?`，`?` 让音频可选 | ⬜ 需要产品决定：硬失败还是明确降级提示。当前行为已被测试钉住（`testSeparateAudioRenditionWithoutAnAudioStream`），改变的那天测试会说话。音频比视频短则行为合理（视频不被截断、短音轨保留） |
 | A5 | **NDM Relay 实机 smoke** —— 扩展是最大入口漏斗，却是唯一没在真机验过的环节 | ⬜ |
 | A6 | **一条命令跑完三道门禁** | ✅ 2026-07-24 `Scripts/check.sh`。汇总真实总数（数测试用例，不读会骗人的 "Executed N tests" 末行），任一失败非零退出，末尾提示三条触网命令。三条退出路径都验证过。仓库仍无 CI，但门禁现在对人和对循环是同一条命令 |
 
@@ -86,6 +87,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | A4 收尾：DISCONTINUITY 与容器名 | `#EXT-X-DISCONTINUITY` **本来就不需要处理**——用两段不同时间戳基准的真实 TS 验证，拼接后交付完整可播 MP4（用 AVFoundation 而非 ffprobe 验，因为"Mac 上能不能播"才是产品承诺）。没有为了有产出而加代码，改为写测试钉住。但顺手挖到一个更严重的：**master playlist 交付的文件叫 `download.m3u8`**，字节是真 MP4 但双击打不开。两层原因：① `DownloadFilename.extensionFromURL` 会把 `.m3u8`/`.mpd` 当成媒体扩展名拼上去；② `runEngine` 的"恢复名字"逻辑因为词干 `download` 在无用词表里而触发，把引擎 remux 好的 `.mp4` 改成 URL 派生的扩展名——本意是救无扩展名的 CDN token，实际把真实容器信息毁了。两处都修：播放列表后缀永不作为交付扩展名；恢复只换词干、绝不降级或丢弃磁盘上的真实扩展名。另立 A9（分轨音频无音频流时静默交付无声视频）。355 passed；`NDMProbe` 复跑 3/3 确认真实交付未回归 |
 | 2026-07-24 | A4 HLS AES-128 密钥轮换 | 先写 4 个测试探边界：IV 缺省用 media sequence ✅ 本来就对、密钥 404 会失败 ✅ 本来就对、**密钥轮换 ❌（48 字节 vs 应有 32）**、**中途 `METHOD=NONE` ❌（42 vs 26）**。根因：解析器把 `#EXT-X-KEY` 无条件覆盖到 `media.key`，只有最后一个存活，引擎取一把密钥解全部分片 → 全程不报错的乱码，与 A1 同族。修法：密钥按分片关联（`Segment.key`），`Media.key` 改为从 segments 计算以消除两份真相，引擎按 URI 缓存密钥、逐分片解密，`absolutize` 逐分片解析密钥 URI。+7 测试（352 passed）。顺手确认 `#EXT-X-DISCONTINUITY` 在全仓库零处理 |
 | 2026-07-24 | A6 统一门禁脚本 | `Scripts/check.sh`。发现原本打算复用的 "Executed N tests" 末行其实只是最后一个 target 的数字（显示 6，真实 345）——改成数测试用例。三条退出路径都真实验证过：植入临时失败测试（exit 1，报 345 passed/1 failed）、用 `NDM_RELAY_TESTS_DIR` 指向含失败用例的临时目录（exit 1）、目录不存在（exit 1）、全绿（exit 0）。README 验证段改为指向它 |
 | 2026-07-24 | A7 失败删除销毁续传数据 | 先写测试复现（植入真实 `segments.bin` + `seg.x0`，注入会抛错的 recycler）——确认两者都被删掉；修复后 7 个删除测试全过，包括原有那个断言"成功时必须删掉 support 目录"的测试。顺手扫了 `DownloadManager` 其余 `defer`，没有同类问题。分出 A8（status 可能滞留） |
