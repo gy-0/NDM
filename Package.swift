@@ -30,7 +30,10 @@ let package = Package(
         .executableTarget(
             name: "NDMApp",
             dependencies: ["NDMCore", "NDMEngine", "NDMBridge"],
-            path: "Sources/NDMApp"
+            path: "Sources/NDMApp",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "NDMCoreTests",

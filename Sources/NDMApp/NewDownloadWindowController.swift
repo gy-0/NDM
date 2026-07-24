@@ -788,12 +788,15 @@ private final class NewDownloadActionButton: NSButton {
 private final class LinkLensView: NSView {
     private static var iconCache: [String: NSImage] = [:]
     private let coverView = LinkLensCoverView()
+    private let brandMarkView = NSImageView()
+    private var brandMarkWidthConstraint: NSLayoutConstraint?
     private let siteLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private var artworkTask: Task<Void, Never>?
     private var representedHost = ""
+    private var representedSource: SharedLinkResolution.Source = .web
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -801,8 +804,13 @@ private final class LinkLensView: NSView {
 
         coverView.translatesAutoresizingMaskIntoConstraints = false
 
-        siteLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        siteLabel.textColor = NDMChrome.accent
+        brandMarkView.imageScaling = .scaleProportionallyUpOrDown
+        brandMarkView.imageAlignment = .alignLeft
+        brandMarkView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        brandMarkView.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
+
+        siteLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        siteLabel.textColor = .labelColor
         siteLabel.lineBreakMode = .byTruncatingTail
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.maximumNumberOfLines = 2
@@ -816,7 +824,7 @@ private final class LinkLensView: NSView {
         spinner.isDisplayedWhenStopped = false
         spinner.translatesAutoresizingMaskIntoConstraints = false
 
-        let labels = NSStackView(views: [siteLabel, titleLabel, metaLabel])
+        let labels = NSStackView(views: [brandMarkView, siteLabel, titleLabel, metaLabel])
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
@@ -833,6 +841,8 @@ private final class LinkLensView: NSView {
             labels.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 14),
             labels.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -10),
             labels.centerYAnchor.constraint(equalTo: centerYAnchor),
+            brandMarkView.heightAnchor.constraint(equalToConstant: 18),
+            brandMarkView.widthAnchor.constraint(lessThanOrEqualTo: labels.widthAnchor),
             titleLabel.widthAnchor.constraint(equalTo: labels.widthAnchor),
             metaLabel.widthAnchor.constraint(equalTo: labels.widthAnchor),
             spinner.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
@@ -862,8 +872,17 @@ private final class LinkLensView: NSView {
     func clear() {
         artworkTask?.cancel()
         representedHost = ""
+        representedSource = .web
+        brandMarkView.image = nil
+        brandMarkView.isHidden = true
+        siteLabel.isHidden = false
         spinner.stopAnimation(nil)
         isHidden = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshBrandMark()
     }
 
     func showIdentity(urlString: String) {
@@ -875,10 +894,21 @@ private final class LinkLensView: NSView {
         representedHost = host
         isHidden = false
         let identity = Self.identity(host: host, url: url)
-        siteLabel.stringValue = identity.name
+        representedSource = identity.source
+        applyBrandMark(name: identity.name, source: identity.source)
         titleLabel.stringValue = identity.detail
         metaLabel.stringValue = identity.meta
         spinner.stopAnimation(nil)
+
+        if let brandIcon = SiteBrandKit.image(
+            for: identity.source,
+            presentation: .compactIcon,
+            appearance: effectiveAppearance
+        ) {
+            coverView.setImage(brandIcon, isArtwork: false, accentColor: identity.accentColor)
+            return
+        }
+
         let symbol = NSImage(
             systemSymbolName: identity.fallbackSymbol,
             accessibilityDescription: identity.name
@@ -899,6 +929,61 @@ private final class LinkLensView: NSView {
             image.isTemplate = false
             Self.iconCache[host] = image
             coverView.setImage(image, isArtwork: false, accentColor: identity.accentColor)
+        }
+    }
+
+    private func applyBrandMark(name: String, source: SharedLinkResolution.Source) {
+        if let wordmark = SiteBrandKit.image(
+            for: source,
+            presentation: .wordmark,
+            appearance: effectiveAppearance
+        ) {
+            let height: CGFloat = 18
+            let aspect = wordmark.size.width / max(wordmark.size.height, 1)
+            brandMarkView.image = wordmark
+            brandMarkView.isHidden = false
+            siteLabel.isHidden = true
+            siteLabel.stringValue = name
+            brandMarkView.toolTip = name
+            let width = min(max(24, height * aspect), 160)
+            if let existing = brandMarkWidthConstraint {
+                existing.constant = width
+            } else {
+                let constraint = brandMarkView.widthAnchor.constraint(equalToConstant: width)
+                constraint.isActive = true
+                brandMarkWidthConstraint = constraint
+            }
+        } else {
+            brandMarkView.image = nil
+            brandMarkView.isHidden = true
+            siteLabel.isHidden = false
+            siteLabel.stringValue = name
+            siteLabel.textColor = source == .web
+                ? .secondaryLabelColor
+                : SiteBrandKit.accentColor(for: source)
+        }
+    }
+
+    private func refreshBrandMark() {
+        guard !isHidden, !representedHost.isEmpty else { return }
+        applyBrandMark(
+            name: {
+                let branded = SiteBrandKit.displayName(for: representedSource)
+                return branded.isEmpty ? siteLabel.stringValue : branded
+            }(),
+            source: representedSource
+        )
+        if coverView.showsBrandPlaceholder,
+           let brandIcon = SiteBrandKit.image(
+            for: representedSource,
+            presentation: .compactIcon,
+            appearance: effectiveAppearance
+           ) {
+            coverView.setImage(
+                brandIcon,
+                isArtwork: false,
+                accentColor: SiteBrandKit.accentColor(for: representedSource)
+            )
         }
     }
 
@@ -949,10 +1034,11 @@ private final class LinkLensView: NSView {
     func showDirectFileEstimate(url: URL) {
         artworkTask?.cancel()
         representedHost = url.host?.lowercased() ?? ""
+        representedSource = .web
         isHidden = false
         spinner.stopAnimation(nil)
         let filename = DownloadFilename.resolve(url: url)
-        siteLabel.stringValue = Self.displayHost(url)
+        applyBrandMark(name: Self.displayHost(url), source: .web)
         titleLabel.stringValue = filename
         metaLabel.stringValue = [
             Self.fileTypeDescription(filename: filename, mimeType: nil),
@@ -973,9 +1059,10 @@ private final class LinkLensView: NSView {
     func showDirectFilePreview(_ preview: RemoteFilePreview) {
         artworkTask?.cancel()
         representedHost = preview.resolvedURL.host?.lowercased() ?? ""
+        representedSource = .web
         isHidden = false
         spinner.stopAnimation(nil)
-        siteLabel.stringValue = Self.displayHost(preview.resolvedURL)
+        applyBrandMark(name: Self.displayHost(preview.resolvedURL), source: .web)
         titleLabel.stringValue = preview.filename
         var metadata = [Self.fileTypeDescription(
             filename: preview.filename,
@@ -1029,6 +1116,7 @@ private final class LinkLensView: NSView {
         host: String,
         url: URL
     ) -> (
+        source: SharedLinkResolution.Source,
         name: String,
         detail: String,
         meta: String,
@@ -1038,121 +1126,35 @@ private final class LinkLensView: NSView {
     ) {
         let normalized = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         let isDirectFile = !url.pathExtension.isEmpty
-        let fallback = isDirectFile ? "doc.fill" : "globe"
+        let source = SharedLinkResolver.source(forURLString: url.absoluteString)
         let mediaDetail = L10n.ytdlpRecognizedVideoLink
         let continueMeta = L10n.linkLensContinueAnytime
-        switch SharedLinkResolver.source(forURLString: url.absoluteString) {
-        case .youtube:
-            return (
-                "YouTube",
-                mediaDetail,
-                continueMeta,
-                "play.rectangle.fill",
-                URL(string: "https://www.youtube.com/favicon.ico"),
-                NSColor(calibratedRed: 0.96, green: 0.12, blue: 0.16, alpha: 1)
-            )
-        case .bilibili:
-            return (
-                L10n.bilibiliName,
-                mediaDetail,
-                continueMeta,
-                "play.tv.fill",
-                URL(string: "https://www.bilibili.com/favicon.ico"),
-                NSColor(calibratedRed: 0.98, green: 0.39, blue: 0.60, alpha: 1)
-            )
-        case .douyin:
-            return (
-                L10n.douyinName,
-                mediaDetail,
-                continueMeta,
-                "music.note",
-                URL(string: "https://www.douyin.com/favicon.ico"),
-                NSColor(calibratedRed: 0.15, green: 0.84, blue: 0.91, alpha: 1)
-            )
-        case .xiaohongshu:
-            return (
-                L10n.xiaohongshuName,
-                mediaDetail,
-                continueMeta,
-                "bookmark.fill",
-                URL(string: "https://www.xiaohongshu.com/favicon.ico"),
-                NSColor(calibratedRed: 0.96, green: 0.15, blue: 0.20, alpha: 1)
-            )
-        case .tiktok:
-            return (
-                "TikTok",
-                mediaDetail,
-                continueMeta,
-                "music.note",
-                URL(string: "https://www.tiktok.com/favicon.ico"),
-                NSColor(calibratedRed: 0.08, green: 0.79, blue: 0.86, alpha: 1)
-            )
-        case .kuaishou:
-            return (
-                L10n.t("Kuaishou", "快手"), mediaDetail, continueMeta,
-                "camera.aperture",
-                URL(string: "https://www.kuaishou.com/favicon.ico"),
-                NSColor(calibratedRed: 1.00, green: 0.43, blue: 0.12, alpha: 1)
-            )
-        case .weibo:
-            return (
-                L10n.t("Weibo", "微博"), mediaDetail, continueMeta,
-                "dot.radiowaves.left.and.right",
-                URL(string: "https://weibo.com/favicon.ico"),
-                NSColor(calibratedRed: 0.98, green: 0.42, blue: 0.12, alpha: 1)
-            )
-        case .instagram:
-            return (
-                "Instagram", mediaDetail, continueMeta,
-                "camera.fill",
-                URL(string: "https://www.instagram.com/favicon.ico"),
-                NSColor(calibratedRed: 0.82, green: 0.17, blue: 0.55, alpha: 1)
-            )
-        case .x:
-            return (
-                "X", mediaDetail, continueMeta,
-                "bubble.left.and.bubble.right.fill", nil,
-                NSColor(calibratedWhite: 0.70, alpha: 1)
-            )
-        case .facebook:
-            return (
-                "Facebook", mediaDetail, continueMeta,
-                "person.2.fill",
-                URL(string: "https://www.facebook.com/favicon.ico"),
-                NSColor(calibratedRed: 0.12, green: 0.40, blue: 0.88, alpha: 1)
-            )
-        case .vimeo:
-            return (
-                "Vimeo", mediaDetail, continueMeta,
-                "play.circle.fill",
-                URL(string: "https://vimeo.com/favicon.ico"),
-                NSColor(calibratedRed: 0.15, green: 0.65, blue: 0.91, alpha: 1)
-            )
-        case .twitch:
-            return (
-                "Twitch", mediaDetail, continueMeta,
-                "message.fill",
-                URL(string: "https://www.twitch.tv/favicon.ico"),
-                NSColor(calibratedRed: 0.56, green: 0.33, blue: 0.93, alpha: 1)
-            )
-        case .dailymotion:
-            return (
-                "Dailymotion", mediaDetail, continueMeta,
-                "play.square.fill",
-                URL(string: "https://www.dailymotion.com/favicon.ico"),
-                NSColor(calibratedRed: 0.20, green: 0.48, blue: 0.96, alpha: 1)
-            )
+        let accent = SiteBrandKit.accentColor(for: source)
+        let symbol = SiteBrandKit.fallbackSymbolName(for: source, isDirectFile: isDirectFile)
+
+        switch source {
         case .web:
             let favicon = URL(string: "\(url.scheme ?? "https")://\(host)/favicon.ico")
             return (
+                .web,
                 normalized,
                 isDirectFile ? L10n.directFileLink : L10n.ytdlpRecognizedPageLink,
                 isDirectFile
                     ? L10n.t("Checking file details…", "正在读取文件信息…")
                     : L10n.t("Checking for downloads…", "正在查找可下载内容…"),
-                fallback,
+                symbol,
                 favicon,
-                NDMChrome.accent
+                accent
+            )
+        default:
+            return (
+                source,
+                SiteBrandKit.displayName(for: source),
+                mediaDetail,
+                continueMeta,
+                symbol,
+                nil,
+                accent
             )
         }
     }
@@ -1163,6 +1165,9 @@ private final class LinkLensCoverView: NSView {
     private var image: NSImage?
     private var isArtwork = false
     private var accentColor = NDMChrome.accent
+
+    /// True while the cover is showing a site brand glyph (not video artwork).
+    var showsBrandPlaceholder: Bool { image != nil && !isArtwork }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1187,6 +1192,7 @@ private final class LinkLensCoverView: NSView {
         bounds.fill()
         guard let image else { return }
 
+        NSGraphicsContext.current?.imageInterpolation = .high
         if isArtwork {
             let imageSize = image.size
             guard imageSize.width > 0, imageSize.height > 0 else { return }
@@ -1200,9 +1206,23 @@ private final class LinkLensCoverView: NSView {
             )
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
         } else {
-            let side = min(46, min(bounds.width, bounds.height) * 0.56)
-            let rect = NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.92)
+            let imageSize = image.size
+            guard imageSize.width > 0, imageSize.height > 0 else { return }
+            let maxSide = min(52, min(bounds.width, bounds.height) * 0.62)
+            let aspect = imageSize.width / imageSize.height
+            let size: NSSize
+            if aspect >= 1 {
+                size = NSSize(width: maxSide, height: maxSide / aspect)
+            } else {
+                size = NSSize(width: maxSide * aspect, height: maxSide)
+            }
+            let rect = NSRect(
+                x: bounds.midX - size.width / 2,
+                y: bounds.midY - size.height / 2,
+                width: size.width,
+                height: size.height
+            )
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
         }
     }
 }
