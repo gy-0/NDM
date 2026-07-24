@@ -957,6 +957,9 @@ public actor DownloadManager {
             await runningTask.value
         }
 
+        // The engines above are already cancelled, and that cannot be undone, so
+        // dropping their registrations is correct whether or not the removal goes
+        // on to succeed — a cancelled engine must not stay registered.
         defer {
             engines[taskID] = nil
             hlsEngines[taskID] = nil
@@ -965,9 +968,6 @@ public actor DownloadManager {
             ytDlpEngines[taskID] = nil
             runningTasks[taskID] = nil
             resetPresentationSpeed(taskID: taskID)
-            try? FileManager.default.removeItem(
-                at: supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)
-            )
         }
 
         if let fileURL,
@@ -979,6 +979,17 @@ public actor DownloadManager {
         }
 
         try store.delete(id: taskID)
+
+        // Only now, with the row actually gone, is it safe to discard the resume
+        // data. This deliberately does not run on the failure paths above: the
+        // work directory holds `segments.bin` and the partial `seg.xN` files, so
+        // deleting it while the row survives would leave a task that still
+        // advertises itself as resumable with nothing to resume from — the user
+        // would be told the removal failed while their partial transfer was
+        // already destroyed.
+        try? FileManager.default.removeItem(
+            at: supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)
+        )
     }
 
     /// Resolve the persisted task destination without trusting filename path

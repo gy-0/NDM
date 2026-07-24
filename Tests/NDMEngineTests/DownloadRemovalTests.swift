@@ -138,6 +138,87 @@ final class DownloadRemovalTests: XCTestCase {
         XCTAssertNotNil(retainedTask)
     }
 
+    /// A removal that fails must not destroy the task's resume data. The support
+    /// directory holds `segments.bin` and the partial `seg.xN` files, so deleting
+    /// it while the row survives leaves a task that still advertises itself as
+    /// resumable but has nothing left to resume from — the user is told "removal
+    /// failed, try again" while their partial transfer is already gone.
+    func testRecyclerFailureKeepsResumeDataSoRetryIsStillPossible() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = fixture.downloads.appendingPathComponent("half.bin")
+        try Data("payload".utf8).write(to: file)
+        let manager = DownloadManager(
+            store: fixture.store,
+            settings: fixture.settings,
+            supportRoot: fixture.support,
+            fileRecycler: { _ in throw RecycleFailure.denied }
+        )
+        let task = try fixture.store.insert(DownloadTask(
+            url: "https://example.com/file",
+            filename: file.lastPathComponent,
+            status: .incomplete,
+            resumable: true,
+            folderPath: fixture.downloads.path
+        ))
+
+        let workDir = fixture.support.appendingPathComponent("\(task.id)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        let segmentsIndex = workDir.appendingPathComponent("segments.bin")
+        let partial = workDir.appendingPathComponent("seg.x0")
+        try Data("index".utf8).write(to: segmentsIndex)
+        try Data("partial bytes".utf8).write(to: partial)
+
+        do {
+            try await manager.remove(taskID: task.id, deleteFile: true)
+            XCTFail("Expected recycler failure")
+        } catch RecycleFailure.denied {
+            // Expected.
+        }
+
+        let retained = try await manager.task(id: task.id)
+        XCTAssertNotNil(retained, "the row must survive")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: segmentsIndex.path),
+            "segments.bin must survive a failed removal"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: partial.path),
+            "partial segment data must survive a failed removal"
+        )
+    }
+
+    /// The counterpart: once the row really is gone, the resume data must go with
+    /// it, or every failed-then-retried removal leaks a directory.
+    func testSuccessfulRemovalAlsoDiscardsResumeData() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = DownloadManager(
+            store: fixture.store,
+            settings: fixture.settings,
+            supportRoot: fixture.support
+        )
+        let task = try fixture.store.insert(DownloadTask(
+            url: "https://example.com/file",
+            filename: "half.bin",
+            status: .incomplete,
+            resumable: true,
+            folderPath: fixture.downloads.path
+        ))
+        let workDir = fixture.support.appendingPathComponent("\(task.id)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        try Data("index".utf8).write(to: workDir.appendingPathComponent("segments.bin"))
+
+        try await manager.remove(taskID: task.id, deleteFile: false)
+
+        let removed = try await manager.task(id: task.id)
+        XCTAssertNil(removed)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: workDir.path),
+            "resume data must not outlive the task it belongs to"
+        )
+    }
+
     func testRemovingActiveDownloadCancelsAndAwaitsItBeforeDeletingRecord() async throws {
         let payload = Data(repeating: 0x5A, count: 2 * 1_024 * 1_024)
         let server = LocalRangeServer(
