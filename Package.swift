@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "NDMBridge", targets: ["NDMBridge"]),
         .executable(name: "NDM", targets: ["NDMApp"]),
         .executable(name: "NDMProbe", targets: ["NDMProbe"]),
+        .executable(name: "NDMSoak", targets: ["NDMSoak"]),
     ],
     targets: [
         .target(
@@ -48,6 +49,13 @@ let package = Package(
             name: "NDMProbe",
             dependencies: ["NDMCore", "NDMEngine", "NDMDiagnostics"],
             path: "Sources/NDMProbe"
+        ),
+        // Long-run stability probe. Serves its own local origin, so it never
+        // needs the public internet. Also never part of `swift test`.
+        .executableTarget(
+            name: "NDMSoak",
+            dependencies: ["NDMCore", "NDMEngine", "NDMDiagnostics"],
+            path: "Sources/NDMSoak"
         ),
         .testTarget(
             name: "NDMDiagnosticsTests",
