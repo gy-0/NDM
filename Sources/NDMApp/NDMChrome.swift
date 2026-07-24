@@ -1,6 +1,15 @@
 import AppKit
+import ObjectiveC
 import UniformTypeIdentifiers
 import NDMCore
+
+/// Views that cache accent into CALayers / tints (not just `draw` / `updateLayer`).
+@MainActor
+protocol AccentChromeRefreshing: AnyObject {
+    func refreshAccentChrome()
+}
+
+private var ndmAccentBezelAssociationKey: UInt8 = 0
 
 /// Visual chrome — cool neutrals (no warm “paper yellow”) + SF / file icons.
 @MainActor
@@ -15,6 +24,42 @@ enum NDMChrome {
         accentTheme = theme
         customAccentHex = normalizedCustom
         NotificationCenter.default.post(name: accentDidChangeNotification, object: nil)
+        // Accent is a static token; AppKit will not invalidate layer-backed
+        // controls that painted the previous color. Push a full chrome refresh
+        // so toolbar New, progress fills, and accent bezels update immediately.
+        propagateAccentRefresh()
+    }
+
+    /// Walk every open window and refresh accent-dependent chrome in place.
+    static func propagateAccentRefresh() {
+        for window in NSApp.windows {
+            refreshAccent(in: window.contentView)
+            if let toolbar = window.toolbar {
+                for item in toolbar.items {
+                    if let view = item.view {
+                        refreshAccent(in: view)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func refreshAccent(in root: NSView?) {
+        guard let root else { return }
+        var stack: [NSView] = [root]
+        while let view = stack.popLast() {
+            view.needsDisplay = true
+            if let refreshing = view as? AccentChromeRefreshing {
+                refreshing.refreshAccentChrome()
+            }
+            if let button = view as? NSButton,
+               objc_getAssociatedObject(button, &ndmAccentBezelAssociationKey) as? Bool == true {
+                if #available(macOS 11.0, *) {
+                    button.bezelColor = accent
+                }
+            }
+            stack.append(contentsOf: view.subviews)
+        }
     }
 
     /// Window + titlebar + sidebar share one fill so traffic-lights corner doesn’t seam.
@@ -168,7 +213,8 @@ enum NDMChrome {
         )
     }
 
-    /// List / option track (Design Suite `--track`).
+    /// List / option track (Design Suite `--track`). Also the standard
+    /// hover wash for toolbar tools and chip controls.
     static var track: NSColor {
         dynamic(
             light: NSColor.black.withAlphaComponent(0.07),
@@ -176,9 +222,51 @@ enum NDMChrome {
         )
     }
 
+    /// One step denser than `track` — pressed state for flat chip controls.
+    /// Keeps feedback tactile without a dramatic scale squash.
+    static var controlPressed: NSColor {
+        dynamic(
+            light: NSColor.black.withAlphaComponent(0.11),
+            dark: NSColor.white.withAlphaComponent(0.14)
+        )
+    }
+
+    /// Ultra-light wash for inspector-rail text actions (icon + label, pipe
+    /// separators). Must stay quieter than `track` so hover never reads as a
+    /// gray card behind toolbar-style copy.
+    static var railHover: NSColor {
+        dynamic(
+            light: NSColor.black.withAlphaComponent(0.035),
+            dark: NSColor.white.withAlphaComponent(0.045)
+        )
+    }
+
+    /// Pressed step for rail text actions — still below resting `track`.
+    static var railPressed: NSColor {
+        dynamic(
+            light: NSColor.black.withAlphaComponent(0.055),
+            dark: NSColor.white.withAlphaComponent(0.07)
+        )
+    }
+
+    /// Soft accent wash for the primary rail action (Open / Pause / …).
+    static var railAccentHover: NSColor {
+        accent.withAlphaComponent(0.06)
+    }
+
+    /// Pressed accent wash for the primary rail action.
+    static var railAccentPressed: NSColor {
+        accent.withAlphaComponent(0.10)
+    }
+
     /// Selected task row wash (Design Suite `--row-active`).
     static var rowActive: NSColor {
         accent.withAlphaComponent(0.10)
+    }
+
+    /// Pressed accent wash for primary flat chip actions.
+    static var rowActivePressed: NSColor {
+        accent.withAlphaComponent(0.16)
     }
 
     static var okSoft: NSColor {
@@ -217,6 +305,12 @@ enum NDMChrome {
         button.font = .systemFont(ofSize: 12.5, weight: .semibold)
         if #available(macOS 11.0, *) {
             button.bezelColor = accent
+            objc_setAssociatedObject(
+                button,
+                &ndmAccentBezelAssociationKey,
+                true,
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
         }
     }
 
@@ -409,19 +503,33 @@ final class CardStackView: NSStackView {
 }
 
 /// Quiet Finder 4px accent progress — replaces chunky system NSProgressIndicator bars.
-final class ThinProgressView: NSView {
+final class ThinProgressView: NSView, AccentChromeRefreshing {
     private let trackLayer = CALayer()
     private let fillLayer = CALayer()
+
+    /// Shared smoother key. When set, list / hero / window / inspector all
+    /// chase the same display progress for a given download.
+    private(set) var smoothTaskID: Int64?
+
+    /// Fires whenever the smoothed display value moves (for percent labels).
+    var onDisplayedProgressChange: ((Double) -> Void)?
+
+    private(set) var displayedProgress: Double = 0
 
     var progress: Double = 0 {
         didSet {
             let clamped = min(1, max(0, progress))
             if clamped != progress { progress = clamped; return }
-            updateAccessibilityValue()
-            updateFill(animated: window != nil)
+            publishTarget(clamped, reset: false)
             refreshActiveAnimation()
         }
     }
+
+    private var observation: SmoothProgressCenter.ObservationToken?
+    private var localTracker = SmoothProgressTracker()
+    private var localTimer: Timer?
+    private var localLastTick: TimeInterval = 0
+    private var didCelebrate = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -442,6 +550,48 @@ final class ThinProgressView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    deinit {
+        observation?.cancel()
+        localTimer?.invalidate()
+    }
+
+    /// Preferred entry for task-scoped UI: shares one chase across surfaces,
+    /// and reseeds when the view switches to a different download.
+    func setSmoothProgress(taskID: Int64, target: Double, complete: Bool = false) {
+        let clamped = min(1, max(0, target))
+        let switched = smoothTaskID != taskID
+        if switched {
+            observation?.cancel()
+            observation = nil
+            didCelebrate = false
+            smoothTaskID = taskID
+            stopLocalTimer()
+            _ = SmoothProgressCenter.shared.setTarget(
+                taskID: taskID,
+                clamped,
+                complete: complete,
+                reset: true
+            )
+            observation = SmoothProgressCenter.shared.observe(taskID: taskID, seed: clamped) { [weak self] display in
+                self?.applyDisplayedProgress(display)
+            }
+            applyDisplayedProgress(clamped)
+        }
+        let next = complete ? 1.0 : clamped
+        if abs(progress - next) > 0.000_000_1 {
+            progress = next
+        } else {
+            publishTarget(next, reset: false)
+        }
+    }
+
+    func clearSmoothProgress() {
+        observation?.cancel()
+        observation = nil
+        smoothTaskID = nil
+        stopLocalTimer()
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin()
@@ -451,7 +601,7 @@ final class ThinProgressView: NSView {
         fillLayer.bounds = bounds
         fillLayer.position = CGPoint(x: bounds.minX, y: bounds.midY)
         fillLayer.cornerRadius = bounds.height / 2
-        fillLayer.transform = CATransform3DMakeScale(CGFloat(progress), 1, 1)
+        fillLayer.transform = CATransform3DMakeScale(CGFloat(displayedProgress), 1, 1)
         CATransaction.commit()
     }
 
@@ -460,11 +610,93 @@ final class ThinProgressView: NSView {
         refreshColors()
     }
 
+    func refreshAccentChrome() {
+        refreshColors()
+    }
+
     var isActive: Bool = false {
         didSet {
             guard oldValue != isActive else { return }
             refreshActiveAnimation()
         }
+    }
+
+    private func publishTarget(_ target: Double, reset: Bool) {
+        let complete = target >= 0.999
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            if let smoothTaskID {
+                _ = SmoothProgressCenter.shared.setTarget(
+                    taskID: smoothTaskID,
+                    target,
+                    complete: complete,
+                    reset: true
+                )
+            } else {
+                localTracker.reset(to: target)
+                stopLocalTimer()
+            }
+            applyDisplayedProgress(target)
+            return
+        }
+
+        if let smoothTaskID {
+            _ = SmoothProgressCenter.shared.setTarget(
+                taskID: smoothTaskID,
+                target,
+                complete: complete,
+                reset: reset
+            )
+            if observation == nil {
+                observation = SmoothProgressCenter.shared.observe(taskID: smoothTaskID, seed: target) { [weak self] display in
+                    self?.applyDisplayedProgress(display)
+                }
+            }
+        } else {
+            localTracker.setTarget(target, complete: complete)
+            if !localTracker.isSettled {
+                ensureLocalTimer()
+            } else {
+                applyDisplayedProgress(localTracker.display)
+            }
+        }
+    }
+
+    private func ensureLocalTimer() {
+        guard localTimer == nil else { return }
+        localLastTick = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.tickLocal()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        localTimer = timer
+    }
+
+    private func stopLocalTimer() {
+        localTimer?.invalidate()
+        localTimer = nil
+    }
+
+    private func tickLocal() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let dt = min(0.05, max(0, now - localLastTick))
+        localLastTick = now
+        let value = localTracker.advance(by: dt)
+        applyDisplayedProgress(value)
+        if localTracker.isSettled {
+            stopLocalTimer()
+        }
+    }
+
+    private func applyDisplayedProgress(_ value: Double) {
+        let clamped = min(1, max(0, value))
+        let previous = displayedProgress
+        guard abs(clamped - previous) > 0.000_05 || (clamped >= 0.999 && !didCelebrate) else {
+            return
+        }
+        displayedProgress = clamped
+        updateAccessibilityValue()
+        updateFill(from: previous, to: clamped)
+        onDisplayedProgressChange?(clamped)
     }
 
     private func refreshActiveAnimation() {
@@ -498,61 +730,44 @@ final class ThinProgressView: NSView {
     }
 
     private func updateAccessibilityValue() {
-        let percent = min(100, max(0, progress * 100))
+        let percent = min(100, max(0, displayedProgress * 100))
         setAccessibilityValue(percent)
         setAccessibilityValueDescription(String(format: "%.0f%%", percent))
     }
 
-    private var didCelebrate = false
-
-    private func updateFill(animated: Bool) {
+    private func updateFill(from previous: Double, to target: Double) {
         guard bounds.width > 0 else { needsLayout = true; return }
-        let target = CGFloat(progress)
-        let current = (fillLayer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)
-            .map(CGFloat.init(truncating:))
-            ?? (fillLayer.value(forKeyPath: "transform.scale.x") as? NSNumber)
-                .map(CGFloat.init(truncating:))
-            ?? 0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        fillLayer.transform = CATransform3DMakeScale(target, 1, 1)
+        fillLayer.removeAnimation(forKey: "progress")
+        fillLayer.transform = CATransform3DMakeScale(CGFloat(target), 1, 1)
         CATransaction.commit()
-        guard animated,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              abs(target - current) > 0.001 else {
-            fillLayer.removeAnimation(forKey: "progress")
-            fillLayer.removeAnimation(forKey: "completionFlash")
+
+        guard target >= 0.999,
+              !didCelebrate,
+              previous < 0.999,
+              window != nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             return
         }
+        didCelebrate = true
+        let spring = CASpringAnimation(keyPath: "transform.scale.x")
+        spring.fromValue = previous
+        spring.toValue = 1.0
+        spring.mass = 1.0
+        spring.stiffness = 340
+        spring.damping = 22
+        spring.initialVelocity = 8
+        spring.duration = spring.settlingDuration
+        fillLayer.add(spring, forKey: "progress")
 
-        if target >= 1.0, !didCelebrate, current < 1.0 {
-            didCelebrate = true
-            let spring = CASpringAnimation(keyPath: "transform.scale.x")
-            spring.fromValue = current
-            spring.toValue = 1.0
-            spring.mass = 1.0
-            spring.stiffness = 340
-            spring.damping = 22
-            spring.initialVelocity = 8
-            spring.duration = spring.settlingDuration
-            fillLayer.add(spring, forKey: "progress")
-
-            let flash = CABasicAnimation(keyPath: "backgroundColor")
-            flash.fromValue = NDMChrome.accent.cgColor
-            flash.toValue = NDMChrome.accent.withAlphaComponent(0.7).cgColor
-            flash.duration = 0.3
-            flash.autoreverses = true
-            flash.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            fillLayer.add(flash, forKey: "completionFlash")
-            return
-        }
-
-        let animation = CABasicAnimation(keyPath: "transform.scale.x")
-        animation.fromValue = current
-        animation.toValue = target
-        animation.duration = target >= current ? 0.24 : 0.12
-        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        fillLayer.add(animation, forKey: "progress")
+        let flash = CABasicAnimation(keyPath: "backgroundColor")
+        flash.fromValue = NDMChrome.accent.cgColor
+        flash.toValue = NDMChrome.accent.withAlphaComponent(0.7).cgColor
+        flash.duration = 0.3
+        flash.autoreverses = true
+        flash.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        fillLayer.add(flash, forKey: "completionFlash")
     }
 }
 
@@ -623,7 +838,7 @@ final class AtmosphereView: NSView {
 }
 
 /// Circular arc progress indicator. A thin track + accent stroke.
-final class ProgressRingView: NSView {
+final class ProgressRingView: NSView, AccentChromeRefreshing {
     /// Off when a numeral sits inside the ring — the check would draw over it.
     var showsCheckmark = true
 
@@ -639,35 +854,70 @@ final class ProgressRingView: NSView {
     }
     private var workingAngle: CGFloat = -.pi / 2
 
-    private var targetProgress: CGFloat = 0
-    private var displayedProgress: CGFloat = 0
+    private var progressTracker = SmoothProgressTracker()
     private var displayedCheck: CGFloat = 0
     private var hasCompleted = false
     private var fillColor: NSColor = NDMChrome.accent
     private var animTimer: Timer?
+    private var lastTickUptime: TimeInterval = 0
+    /// Optional shared smoother key — keep in sync with ThinProgressView / percent labels.
+    var smoothTaskID: Int64? {
+        didSet {
+            guard oldValue != smoothTaskID else { return }
+            observation?.cancel()
+            observation = nil
+            if let smoothTaskID {
+                observation = SmoothProgressCenter.shared.observe(taskID: smoothTaskID, seed: progress) { [weak self] display in
+                    self?.applySharedDisplay(display)
+                }
+            }
+        }
+    }
+    private var observation: SmoothProgressCenter.ObservationToken?
+    var onDisplayedProgressChange: ((Double) -> Void)?
 
     var progress: Double = 0 {
         didSet {
-            let clamped = CGFloat(min(1, max(0, progress)))
-            guard abs(clamped - targetProgress) > 0.001 || (clamped >= 1 && !hasCompleted) else { return }
-            targetProgress = clamped
+            let clamped = min(1, max(0, progress))
+            if clamped != progress { progress = clamped; return }
 
-            if targetProgress >= 1, !hasCompleted {
+            if let smoothTaskID {
+                _ = SmoothProgressCenter.shared.setTarget(
+                    taskID: smoothTaskID,
+                    clamped,
+                    complete: clamped >= 0.999
+                )
+                if observation == nil {
+                    observation = SmoothProgressCenter.shared.observe(taskID: smoothTaskID, seed: clamped) { [weak self] display in
+                        self?.applySharedDisplay(display)
+                    }
+                }
+            } else if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || window == nil {
+                progressTracker.reset(to: clamped)
+                onDisplayedProgressChange?(clamped)
+                needsDisplay = true
+            } else {
+                progressTracker.setTarget(clamped, complete: clamped >= 0.999)
+                startAnimation()
+            }
+
+            if clamped >= 1, !hasCompleted {
                 hasCompleted = true
                 startAnimation()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     self?.fillColor = NDMChrome.accent
                     self?.burstConfetti()
                 }
-                return
             }
+        }
+    }
 
-            if window != nil {
-                startAnimation()
-            } else {
-                displayedProgress = targetProgress
-                needsDisplay = true
-            }
+    private func applySharedDisplay(_ display: Double) {
+        progressTracker.reset(to: display)
+        onDisplayedProgressChange?(display)
+        needsDisplay = true
+        if hasCompleted, showsCheckmark, display >= 0.98, displayedCheck < 1 {
+            startAnimation()
         }
     }
 
@@ -703,10 +953,10 @@ final class ProgressRingView: NSView {
                        startAngle: workingAngle, endAngle: workingAngle + sweep,
                        clockwise: false)
             ctx.strokePath()
-        } else if displayedProgress > 0.001 {
+        } else if progressTracker.display > 0.001 {
             // Fill arc
             ctx.setStrokeColor(fillColor.cgColor)
-            let endAngle = -.pi / 2 + displayedProgress * 2 * .pi
+            let endAngle = -.pi / 2 + CGFloat(progressTracker.display) * 2 * .pi
             ctx.addArc(center: center, radius: radius,
                        startAngle: -.pi / 2, endAngle: endAngle, clockwise: false)
             ctx.strokePath()
@@ -756,22 +1006,32 @@ final class ProgressRingView: NSView {
         needsDisplay = true
     }
 
+    func refreshAccentChrome() {
+        fillColor = NDMChrome.accent
+        needsDisplay = true
+    }
+
     private func startAnimation() {
         guard animTimer == nil else { return }
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        lastTickUptime = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        animTimer = timer
     }
 
     private func tick() {
         var dirty = false
-        let ease: CGFloat = 0.15
+        let now = ProcessInfo.processInfo.systemUptime
+        let dt = min(0.05, max(0, now - lastTickUptime))
+        lastTickUptime = now
 
-        if abs(displayedProgress - targetProgress) > 0.001 {
-            displayedProgress += (targetProgress - displayedProgress) * ease
-            if abs(displayedProgress - targetProgress) < 0.002 {
-                displayedProgress = targetProgress
-            }
+        // Shared-center bindings are driven externally; only advance the
+        // local tracker when this ring owns its own chase.
+        if smoothTaskID == nil, !progressTracker.isSettled {
+            let value = progressTracker.advance(by: dt)
+            onDisplayedProgressChange?(value)
             dirty = true
         }
 
@@ -782,7 +1042,7 @@ final class ProgressRingView: NSView {
             dirty = true
         }
 
-        if hasCompleted, showsCheckmark, displayedProgress >= 0.98, displayedCheck < 1 {
+        if hasCompleted, showsCheckmark, progressTracker.display >= 0.98, displayedCheck < 1 {
             displayedCheck += 0.04
             if displayedCheck > 1 { displayedCheck = 1 }
             dirty = true
@@ -790,7 +1050,12 @@ final class ProgressRingView: NSView {
 
         if dirty {
             needsDisplay = true
-        } else {
+            return
+        }
+
+        let chasing = smoothTaskID == nil && !progressTracker.isSettled
+        let checking = hasCompleted && showsCheckmark && displayedCheck < 1
+        if !chasing && !checking && !(isWorking && !hasCompleted) {
             animTimer?.invalidate()
             animTimer = nil
         }
@@ -852,7 +1117,7 @@ final class ProgressRingView: NSView {
 }
 
 /// Live download speed sparkline — a smooth bezier curve with accent fill.
-final class SpeedSparklineView: NSView {
+final class SpeedSparklineView: NSView, AccentChromeRefreshing {
     private let lineLayer = CAShapeLayer()
     private let fillLayer = CAShapeLayer()
     private let peakLabel = NSTextField(labelWithString: "")
@@ -916,6 +1181,10 @@ final class SpeedSparklineView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        refreshColors()
+    }
+
+    func refreshAccentChrome() {
         refreshColors()
     }
 

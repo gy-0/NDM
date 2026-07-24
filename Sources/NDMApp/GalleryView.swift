@@ -191,16 +191,30 @@ final class GalleryCardItem: NSCollectionViewItem {
 
         if row.isDownloading {
             progressBar.isHidden = false
-            progressBar.progress = row.progressFraction
+            progressBar.setSmoothProgress(
+                taskID: row.taskID,
+                target: row.progressFraction,
+                complete: row.isComplete
+            )
             progressBar.isActive = true
+            progressBar.onDisplayedProgressChange = { [weak self] display in
+                guard let self, let currentTaskID, currentTaskID == row.taskID else { return }
+                let speed = row.speedText
+                let percent = TaskPresentationFormatting.percent(display)
+                self.metaLabel.stringValue = "\(percent) · \(row.statusDetail)"
+                self.speedBadge.isHidden = speed == L10n.emDash || speed == "—"
+                self.speedBadge.stringValue = " \(speed) "
+            }
             let speed = row.speedText
             speedBadge.isHidden = speed == L10n.emDash || speed == "—"
             speedBadge.stringValue = " \(speed) "
-            metaLabel.stringValue = "\(row.progressText) · \(row.statusDetail)"
+            metaLabel.stringValue = "\(TaskPresentationFormatting.percent(progressBar.displayedProgress)) · \(row.statusDetail)"
             metaLabel.textColor = .secondaryLabelColor
         } else {
             progressBar.isHidden = true
             progressBar.isActive = false
+            progressBar.clearSmoothProgress()
+            progressBar.onDisplayedProgressChange = nil
             speedBadge.isHidden = true
             if row.isFailed {
                 metaLabel.stringValue = row.errorText ?? row.statusTitle

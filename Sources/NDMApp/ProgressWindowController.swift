@@ -1127,6 +1127,22 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func applyDisplayedPercent(_ display: Double, progress: DownloadProgress) {
+        let percentText = TaskPresentationFormatting.percent(display)
+        percentLabel.stringValue = percentText
+        if progress.status == .complete {
+            window?.title = L10n.doneTitle(filename)
+        } else if progress.status == .downloading, progress.bytesPerSecond > 0 {
+            let speed = TaskPresentationFormatting.speed(
+                progress.bytesPerSecond,
+                status: .downloading
+            )
+            window?.title = "\(percentText) \(filename) — \(speed)"
+        } else {
+            window?.title = "\(percentText) \(filename)"
+        }
+    }
+
     private func apply(progress: DownloadProgress, task: DownloadTask?) {
         lastStatus = progress.status
         if let task {
@@ -1139,19 +1155,17 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         let fraction = progress.status == .complete ? 1 : progress.fractionCompleted
-        let pct = Int((fraction * 100).rounded(.down))
-        percentLabel.stringValue = "\(pct)%"
-        if progress.status == .complete {
-            window?.title = L10n.doneTitle(filename)
-        } else if progress.status == .downloading, progress.bytesPerSecond > 0 {
-            let speed = TaskPresentationFormatting.speed(
-                progress.bytesPerSecond,
-                status: .downloading
-            )
-            window?.title = "\(pct)% \(filename) — \(speed)"
-        } else {
-            window?.title = "\(pct)% \(filename)"
+        overallProgress.setSmoothProgress(
+            taskID: taskID,
+            target: fraction,
+            complete: progress.status == .complete
+        )
+        overallProgress.onDisplayedProgressChange = { [weak self] display in
+            self?.applyDisplayedPercent(display, progress: progress)
         }
+        progressRing.smoothTaskID = taskID
+        progressRing.progress = fraction
+        applyDisplayedPercent(overallProgress.displayedProgress, progress: progress)
 
         // The yt-dlp finishing tail: after the video stream is down (~82% of
         // the journey), the remaining audio-stream/merge/subtitle steps report
@@ -1165,10 +1179,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let isPostProcessing = progress.status == .downloading
             && ([.merging, .subtitles, .finalizing].contains(progress.phase)
                 || (isYtDlpTask && progress.fractionCompleted >= 0.82))
-        overallProgress.progress = fraction
         overallProgress.isActive = progress.status == .downloading && !isPostProcessing
         progressRing.isWorking = isPostProcessing
-        progressRing.progress = fraction
         statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
         if isPostProcessing {
             statusPill.setPhaseText(Self.phaseLabel(progress.phase))

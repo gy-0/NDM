@@ -11,12 +11,16 @@ struct CompletionHandoffPreview {
 }
 
 /// "Now Downloading" cinema strip — the stage at the top of the task list
-/// while bytes are moving. One primary transfer gets cover art, an ambient
+/// while bytes are moving. Each live transfer gets cover art, an ambient
 /// glow in the cover's dominant color, a large rolling speed numeral, and a
-/// live progress lane. Collapses away entirely when nothing is downloading.
+/// live progress lane. Multiple concurrent downloads stack as separate heroes.
+/// Collapses away entirely when nothing is downloading.
 @MainActor
 final class NowDownloadingHeroView: NSView {
     var onActivateTask: ((Int64) -> Void)?
+    /// Single-click selection when the host shows several heroes at once.
+    /// Falls back to `onActivateTask` when unset (progress window).
+    var onSelectTask: ((Int64) -> Void)?
     /// Right-click actions for the transfer on stage — the hero is not a table
     /// row, so it carries its own compact menu of in-flight actions.
     var onContextAction: ((TaskListContextAction, Int64) -> Void)?
@@ -40,6 +44,7 @@ final class NowDownloadingHeroView: NSView {
     private let segmentStrip = HeroSegmentStrip()
     private let percentLabel = NSTextField(labelWithString: "")
     private let hairline = ChromeBox(fill: NDMChrome.hairline)
+    private let selectionWash = ChromeBox(fill: NDMChrome.rowActive, cornerRadius: 0)
 
     private var displayedSpeed: Double = 0
     private var targetSpeed: Double = 0
@@ -47,6 +52,9 @@ final class NowDownloadingHeroView: NSView {
     private var lastRollUptime: TimeInterval?
     private var currentTaskID: Int64?
     private var currentCoverTaskID: Int64?
+    private var isSelected = false
+    /// Cached row for cover-art refresh without re-querying the list.
+    private var currentRow: TaskRowPresentation?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -103,10 +111,13 @@ final class NowDownloadingHeroView: NSView {
 
         progressBar.translatesAutoresizingMaskIntoConstraints = false
         hairline.translatesAutoresizingMaskIntoConstraints = false
+        selectionWash.translatesAutoresizingMaskIntoConstraints = false
+        selectionWash.alphaValue = 0
+        selectionWash.isHidden = true
 
         segmentStrip.translatesAutoresizingMaskIntoConstraints = false
         segmentStrip.isHidden = true
-        for view in [atmosphere, coverPlate, coverView, eyebrowLabel, nameLabel,
+        for view in [atmosphere, selectionWash, coverPlate, coverView, eyebrowLabel, nameLabel,
                      metaLabel, speedLabel, unitLabel, moreLabel, progressBar,
                      segmentStrip, percentLabel, hairline] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -119,6 +130,11 @@ final class NowDownloadingHeroView: NSView {
             atmosphere.trailingAnchor.constraint(equalTo: trailingAnchor),
             atmosphere.topAnchor.constraint(equalTo: topAnchor),
             atmosphere.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            selectionWash.leadingAnchor.constraint(equalTo: leadingAnchor),
+            selectionWash.trailingAnchor.constraint(equalTo: trailingAnchor),
+            selectionWash.topAnchor.constraint(equalTo: topAnchor),
+            selectionWash.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             coverView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             coverView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -201,7 +217,13 @@ final class NowDownloadingHeroView: NSView {
               bounds.contains(convert(event.locationInWindow, from: nil)) else {
             return super.mouseUp(with: event)
         }
-        onActivateTask?(currentTaskID)
+        if event.clickCount >= 2 {
+            onActivateTask?(currentTaskID)
+        } else if let onSelectTask {
+            onSelectTask(currentTaskID)
+        } else {
+            onActivateTask?(currentTaskID)
+        }
     }
 
     override var acceptsFirstResponder: Bool { currentTaskID != nil }
@@ -218,8 +240,21 @@ final class NowDownloadingHeroView: NSView {
 
     override func accessibilityPerformPress() -> Bool {
         guard let currentTaskID else { return false }
-        onActivateTask?(currentTaskID)
+        if let onSelectTask {
+            onSelectTask(currentTaskID)
+        } else {
+            onActivateTask?(currentTaskID)
+        }
         return true
+    }
+
+    /// Quiet Finder-style selection wash so a stacked hero can show focus
+    /// without looking like a table row.
+    func setSelected(_ selected: Bool) {
+        guard isSelected != selected else { return }
+        isSelected = selected
+        selectionWash.isHidden = !selected
+        selectionWash.alphaValue = selected ? 1 : 0
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -245,27 +280,32 @@ final class NowDownloadingHeroView: NSView {
     @objc private func heroProperties() { if let id = currentTaskID { onContextAction?(.properties, id) } }
 
     /// Live refresh from the 1 s presentation tick.
+    /// `activeCount` still drives the legacy "+N more" eyebrow when a host
+    /// shows only one hero for several transfers; list stacking always passes 1.
     func update(primary: TaskRowPresentation?, activeCount: Int) {
         guard let primary else {
             currentTaskID = nil
+            currentRow = nil
             setAccessibilityLabel(L10n.nowDownloading)
             setAccessibilityValue(nil)
             stopRolling()
             progressBar.isActive = false
+            progressBar.clearSmoothProgress()
+            progressBar.onDisplayedProgressChange = nil
+            percentLabel.stringValue = ""
             segmentStrip.isActive = false
+            setSelected(false)
             return
         }
         let taskChanged = currentTaskID != primary.taskID
         currentTaskID = primary.taskID
+        currentRow = primary
 
         nameLabel.stringValue = primary.filename
-        percentLabel.stringValue = primary.progressText
+        progressBar.onDisplayedProgressChange = { [weak self] display in
+            self?.applyDisplayedPercent(display)
+        }
         setAccessibilityLabel("\(L10n.nowDownloading): \(primary.filename)")
-        setAccessibilityValue(
-            [primary.progressText, primary.statusDetail]
-                .filter { !$0.isEmpty }
-                .joined(separator: ", ")
-        )
 
         // Finishing tail: no bytes move in bursts, so the big speed numeral
         // would read a frozen "0". Show a stable breathing "即将完成…" instead
@@ -282,8 +322,13 @@ final class NowDownloadingHeroView: NSView {
             segmentStrip.isHidden = true
             segmentStrip.isActive = false
             progressBar.isHidden = false
-            progressBar.progress = primary.progressFraction
+            progressBar.setSmoothProgress(
+                taskID: primary.taskID,
+                target: primary.progressFraction,
+                complete: primary.isComplete
+            )
             progressBar.isActive = true
+            applyDisplayedPercent(progressBar.displayedProgress)
             stopRolling()
             moreLabel.isHidden = activeCount <= 1
             if activeCount > 1 { moreLabel.stringValue = L10n.heroMoreActive(activeCount - 1) }
@@ -306,12 +351,25 @@ final class NowDownloadingHeroView: NSView {
             segmentStrip.isActive = primary.isDownloading
             progressBar.isHidden = true
             progressBar.isActive = false
+            // Still drive the shared smoother so the percent numeral eases,
+            // even while the segment strip replaces the thin bar.
+            progressBar.setSmoothProgress(
+                taskID: primary.taskID,
+                target: primary.progressFraction,
+                complete: primary.isComplete
+            )
+            applyDisplayedPercent(progressBar.displayedProgress)
         } else {
             segmentStrip.isHidden = true
             segmentStrip.isActive = false
             progressBar.isHidden = false
-            progressBar.progress = primary.progressFraction
+            progressBar.setSmoothProgress(
+                taskID: primary.taskID,
+                target: primary.progressFraction,
+                complete: primary.isComplete
+            )
             progressBar.isActive = primary.isDownloading
+            applyDisplayedPercent(progressBar.displayedProgress)
         }
         moreLabel.isHidden = activeCount <= 1
         if activeCount > 1 {
@@ -324,11 +382,30 @@ final class NowDownloadingHeroView: NSView {
         }
     }
 
+    private func applyDisplayedPercent(_ display: Double) {
+        guard let primary = currentRow else { return }
+        let text = primary.isComplete
+            ? L10n.completed
+            : TaskPresentationFormatting.percent(display)
+        percentLabel.stringValue = text
+        setAccessibilityValue(
+            [text, primary.statusDetail]
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
+        )
+    }
+
     /// Cover art can arrive after the task starts — re-check on cache updates.
     func refreshCover(with rows: [TaskRowPresentation]) {
-        guard let currentTaskID,
-              let row = rows.first(where: { $0.taskID == currentTaskID }) else { return }
+        guard let currentTaskID else { return }
+        let row = rows.first(where: { $0.taskID == currentTaskID }) ?? currentRow
+        guard let row else { return }
         applyCover(for: row, crossfade: true)
+    }
+
+    func refreshCover() {
+        guard let currentRow else { return }
+        applyCover(for: currentRow, crossfade: true)
     }
 
     private func applyCover(for row: TaskRowPresentation, crossfade: Bool) {
