@@ -138,6 +138,19 @@ enum QAPreviewOverrides {
         return value
     }
 
+    /// Render the main window's content to a PNG and exit.
+    ///
+    /// `screencapture` needs a live display; with the lid shut or the screen asleep
+    /// it returns an empty file, which silently removes the only way visual work
+    /// gets verified. AppKit can draw a view into a bitmap without a display server
+    /// being awake, so this is the offscreen path: same pixels, no screen required.
+    static var renderToPath: String? {
+        guard isEnabled,
+              let value = environment["NDM_QA_RENDER_TO"],
+              !value.isEmpty else { return nil }
+        return value
+    }
+
     static var showAbout: Bool {
         isEnabled && environment["NDM_QA_SHOW_ABOUT"] == "1"
     }
@@ -225,6 +238,7 @@ enum QAPreviewOverrides {
     static let selectedFilenameContains: String? = nil
     static let showUpgrade = false
     static let showCompletion = false
+    static let renderToPath: String? = nil
     static let showRemoveConfirm = false
     static let searchQuery: String? = nil
     static let probeInspectorToggle = false

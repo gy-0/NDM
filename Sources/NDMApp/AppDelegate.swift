@@ -205,6 +205,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.presentCompletion(for: task)
                 }
             }
+            if let renderPath = QAPreviewOverrides.renderToPath {
+                // Give the window one full layout + a beat for async covers, then
+                // draw it offscreen and quit. No display server involvement.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    QAWindowRenderer.renderMainWindow(to: renderPath)
+                    NSApp.terminate(nil)
+                }
+            }
             if QAPreviewOverrides.showAbout {
                 DispatchQueue.main.async { [weak self] in
                     self?.showAbout()
