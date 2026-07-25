@@ -18,3 +18,4 @@ NeatDownloadManager.app/
 reverse/dumps/
 reverse/bin/
 .claude/worktrees/
+.gstack/
