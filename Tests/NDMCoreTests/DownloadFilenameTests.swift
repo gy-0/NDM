@@ -76,3 +76,52 @@ final class DownloadFilenameTests: XCTestCase {
         )
     }
 }
+
+final class UniqueURLTests: XCTestCase {
+    private let base = URL(fileURLWithPath: "/Downloads/Report.pdf")
+
+    func testAFreeNameIsReturnedUnchanged() {
+        XCTAssertEqual(DownloadFilename.uniqueURL(base) { _ in false }, base)
+    }
+
+    /// Finder-style: the second copy is "(2)", not "(1)".
+    func testCollisionsNumberFromTwo() {
+        let taken: Set<String> = ["/Downloads/Report.pdf"]
+        XCTAssertEqual(
+            DownloadFilename.uniqueURL(base) { taken.contains($0.path) }.lastPathComponent,
+            "Report (2).pdf"
+        )
+    }
+
+    func testNumberingKeepsClimbingPastExistingCopies() {
+        let taken: Set<String> = [
+            "/Downloads/Report.pdf",
+            "/Downloads/Report (2).pdf",
+            "/Downloads/Report (3).pdf",
+        ]
+        XCTAssertEqual(
+            DownloadFilename.uniqueURL(base) { taken.contains($0.path) }.lastPathComponent,
+            "Report (4).pdf"
+        )
+    }
+
+    func testExtensionlessNamesAreNumberedToo() {
+        let url = URL(fileURLWithPath: "/Downloads/archive")
+        let taken: Set<String> = ["/Downloads/archive"]
+        XCTAssertEqual(
+            DownloadFilename.uniqueURL(url) { taken.contains($0.path) }.lastPathComponent,
+            "archive (2)"
+        )
+    }
+
+    /// A multi-part extension must not be mangled: the numbering belongs before the
+    /// final extension, and the stem keeps its dots.
+    func testDottedStemsSurvive() {
+        let url = URL(fileURLWithPath: "/Downloads/Talk.zh-Hans.srt")
+        let taken: Set<String> = ["/Downloads/Talk.zh-Hans.srt"]
+        XCTAssertEqual(
+            DownloadFilename.uniqueURL(url) { taken.contains($0.path) }.lastPathComponent,
+            "Talk.zh-Hans (2).srt"
+        )
+    }
+}

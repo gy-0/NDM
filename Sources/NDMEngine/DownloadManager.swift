@@ -861,18 +861,10 @@ public actor DownloadManager {
     }
 
     /// Finder-style `name (2).ext` when the recovered name already exists.
+    /// Delegates to the shared helper so every producer of a neighbouring file
+    /// numbers collisions identically.
     private func uniqueDestination(_ url: URL) -> URL {
-        let folder = url.deletingLastPathComponent()
-        let ext = url.pathExtension
-        let stem = url.deletingPathExtension().lastPathComponent
-        var index = 1
-        while true {
-            let suffix = index == 1 ? "" : " (\(index))"
-            let name = ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
-            let candidate = folder.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-            index += 1
-        }
+        DownloadFilename.uniqueURL(url)
     }
 
     static func queuedCollectionCandidate(in tasks: [DownloadTask]) -> DownloadTask? {

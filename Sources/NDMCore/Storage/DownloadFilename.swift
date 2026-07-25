@@ -92,6 +92,32 @@ public enum DownloadFilename {
         return trimmed
     }
 
+    /// Finder-style numbering for a name that is already taken: `Report.pdf`,
+    /// `Report (2).pdf`, `Report (3).pdf`.
+    ///
+    /// Shared so that everything producing a file beside an existing one numbers it
+    /// the same way. Overwriting is never an option here — a second copy is
+    /// recoverable, a destroyed original is not.
+    public static func uniqueURL(
+        _ url: URL,
+        exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+    ) -> URL {
+        guard exists(url) else { return url }
+        let folder = url.deletingLastPathComponent()
+        let ext = url.pathExtension
+        let stem = url.deletingPathExtension().lastPathComponent
+        var index = 2
+        while true {
+            let name = ext.isEmpty ? "\(stem) (\(index))" : "\(stem) (\(index)).\(ext)"
+            let candidate = folder.appendingPathComponent(name)
+            if !exists(candidate) { return candidate }
+            index += 1
+            // A folder cannot realistically hold this many collisions; refuse to
+            // spin rather than loop forever on a pathological filesystem.
+            if index > 10_000 { return candidate }
+        }
+    }
+
     public static func sanitize(_ raw: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r\t")
         var cleaned = raw

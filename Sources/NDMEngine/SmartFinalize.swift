@@ -342,7 +342,10 @@ public enum SmartFinalize {
         case "srt", "vtt", "ass", "ssa", "sub": return .subtitle
         case "jpg", "jpeg", "png", "webp", "heic": return .cover
         case "m4a", "mp3", "aac", "flac", "wav", "ogg", "opus": return .audio
-        case "json", "nfo", "description", "chapters", "lrc": return .metadata
+        // A readable transcript rides along as metadata for now. It deserves its own
+        // kind and label, but that means new user-facing wording and an icon, so it
+        // belongs in the UI review rather than being decided here (C1-6).
+        case "json", "nfo", "description", "chapters", "lrc", "txt": return .metadata
         default: return nil
         }
     }

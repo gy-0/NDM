@@ -100,7 +100,9 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 
 用 `.timeIndexedTranscriptionWithAlternatives` preset 拿带时间轴的结果 → 写 SRT，作为附属文件进入 `SmartFinalize` 的 CompletionStack，**不散成独立任务**。
 
-**命名要注意（2026-07-24 更正）**：我最初写"必须带语言后缀 `片名.zh-Hans.srt`"，但没查既有实现。`YtDlpTool.normalizeSubtitleSidecar` 现在**故意**统一成 `片名.srt`（不带语言），理由是让播放器无需语言规则就能发现字幕。C1-1 的 `Plan.languageTag` 只作为信息提供，实际命名沿用既有约定；要不要改成带后缀由 C1-5 明确决定，不许悄悄分叉出两套命名。
+**命名已定（C1-5，2026-07-24）**：**沿用既有的无语言后缀约定**，不分叉。转写字幕写 `片名.srt`；若该名已被站点自带字幕占用，**绝不覆盖**，改写 `片名.transcribed.srt`（再冲突则复用共享的 Finder 风格编号 → `片名.transcribed (2).srt`）。选 `.transcribed` 而不是纯编号，因为 `片名 (2).srt` 只告诉用户"有两个"，没告诉他哪个是哪个。文稿写 `片名.txt`（与其他附属文件一样与主文件同名，扩展名本身已说明是什么）。
+
+（我最初写"必须带语言后缀"是没查既有实现就下的判断，已更正。）
 
 ### 5. 隐私
 
@@ -118,7 +120,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | C1-2 | 纯逻辑：时间轴 → SRT + 纯文本文稿 | ✅ 2026-07-24 `TranscriptDocument`（`TranscriptSegment` 中性输入、SRT、可读文稿），35 个测试 |
 | C1-3 | `SpeechTranscriptionEngine` | ✅ 2026-07-24 文件 → `[TranscriptSegment]`，含取消、真实进度、`environment()` 接缝；8 个集成测试用 `say` 生成真语音 |
 | C1-4 | 语言包就绪呈现为明确阶段 | ✅ 2026-07-24 `LanguageAssetReadiness`（纯，11 测试）+ `SpeechLanguageAssets`（7 个实机测试）。**下载执行未验证**，见日志 |
-| C1-5 | 接入交付：字幕落盘命名 + 进入 CompletionStack + 进度并入单调旅程 | |
+| C1-5 | 接入交付 | 🟡 2026-07-24 `TranscriptDelivery`：命名已定、落盘、进 CompletionStack、阶段并入单调旅程，端到端实测通过。**「何时自动运行」留给 C1-6**（那是设置项） |
 | C1-6 | 设置开关（默认行为待定）+ ScribeStudio 入口降级为"编辑" | 含视觉改动，需停下等审阅 |
 
 ### 明确不做
@@ -149,6 +151,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | C1-5 接入交付 | `TranscriptDelivery`：命名规则纯函数化、落盘、阶段建模，26 个测试含一个**真实端到端**（`say` 生成中文 → 引擎 → `讲座录音.srt` + `讲座录音.txt` 落在媒体旁 → 被 `completionStack` 收为附属文件，CJK 文件名完整）。三个决定：① **命名沿用无语言后缀**，撞名时写 `片名.transcribed.srt` 而非纯编号——编号只说"有两个"不说"哪个是哪个"；**站点自带字幕绝不被机器转写覆盖**，有测试钉住原文件字节不变；② 把 `DownloadManager` 私有的 `uniqueDestination`（Finder 风格编号）提为 `DownloadFilename.uniqueURL` 共享，按要求复用而非另写一套，5 个测试含多段扩展名 `Talk.zh-Hans.srt` → `Talk.zh-Hans (2).srt`；③ 阶段复用**既有** `DownloadPhase.subtitles` / `.preparing` / `.finalizing`，不发明新词汇、不开第二条进度条。**两处按协议停手**：给 `CompletionArtifact.Kind` 加 `transcript` case 会破坏 UI 的穷举 switch，需要新的用户可见文案和图标——那是你该审的东西，所以退回把 `txt` 映射到既有 `.metadata`，本轮 diff 零 UI 改动；「转写何时自动运行」是设置项，留给 C1-6，不由"接线完成"这个动作替所有用户默默打开。475 passed |
 | 2026-07-24 | C1-4 语言包就绪阶段 | 探针实测推翻两个默认假设：① **`AssetInventory.status(forModules:)` 对已安装的 `zh_CN` 也返回 `.supported` 而不是 `.installed`**——它根本不能回答"是否就绪"，改用 `SpeechTranscriber.installedLocales`；② `assetInstallationRequest` 对**不支持**的语言是**抛错**（SFSpeechError 4）而非返回 nil，必须当"不支持"处理而不是下载失败。另两个事实：新建请求的 `progress` 是 indeterminate、total=0，所以下载启动前**不能显示 0%**（`preparing(fraction: nil)` 与 `preparing(fraction: 0)` 是不同状态，有测试钉住）；创建请求会预留 locale 且上限只有 5（`maximumReservedLocales`），所以就绪检查绝不能靠创建请求来试探——预留随请求对象生命周期释放，实测探针退出后 `reservedLocales` 回到 `[]`，没在机器上留东西。**诚实边界**：上一轮我预判"需要下载这条路本机无法触发"，实际**检测**能真实验证（系统里有支持但未安装的语言，实机测试确实报出 `.needsPreparation`）；但 `downloadAndInstall()` 我没有调用——它会往你机器上装真实模型，测试套件不该未经允许做这件事。所以下载执行路径**未验证**，只有状态机被纯逻辑测试覆盖。453 passed |
 | 2026-07-24 | C1-3 转写引擎 | `SpeechTranscriptionEngine`（`@available(macOS 26, *)`）只做「文件 → `[TranscriptSegment]`」，资格判断留在 C1-1、序列化留在 C1-2。**先探清结构再写**：`Result.range` 是结果级 `CMTimeRange`，`audioTimeRange` 属性给的是**字级**（中文每字一个 run）——字级对字幕太细，所以引擎出结果级分段，短段交给 C1-2 的合并逻辑吸收（实测 4 段里就有一段只含一个「用」）。`environment()` 是 C1-1 纯规则与真实系统之间唯一的接缝。**两个用探针实测出来的坑**：① analyzer 收到**零个 buffer** 会永久挂死在 `start` —— 所以已取消的运行必须在建 analyzer 之前就抛出，零帧文件也直接返回空；② `cancelAndFinishNow()` **不会**终止 `transcriber.results`，只有 `finalizeAndFinishThroughEndOfInput()` 会 —— 取消路径必须主动 `collector.cancel()`，等它自然结束就是挂住。第一版正是这么写的，测试跑到 600s 超时才暴露。8 个测试单独跑各 <1 秒。435 passed |
 | 2026-07-24 | C1-2 SRT 与文稿序列化 | `TranscriptDocument`：中性 `TranscriptSegment` 输入（C1-3 只需做 Speech→它的映射，序列化层永远可离线测）、SRT、以及**另出一份可读文稿**——文稿与字幕是两种文档不是两种渲染：字幕受"这行字幕在屏幕上停留时间内能读完多少"约束，文稿没有时钟、按停顿分段、不做行宽限制。明确决定：行尾用 LF（既有 fixture 用 LF、本平台播放器全接受、在 macOS 编辑后不会变成混合行尾），CRLF 只是 SubRip 的历史约定。毫秒按整数毫秒分解以正确进位（分别 round 秒和小数会让 59.9995 变成不存在的 `00:00:59,1000`）。CJK 按字数断行（16 全角/行）而非按空格，标点不许开行；拉丁按词断（42 字符/行）。**肉眼检查抓到一个所有单测都没抓到的 bug**：合并条件写了 `gap <= 0`，本意是捕捉重叠，但 `gap == 0` 只是"相邻"，而字幕几乎全是相邻的——于是任意两条合理长度的 cue 只要合起来不超 7 秒就被强行融成一条。改为 `gap < 0` 并补两个回归测试。35 个测试，含一个断言完整字节的中文实例 |
