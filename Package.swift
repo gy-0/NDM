@@ -13,6 +13,9 @@ let package = Package(
         .executable(name: "NDM", targets: ["NDMApp"]),
         .executable(name: "NDMProbe", targets: ["NDMProbe"]),
         .executable(name: "NDMSoak", targets: ["NDMSoak"]),
+        // Not "ndm": the app product is "NDM", and on a case-insensitive filesystem
+        // the two would fight over the same output path.
+        .executable(name: "ndmcli", targets: ["NDMCLI"]),
     ],
     targets: [
         .target(
@@ -56,6 +59,24 @@ let package = Package(
             name: "NDMSoak",
             dependencies: ["NDMCore", "NDMEngine", "NDMDiagnostics"],
             path: "Sources/NDMSoak"
+        ),
+        // Command-line surface. Split into a testable library plus a thin executable
+        // so the grammar and the exact output bytes are pinned by tests rather than
+        // discovered by whoever writes a script against them.
+        .target(
+            name: "NDMCLICore",
+            dependencies: ["NDMCore"],
+            path: "Sources/NDMCLICore"
+        ),
+        .executableTarget(
+            name: "NDMCLI",
+            dependencies: ["NDMCore", "NDMEngine", "NDMCLICore"],
+            path: "Sources/NDMCLI"
+        ),
+        .testTarget(
+            name: "NDMCLICoreTests",
+            dependencies: ["NDMCLICore", "NDMCore"],
+            path: "Tests/NDMCLICoreTests"
         ),
         .testTarget(
             name: "NDMDiagnosticsTests",

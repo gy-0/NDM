@@ -8,8 +8,16 @@ import Foundation
 /// be wrong, so they must be unit-testable on any macOS version, not only one new
 /// enough to run the real transcriber.
 public enum TranscriptionWorkflow: Sendable {
+    /// Containers this Mac can read speech out of.
+    ///
+    /// `aiff`, `aif` and `caf` were missing until a real run caught it: they are
+    /// standard macOS audio formats — `say` writes AIFF — and the engine reads them
+    /// fine, so rejecting them told the user "this file has no audio to read" about a
+    /// file full of speech. The engine tests never noticed because they call the
+    /// engine directly and never pass through this gate. `m4b` is here for the same
+    /// reason: an audiobook is the most obviously transcribable file there is.
     public static let supportedExtensions: Set<String> = [
-        "mp3", "wav", "ogg", "opus", "m4a", "aac", "flac",
+        "mp3", "wav", "ogg", "opus", "m4a", "m4b", "aac", "flac", "aiff", "aif", "caf",
         "mp4", "mov", "mkv", "avi", "webm", "m4v", "flv", "ts", "mts", "m2ts",
     ]
 

@@ -300,3 +300,51 @@ final class TranscriptionPlanTests: XCTestCase {
         }
     }
 }
+
+final class TranscriptionSupportedFormatTests: XCTestCase {
+    /// Caught by running the CLI rather than by any unit test: the engine tests call
+    /// the engine directly and never pass through this gate, so an eligible file being
+    /// rejected here was invisible to them.
+    func testStandardMacAudioContainersAreEligible() {
+        for ext in ["aiff", "aif", "caf", "wav", "m4a", "mp3", "flac"] {
+            XCTAssertTrue(
+                TranscriptionWorkflow.supports(
+                    fileURL: URL(fileURLWithPath: "/tmp/recording.\(ext)")
+                ),
+                ".\(ext) holds speech this Mac can read"
+            )
+        }
+    }
+
+    /// `say` writes AIFF, and it is what the repository's own tests transcribe — the
+    /// gate must accept what the project itself produces.
+    func testTheFormatOurOwnToolingProducesIsEligible() {
+        XCTAssertTrue(
+            TranscriptionWorkflow.supports(fileURL: URL(fileURLWithPath: "/tmp/a.aiff"))
+        )
+    }
+
+    /// An audiobook is the most obviously transcribable file there is.
+    func testAudiobooksAreEligible() {
+        XCTAssertTrue(
+            TranscriptionWorkflow.supports(fileURL: URL(fileURLWithPath: "/tmp/book.m4b"))
+        )
+    }
+
+    func testNonMediaStaysIneligible() {
+        for ext in ["pdf", "zip", "txt", "srt", "dmg", "html"] {
+            XCTAssertFalse(
+                TranscriptionWorkflow.supports(
+                    fileURL: URL(fileURLWithPath: "/tmp/file.\(ext)")
+                ),
+                ".\(ext) has no speech in it"
+            )
+        }
+    }
+
+    func testExtensionMatchingIgnoresCase() {
+        XCTAssertTrue(
+            TranscriptionWorkflow.supports(fileURL: URL(fileURLWithPath: "/tmp/A.AIFF"))
+        )
+    }
+}
