@@ -24,10 +24,20 @@ import NDMEngine
 struct SoakOptions {
     var duration: TimeInterval = 180
     var concurrency = 4
-    var payloadMB = 2
+    /// Small on purpose: the transfer only has to exercise the segment machinery, not
+    /// move volume. Two megabytes times four tasks times a fast loop is how the first
+    /// version wrote hundreds of gigabytes.
+    var payloadMB = 1
     var sampleInterval: TimeInterval = 5
     var responseDelay: TimeInterval = 0.01
     var maxGrowthFraction = 0.25
+    /// Idle time between cycles.
+    ///
+    /// Load-bearing, not politeness. Leaks surface per *cycle*, not per byte, so an
+    /// unthrottled loop buys nothing and costs everything: the first version of this
+    /// tool ran flat out and wrote 710 GB at 94% CPU in under two hours, which cooks
+    /// the machine and wears the SSD for no extra signal.
+    var cyclePause: TimeInterval = 3.0
 }
 
 struct SoakFailure: LocalizedError {
@@ -67,6 +77,11 @@ func parseSoakOptions() throws -> SoakOptions {
                 throw SoakFailure("--sample-interval needs positive seconds")
             }
             options.sampleInterval = v
+        case "--cycle-pause":
+            guard let v = Double(try next(arg)), v >= 0 else {
+                throw SoakFailure("--cycle-pause needs non-negative seconds")
+            }
+            options.cyclePause = v
         case "--response-delay":
             guard let v = Double(try next(arg)), v >= 0 else {
                 throw SoakFailure("--response-delay needs non-negative seconds")
@@ -82,7 +97,10 @@ func parseSoakOptions() throws -> SoakOptions {
             Usage: swift run NDMSoak [options]
               --duration <seconds>       how long to soak (default 180)
               --concurrency <1..32>      tasks per cycle (default 4)
-              --payload-mb <1..512>      size served per task (default 2)
+              --payload-mb <1..512>      size served per task (default 1)
+              --cycle-pause <secs>       idle between cycles (default 3). Keep this
+                                         above zero: leaks show up per cycle, not per
+                                         byte, so running flat out only heats the Mac
               --sample-interval <secs>   health sampling period (default 5)
               --response-delay <secs>    origin throttle, keeps transfers long
                                          enough to pause mid-flight (default 0.01)
@@ -243,6 +261,14 @@ struct NDMSoak {
 
                 if Date().timeIntervalSince(lastSample) >= options.sampleInterval {
                     await sample()
+                }
+
+                // Idle between cycles. Without this the loop pegs a core and writes
+                // continuously for no additional signal.
+                if options.cyclePause > 0 {
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(options.cyclePause * 1_000_000_000)
+                    )
                 }
             }
 
