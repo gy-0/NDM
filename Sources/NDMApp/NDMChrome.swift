@@ -293,6 +293,43 @@ enum NDMChrome {
     }
 
     /// Paint opaque window chrome so wallpaper tint can’t warm the UI.
+    /// Build a spring in the units a designer actually reasons in.
+    ///
+    /// `CASpringAnimation` is parameterised by stiffness, damping and mass, which
+    /// are three numbers with no independent meaning — you cannot look at
+    /// `damping: 14` and know whether it will wobble. SwiftUI exposes the two that
+    /// do mean something, and so does this:
+    ///
+    /// * `response` — how long one oscillation takes. Perceived speed.
+    /// * `dampingFraction` — 1.0 stops dead, below 1.0 overshoots. Perceived life.
+    ///
+    /// The house values come from measurement rather than taste. Disassembling a
+    /// reference app people describe as feeling good (see
+    /// `docs/DESIGN-DIRECTION.md`) puts every one of its springs at
+    /// response 0.28–0.53 with dampingFraction 0.78–0.86: fast, and overshooting
+    /// exactly once. NDM's three hand-tuned springs converted to the same units
+    /// were 0.391, 0.577 and 0.597 — all of them looser than anything in the
+    /// reference, which is the arithmetic behind a bounce that read as a glitch.
+    static func spring(
+        keyPath: String,
+        response: CGFloat = springResponse,
+        dampingFraction: CGFloat = springDamping,
+        mass: CGFloat = 1
+    ) -> CASpringAnimation {
+        let animation = CASpringAnimation(keyPath: keyPath)
+        animation.mass = mass
+        // stiffness = m(2π/response)², damping = 2ζ√(km) — the standard inversion.
+        let omega = (2 * CGFloat.pi) / max(response, 0.01)
+        animation.stiffness = mass * omega * omega
+        animation.damping = 2 * dampingFraction * sqrt(animation.stiffness * mass)
+        return animation
+    }
+
+    /// One oscillation, in seconds. Everything in the app arrives at this speed.
+    static let springResponse: CGFloat = 0.34
+    /// Just under 1, so motion overshoots once and settles. Never a wobble.
+    static let springDamping: CGFloat = 0.80
+
     static func applyWindowChrome(_ window: NSWindow) {
         window.backgroundColor = windowFill
         window.isOpaque = true
@@ -766,12 +803,9 @@ final class ThinProgressView: NSView, AccentChromeRefreshing {
             return
         }
         didCelebrate = true
-        let spring = CASpringAnimation(keyPath: "transform.scale.x")
+        let spring = NDMChrome.spring(keyPath: "transform.scale.x")
         spring.fromValue = previous
         spring.toValue = 1.0
-        spring.mass = 1.0
-        spring.stiffness = 340
-        spring.damping = 22
         spring.initialVelocity = 8
         spring.duration = spring.settlingDuration
         fillLayer.add(spring, forKey: "progress")

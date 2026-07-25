@@ -4452,12 +4452,9 @@ private final class HeroPreviewView: NSView {
     }
 
     private func revealEntrance() {
-        let scale = CASpringAnimation(keyPath: "transform.scale")
+        let scale = NDMChrome.spring(keyPath: "transform.scale")
         scale.fromValue = 0.92
         scale.toValue = 1.0
-        scale.mass = 1
-        scale.stiffness = 300
-        scale.damping = 20
         scale.initialVelocity = 4
         scale.duration = scale.settlingDuration
         layer?.add(scale, forKey: "reveal")

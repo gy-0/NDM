@@ -206,13 +206,10 @@ final class QuietFinderRowView: NSTableRowView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let layer = self?.layer else { return }
 
-            let scale = CASpringAnimation(keyPath: "transform")
+            let scale = NDMChrome.spring(keyPath: "transform")
             let up = CATransform3DMakeScale(1.03, 1.03, 1)
             scale.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
             scale.toValue = NSValue(caTransform3D: up)
-            scale.mass = 1
-            scale.stiffness = 320
-            scale.damping = 14
             scale.initialVelocity = 8
             scale.autoreverses = true
             scale.duration = scale.settlingDuration / 2
