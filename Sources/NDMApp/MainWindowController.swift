@@ -2226,8 +2226,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             queue: .main
         ) { [weak self] note in
             let taskID = note.userInfo?["taskID"] as? Int64
+            let fresh = note.userInfo?["fresh"] as? Bool ?? false
             Task { @MainActor [weak self] in
-                self?.refreshCover(for: taskID)
+                self?.refreshCover(for: taskID, fresh: fresh)
             }
         }
 
@@ -2785,6 +2786,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             if let rowView = tableView.rowView(atRow: index, makeIfNecessary: false) as? QuietFinderRowView {
                 rowView.celebrateCompletion()
             }
+            // Completing in place is the other way a file becomes real; it needs the
+            // same nudge as a landing to get its poster.
+            requestPoster(for: index)
         }
 
         // A live multi-selection is user intent, not something the periodic
@@ -3015,6 +3019,32 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             rowView.alphaValue = 1
         }
         heroLandingCoveredRow = nil
+        // A poster that arrived mid-landing was held back so the handoff stayed
+        // invisible. The row is its own again — let it dissolve in now.
+        if pendingPosterReveals.contains(taskID) {
+            refreshCover(for: taskID, fresh: true)
+        } else {
+            requestPoster(for: rowIndex)
+        }
+    }
+
+    /// Ask for a row's poster at a moment the file is certainly on disk.
+    ///
+    /// The row's own first paint happens as the task completes, which can be before
+    /// delivery has finished moving the file into place; that attempt finds nothing
+    /// and backs off. Nothing else retries, so without this nudge the reveal only
+    /// ever appeared after a relaunch.
+    private func requestPoster(for row: Int) {
+        guard row < rows.count else { return }
+        let item = rows[row]
+        guard item.isComplete,
+              CoverArtCache.shared.image(for: item.taskID) == nil,
+              let localFile = item.localFileURL else { return }
+        CoverArtCache.shared.ensureCover(
+            taskID: item.taskID,
+            remoteURL: nil,
+            localFile: localFile
+        )
     }
 
     private func clearHeroLandingCover() {
@@ -3352,7 +3382,43 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         }
     }
 
-    private func refreshCover(for taskID: Int64?) {
+    /// Tasks whose poster arrived while a landing still had their row covered.
+    ///
+    /// The reveal must never run under the overlay: the handoff at t=1 is invisible
+    /// precisely because the frozen card and the live row are identical, and swapping
+    /// the icon for a poster underneath would break that. Held here and released by
+    /// `handOffHeroLandingRow`.
+    private var pendingPosterReveals: Set<Int64> = []
+
+    /// Arm the poster dissolve for a task whose artwork was just generated.
+    ///
+    /// Returns true when the row should be repainted right after, which is what
+    /// supplies the image the transition dissolves *to*. Only ever called for `fresh`
+    /// artwork — see `CoverArtCache.finishLoad` — because a cover read back from disk
+    /// is not news and must not animate.
+    @discardableResult
+    private func armPosterReveal(taskID: Int64) -> Bool {
+        guard let row = rows.firstIndex(where: { $0.taskID == taskID }),
+              CoverArtCache.shared.image(for: taskID) != nil else { return false }
+        // Covered by a landing: the overlay is showing the old icon and the handoff
+        // is only invisible while the two match. Wait for it.
+        //
+        // Keyed on the covered row alone, deliberately. `animatingTaskID` is still set
+        // while the handoff runs — it is cleared after `onReveal` — so testing it here
+        // would defer the reveal a second time from inside the very callback meant to
+        // release it, and the poster would never appear at all.
+        if heroLandingCoveredRow == row {
+            pendingPosterReveals.insert(taskID)
+            return false
+        }
+        pendingPosterReveals.remove(taskID)
+        guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+                as? TaskRowCellView else { return false }
+        cell.armPosterReveal()
+        return true
+    }
+
+    private func refreshCover(for taskID: Int64?, fresh: Bool = false) {
         for (index, hero) in heroViews.enumerated() where !hero.isHidden {
             if let taskID {
                 guard index < heroOrderedIDs.count, heroOrderedIDs[index] == taskID else { continue }
@@ -3370,8 +3436,23 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                 card.apply(rows[index], cover: CoverArtCache.shared.image(for: rows[index].taskID))
             }
         }
+        // Arm the dissolve before the repaint below, never after: the transition
+        // captures what is on screen at the moment it is added, and the repaint is
+        // what supplies the poster it dissolves to.
+        var deferredRow: Int?
+        if fresh, let taskID {
+            if !armPosterReveal(taskID: taskID), pendingPosterReveals.contains(taskID) {
+                // Held for the handoff. The repaint has to wait with it: painting the
+                // poster into a covered cell now would make it appear the instant the
+                // overlay lifts, which is the snap the deferral exists to avoid — and
+                // it also breaks the handoff, which is only invisible while the frozen
+                // card and the live row still match.
+                deferredRow = rows.firstIndex(where: { $0.taskID == taskID })
+            }
+        }
         for row in 0..<rows.count {
             if let taskID, rows[row].taskID != taskID { continue }
+            if row == deferredRow { continue }
             if let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView {
                 applyArtwork(to: rowView, item: rows[row])
             }
@@ -4043,6 +4124,12 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
     }
 
     /// Hide live cell content while the Hero landing overlay owns the pixels.
+    /// Dissolve this row's icon into the file's real poster on the next `apply`.
+    /// See `FileGlyphView.armPosterReveal`.
+    func armPosterReveal() {
+        glyph.armPosterReveal()
+    }
+
     func setLandingCovered(_ covered: Bool) {
         let alpha: CGFloat = covered ? 0 : 1
         for view in [glyph, titleLabel, badgeLabel, subtitleLabel, progressBar, trailingLabel, hoverStack] {

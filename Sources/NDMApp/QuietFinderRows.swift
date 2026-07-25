@@ -333,6 +333,31 @@ final class FileGlyphView: NSView {
         imageView.isHidden = false
         imageView.image = cover ?? NDMChrome.fileIcon(filename: filename, pointSize: 40)
     }
+
+    /// Arm a cross-dissolve for the *next* `apply`, so a generic file icon melts into
+    /// the file's real poster frame instead of snapping to it.
+    ///
+    /// The one moment a download manager has that is worth marking. Until a file
+    /// finishes there is nothing to make a picture of, so the row carries a UTType
+    /// icon; the instant it lands, AVFoundation or Quick Look can pull an actual frame
+    /// out of it. Swapping that in is not decoration — the change on screen *means*
+    /// the file is real and openable now, which is what the user was waiting to know.
+    ///
+    /// Deliberately not a spring, a particle or a sound. It fires once per file and
+    /// has to still be welcome on the fortieth download of the day.
+    ///
+    /// Arming rather than setting keeps the image assignment where it already lives:
+    /// the transition captures what is on screen now, and the caller's normal apply
+    /// supplies what it dissolves to.
+    func armPosterReveal() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        imageView.wantsLayer = true
+        let dissolve = CATransition()
+        dissolve.type = .fade
+        dissolve.duration = 0.28
+        dissolve.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 0.2, 1.0)
+        imageView.layer?.add(dissolve, forKey: "posterReveal")
+    }
 }
 
 @MainActor

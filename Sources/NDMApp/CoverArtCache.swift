@@ -13,6 +13,15 @@ final class CoverArtCache {
     private var failedUntil: [Int64: Date] = [:]
     private var folder: URL
     private let failureCacheDuration: TimeInterval = 30
+    /// Cooldown for "the file is not at its final path yet", which is not the same
+    /// thing as "this file cannot produce a picture".
+    ///
+    /// A row is first painted the moment its task completes, which is *before*
+    /// delivery has finished moving the file into place. Blacklisting that for the
+    /// full 30s meant the poster never arrived for the download you just watched
+    /// finish — the reveal was only ever seen after a relaunch, which is precisely
+    /// backwards.
+    private let notYetOnDiskRetryDelay: TimeInterval = 1
 
     private init() {
         let support = DownloadStore.defaultSupportDirectory
@@ -45,22 +54,22 @@ final class CoverArtCache {
         Task.detached(priority: .utility) { [folder] in
             if let image = Self.diskImage(for: taskID, in: folder) {
                 await MainActor.run {
-                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image, fresh: false)
                 }
                 return
             }
             do {
                 let (data, _) = try await URLSession.shared.data(from: remote)
                 guard let image = NSImage(data: data), image.isValid else {
-                    await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                    await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil, fresh: false) }
                     return
                 }
                 Self.store(image, for: taskID, in: folder)
                 await MainActor.run {
-                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image, fresh: true)
                 }
             } catch {
-                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil, fresh: false) }
             }
         }
     }
@@ -71,7 +80,7 @@ final class CoverArtCache {
         Task.detached(priority: .utility) { [folder] in
             if let image = Self.diskImage(for: taskID, in: folder) {
                 await MainActor.run {
-                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                    CoverArtCache.shared.finishLoad(taskID: taskID, image: image, fresh: false)
                 }
                 return
             }
@@ -81,7 +90,7 @@ final class CoverArtCache {
                     if let image = NSImage(data: data), image.isValid {
                         Self.store(image, for: taskID, in: folder)
                         await MainActor.run {
-                            CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                            CoverArtCache.shared.finishLoad(taskID: taskID, image: image, fresh: true)
                         }
                         return
                     }
@@ -93,7 +102,14 @@ final class CoverArtCache {
             }
             guard let localFile,
                   FileManager.default.fileExists(atPath: localFile.path) else {
-                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                await MainActor.run {
+                    CoverArtCache.shared.finishLoad(
+                        taskID: taskID,
+                        image: nil,
+                        fresh: false,
+                        cooldown: CoverArtCache.shared.notYetOnDiskRetryDelay
+                    )
+                }
                 return
             }
             let image: NSImage?
@@ -103,12 +119,12 @@ final class CoverArtCache {
                 image = await Self.quickLookImage(from: localFile)
             }
             guard let image else {
-                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil) }
+                await MainActor.run { CoverArtCache.shared.finishLoad(taskID: taskID, image: nil, fresh: false) }
                 return
             }
             Self.store(image, for: taskID, in: folder)
             await MainActor.run {
-                CoverArtCache.shared.finishLoad(taskID: taskID, image: image)
+                CoverArtCache.shared.finishLoad(taskID: taskID, image: image, fresh: true)
             }
         }
     }
@@ -125,10 +141,22 @@ final class CoverArtCache {
         return true
     }
 
-    private func finishLoad(taskID: Int64, image: NSImage?) {
+    /// - Parameter fresh: this artwork was produced just now (downloaded, or pulled
+    ///   out of the finished file), as opposed to read back from the cover cache.
+    ///   Only a fresh one is a *moment*: it is the first time this file has ever had
+    ///   a picture, which is what the row's poster reveal animates. Reading a cover
+    ///   off disk happens on every launch and must stay silent, or the whole list
+    ///   would dissolve at once every time the app opens.
+    private func finishLoad(
+        taskID: Int64,
+        image: NSImage?,
+        fresh: Bool,
+        cooldown: TimeInterval? = nil
+    ) {
         inFlight.remove(taskID)
         guard let image else {
-            failedUntil[taskID] = Date().addingTimeInterval(failureCacheDuration)
+            failedUntil[taskID] = Date()
+                .addingTimeInterval(cooldown ?? failureCacheDuration)
             return
         }
         failedUntil.removeValue(forKey: taskID)
@@ -136,7 +164,7 @@ final class CoverArtCache {
         NotificationCenter.default.post(
             name: Self.didUpdateNotification,
             object: nil,
-            userInfo: ["taskID": taskID]
+            userInfo: ["taskID": taskID, "fresh": fresh]
         )
     }
 
