@@ -6,6 +6,15 @@ public actor DownloadManager {
     public typealias FileRecycler = @Sendable (URL) async throws -> Void
 
     private let store: DownloadStore
+    /// Full-text index over transcripts and task metadata. Optional so a search
+    /// index that cannot be opened degrades search rather than breaking downloads.
+    /// Held exactly like `store`: both are lock-guarded classes, so an actor can own
+    /// them without further ceremony.
+    private let searchIndex: SearchIndexStore?
+    /// Index problems, most recent last. Indexing must never fail a download or a
+    /// removal — it is derived data — but silence is how this class of bug hides, so
+    /// failures are recorded where a caller or a test can see them.
+    private var recordedSearchIndexFailures: [String] = []
     private var settings: AppSettings
     private let supportRoot: URL
     private let fileRecycler: FileRecycler?
@@ -32,6 +41,7 @@ public actor DownloadManager {
         settings: AppSettings,
         supportRoot: URL = DownloadStore.defaultSupportDirectory,
         fileRecycler: FileRecycler? = nil,
+        searchIndex: SearchIndexStore? = nil,
         capacityProvider: @escaping @Sendable (URL) -> Int64? = {
             VolumeCapacity.availableBytes(at: $0)
         },
@@ -44,6 +54,7 @@ public actor DownloadManager {
         self.settings = settings
         self.supportRoot = supportRoot
         self.fileRecycler = fileRecycler
+        self.searchIndex = searchIndex
         self.capacityProvider = capacityProvider
         self.sameVolumeProvider = sameVolumeProvider
         self.onTaskCompleted = onTaskCompleted
@@ -799,6 +810,10 @@ public actor DownloadManager {
             done.errorText = nil
             done.deliveryNote = await deliveryNote()?.storageKey
             try? store.update(done)
+            // Metadata only: it makes search useful from the first download, long
+            // before any transcript exists, and a task with no spoken content can
+            // still be found by what it is called.
+            indexMetadata(for: done)
             onComplete?(done)
         } catch {
             var failed = (try? store.allDownloads().first { $0.id == taskID }) ?? task
@@ -819,6 +834,81 @@ public actor DownloadManager {
             try? store.update(failed)
         }
         clearRunning(taskID)
+    }
+
+    // MARK: - Search index
+
+    /// Non-fatal index failures, oldest first. Exposed so the app or a test can see
+    /// that search is quietly degraded instead of guessing.
+    public func searchIndexFailures() -> [String] {
+        recordedSearchIndexFailures
+    }
+
+    /// Index a finished download's name, title and site.
+    ///
+    /// Deliberately separate from transcript indexing: most downloads never get a
+    /// transcript, and being findable by name is the baseline that makes a search box
+    /// worth opening at all.
+    private func indexMetadata(for task: DownloadTask) {
+        guard let searchIndex else { return }
+        var entries: [SearchIndexStore.Entry] = []
+        if !task.filename.isEmpty {
+            entries.append(.init(taskID: task.id, source: .filename, text: task.filename))
+        }
+        if let title = task.pageTitle, !title.isEmpty {
+            entries.append(.init(taskID: task.id, source: .title, text: title))
+        }
+        if let page = task.pageURL, let host = URL(string: page)?.host, !host.isEmpty {
+            entries.append(.init(taskID: task.id, source: .site, text: host))
+        }
+        guard !entries.isEmpty else { return }
+        do {
+            try searchIndex.replaceEntries(taskID: task.id, entries: entries)
+        } catch {
+            recordedSearchIndexFailures.append(
+                "indexing metadata for task \(task.id): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Index a transcript alongside the download's metadata.
+    ///
+    /// Both go in together because `replaceEntries` replaces everything for a task:
+    /// writing only the transcript would drop the name and title from the index, and
+    /// writing only metadata later would drop the transcript. Re-running a transcript
+    /// therefore cannot accumulate duplicates.
+    public func indexTranscript(taskID: Int64, segments: [TranscriptSegment]) {
+        guard let searchIndex else { return }
+        guard let task = try? store.allDownloads().first(where: { $0.id == taskID }) else {
+            recordedSearchIndexFailures.append("indexing transcript for unknown task \(taskID)")
+            return
+        }
+        var entries: [SearchIndexStore.Entry] = []
+        if !task.filename.isEmpty {
+            entries.append(.init(taskID: taskID, source: .filename, text: task.filename))
+        }
+        if let title = task.pageTitle, !title.isEmpty {
+            entries.append(.init(taskID: taskID, source: .title, text: title))
+        }
+        if let page = task.pageURL, let host = URL(string: page)?.host, !host.isEmpty {
+            entries.append(.init(taskID: taskID, source: .site, text: host))
+        }
+        for segment in segments {
+            entries.append(.init(
+                taskID: taskID,
+                source: .transcript,
+                text: segment.text,
+                startSeconds: segment.start,
+                endSeconds: segment.end
+            ))
+        }
+        do {
+            try searchIndex.replaceEntries(taskID: taskID, entries: entries)
+        } catch {
+            recordedSearchIndexFailures.append(
+                "indexing transcript for task \(taskID): \(error.localizedDescription)"
+            )
+        }
     }
 
     private static func isHLS(_ task: DownloadTask) -> Bool {
@@ -1001,6 +1091,21 @@ public actor DownloadManager {
         }
 
         try store.delete(id: taskID)
+
+        // A removed download must stop being findable. Same position and same reason
+        // as the resume-data cleanup below: only once the row is really gone. A
+        // failure here must not fail the removal — the index is derived data and the
+        // task is already deleted — but it must not be silent either, or a stale
+        // entry keeps serving content the user believes they erased.
+        if let searchIndex {
+            do {
+                try searchIndex.deleteAll(taskID: taskID)
+            } catch {
+                recordedSearchIndexFailures.append(
+                    "clearing index for task \(taskID): \(error.localizedDescription)"
+                )
+            }
+        }
 
         // Only now, with the row actually gone, is it safe to discard the resume
         // data. This deliberately does not run on the failure paths above: the
