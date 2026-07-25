@@ -911,6 +911,121 @@ public actor DownloadManager {
         }
     }
 
+    // MARK: - Rebuilding the index from disk
+
+    /// Whether the index has nothing to serve and should be rebuilt.
+    ///
+    /// Only when it was discarded or is empty. Rescanning every launch would spend the
+    /// user's first seconds re-deriving something already correct.
+    public func searchIndexNeedsRebuild() -> Bool {
+        guard let searchIndex else { return false }
+        if searchIndex.wasRebuilt { return true }
+        return (try? searchIndex.entryCount()) == 0
+    }
+
+    public struct RebuildProgress: Equatable, Sendable {
+        public var processed: Int
+        public var total: Int
+        public var indexedTranscripts: Int
+
+        public init(processed: Int, total: Int, indexedTranscripts: Int) {
+            self.processed = processed
+            self.total = total
+            self.indexedTranscripts = indexedTranscripts
+        }
+
+        public var fractionCompleted: Double {
+            total > 0 ? Double(processed) / Double(total) : 1
+        }
+    }
+
+    /// Rebuild the index from what is already on disk.
+    ///
+    /// The subtitle files are the truth here, not the `.txt` transcript: only the
+    /// subtitles carry timings, and an index rebuilt without them could find a
+    /// download but never jump to the moment — a downgrade wearing the costume of a
+    /// recovery.
+    ///
+    /// Cancellable and progress-reporting because a large inbox makes this slow, and a
+    /// slow rebuild must never be something the user has to sit through.
+    @discardableResult
+    public func rebuildSearchIndex(
+        cancelToken: CancelToken? = nil,
+        onProgress: (@Sendable (RebuildProgress) -> Void)? = nil
+    ) -> RebuildProgress {
+        guard let searchIndex else {
+            return RebuildProgress(processed: 0, total: 0, indexedTranscripts: 0)
+        }
+        let tasks = (try? store.allDownloads()) ?? []
+        var processed = 0
+        var indexedTranscripts = 0
+
+        for task in tasks {
+            if cancelToken?.isCancelled == true { break }
+            var entries: [SearchIndexStore.Entry] = []
+            if !task.filename.isEmpty {
+                entries.append(.init(taskID: task.id, source: .filename, text: task.filename))
+            }
+            if let title = task.pageTitle, !title.isEmpty {
+                entries.append(.init(taskID: task.id, source: .title, text: title))
+            }
+            if let page = task.pageURL, let host = URL(string: page)?.host, !host.isEmpty {
+                entries.append(.init(taskID: task.id, source: .site, text: host))
+            }
+            if let segments = Self.subtitleSegments(for: task), !segments.isEmpty {
+                indexedTranscripts += 1
+                for segment in segments {
+                    entries.append(.init(
+                        taskID: task.id,
+                        source: .transcript,
+                        text: segment.text,
+                        startSeconds: segment.start,
+                        endSeconds: segment.end
+                    ))
+                }
+            }
+            if !entries.isEmpty {
+                do {
+                    try searchIndex.replaceEntries(taskID: task.id, entries: entries)
+                } catch {
+                    recordedSearchIndexFailures.append(
+                        "rebuilding task \(task.id): \(error.localizedDescription)"
+                    )
+                }
+            }
+            processed += 1
+            onProgress?(RebuildProgress(
+                processed: processed,
+                total: tasks.count,
+                indexedTranscripts: indexedTranscripts
+            ))
+        }
+        return RebuildProgress(
+            processed: processed,
+            total: tasks.count,
+            indexedTranscripts: indexedTranscripts
+        )
+    }
+
+    /// Read a task's subtitles, following the naming C1-5 settled on: `Movie.srt`,
+    /// or `Movie.transcribed.srt` when the site had already supplied one.
+    static func subtitleSegments(for task: DownloadTask) -> [TranscriptSegment]? {
+        guard let folder = task.folderPath, !task.filename.isEmpty else { return nil }
+        let directory = URL(fileURLWithPath: folder, isDirectory: true)
+        let stem = (task.filename as NSString).deletingPathExtension
+        guard !stem.isEmpty else { return nil }
+        let candidates = [
+            directory.appendingPathComponent("\(stem).srt"),
+            directory.appendingPathComponent("\(stem).transcribed.srt"),
+        ]
+        for candidate in candidates {
+            guard let text = try? String(contentsOf: candidate, encoding: .utf8) else { continue }
+            let segments = TranscriptDocument.parseSRT(text)
+            if !segments.isEmpty { return segments }
+        }
+        return nil
+    }
+
     private static func isHLS(_ task: DownloadTask) -> Bool {
         if task.linkType.lowercased() == "hls" { return true }
         return looksLikeHLS(url: task.url, filename: task.filename)

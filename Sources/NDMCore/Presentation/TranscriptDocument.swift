@@ -107,6 +107,87 @@ public enum TranscriptDocument: Sendable {
         )
     }
 
+    // MARK: - Reading SRT back
+
+    /// Parse SubRip into segments — the inverse of `srt(from:)`, needed to rebuild a
+    /// search index from the subtitle files already on disk.
+    ///
+    /// Note the round trip is `parse(srt(from: s)) == subtitleCues(from: s)`, not
+    /// `== s`: writing reshapes cues (merging short ones, clamping overlaps, enforcing
+    /// a readable minimum), so the shaped form is what a file can possibly contain.
+    ///
+    /// A malformed cue is skipped rather than failing the file. Subtitles come from
+    /// everywhere; refusing to read four hundred good cues because one is broken
+    /// would trade a whole transcript for a technicality.
+    public static func parseSRT(_ text: String) -> [TranscriptSegment] {
+        var normalized = text
+        // A BOM would otherwise become part of the first cue's index or timing line.
+        if normalized.hasPrefix("\u{FEFF}") { normalized.removeFirst() }
+        normalized = normalized
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        var segments: [TranscriptSegment] = []
+        // Blank lines separate cues; runs of them are just as valid a separator as one.
+        for block in normalized.components(separatedBy: "\n\n") {
+            let lines = block
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard !lines.isEmpty else { continue }
+
+            // The index line is optional: plenty of files in the wild omit it, and
+            // when present it is redundant with position.
+            guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }),
+                  let timing = parseTiming(lines[timingIndex])
+            else { continue }
+
+            let body = lines[(timingIndex + 1)...]
+            guard !body.isEmpty else { continue }
+            // Rejoin the way the writer split: no invented space between CJK.
+            let joinedText = body.dropFirst().reduce(body[body.startIndex]) { joined($0, $1) }
+            let trimmed = joinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            segments.append(TranscriptSegment(
+                start: timing.start,
+                end: timing.end,
+                text: trimmed
+            ))
+        }
+        return segments
+    }
+
+    /// `HH:MM:SS,mmm --> HH:MM:SS,mmm`. A period is accepted for the milliseconds
+    /// because real files use both, and rejecting one costs a whole transcript.
+    static func parseTiming(_ line: String) -> (start: TimeInterval, end: TimeInterval)? {
+        let halves = line.components(separatedBy: "-->")
+        guard halves.count == 2,
+              let start = parseTimestamp(halves[0]),
+              let end = parseTimestamp(halves[1])
+        else { return nil }
+        // A backwards cue is repaired rather than dropped: the text is still real.
+        return (start, max(start, end))
+    }
+
+    static func parseTimestamp(_ raw: String) -> TimeInterval? {
+        // Trailing cue settings (`X1:...`) appear in WebVTT-flavoured files.
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: ",", with: ".")
+            .components(separatedBy: " ")
+            .first ?? ""
+        let parts = cleaned.components(separatedBy: ":")
+        guard (2...3).contains(parts.count) else { return nil }
+        var seconds = 0.0
+        for part in parts.dropLast() {
+            guard let value = Double(part), value >= 0 else { return nil }
+            seconds = seconds * 60 + value
+        }
+        guard let last = Double(parts[parts.count - 1]), last >= 0 else { return nil }
+        return seconds * 60 + last
+    }
+
     // MARK: - Cue shaping
 
     /// Clean, order and merge raw segments into displayable cues.
