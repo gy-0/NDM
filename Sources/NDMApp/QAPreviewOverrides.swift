@@ -32,6 +32,18 @@ enum QAPreviewOverrides {
         return CGFloat(value)
     }
 
+    /// Slow the Hero → list landing morph down so it can be inspected frame by
+    /// frame. The morph is 0.46s, which `screencapture` cannot sample densely
+    /// enough to tell a smooth path from a jump; at 8x it can. DEBUG only, and the
+    /// animator falls back to its real duration when this is absent.
+    static var heroLandingDurationScale: Double? {
+        guard isEnabled,
+              let raw = environment["NDM_QA_LANDING_SCALE"],
+              let value = Double(raw),
+              value > 0 else { return nil }
+        return min(value, 40)
+    }
+
     static var clipboardText: String? {
         guard isEnabled,
               let value = environment["NDM_QA_CLIPBOARD_TEXT"],
@@ -174,6 +186,7 @@ enum QAPreviewOverrides {
     static let languageMode: AppLanguageMode? = nil
     static let accentTheme: AccentTheme? = nil
     static let interfaceScale: CGFloat? = nil
+    static let heroLandingDurationScale: Double? = nil
     static let clipboardText: String? = nil
     static let supportDirectory: URL? = nil
     static let downloadDirectory: URL? = nil

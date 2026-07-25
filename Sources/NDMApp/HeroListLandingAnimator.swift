@@ -49,6 +49,10 @@ final class HeroListLandingAnimator {
     /// Soft ease-in-out — never spring / never overshoot.
     private static let morphTiming = CAMediaTimingFunction(controlPoints: 0.42, 0.0, 0.58, 1.0)
 
+    /// Hard stop: the overlay goes away in this frame.
+    ///
+    /// Only correct when nothing is on screen to snap — teardown, Reduce Motion, or
+    /// before a cover was ever installed. Everywhere else use `abortGracefully`.
     func cancel() {
         finishWorkItem?.cancel()
         finishWorkItem = nil
@@ -59,6 +63,60 @@ final class HeroListLandingAnimator {
         completionHandler = nil
         animatingTaskID = nil
         handler?()
+    }
+
+    /// Abandon a landing that can no longer complete, without a visible snap.
+    ///
+    /// A landing stops being completable whenever the list restructures underneath
+    /// it: a second download finishes (so `captureHeroLandingSource` declines to
+    /// build a source while this one runs), a filter or sort changes, the
+    /// destination row moves or disappears. The original response was `cancel()`,
+    /// which removes the overlay in the same frame — and removing a fully opaque
+    /// frozen snapshot in one frame *is* the discontinuity the cover was installed
+    /// to hide. So the bail-out has to fade too.
+    ///
+    /// `reveal` runs first and must put the live row back on screen: the overlay
+    /// becoming transparent over nothing would flash an empty row instead.
+    func abortGracefully(revealing reveal: (() -> Void)? = nil) {
+        finishWorkItem?.cancel()
+        finishWorkItem = nil
+        revealWorkItem?.cancel()
+        revealWorkItem = nil
+
+        guard let overlay, overlay.window != nil else {
+            reveal?()
+            cancel()
+            return
+        }
+
+        // Live row first, then fade — never the other way round.
+        reveal?()
+
+        let fade = HeroLandingSchedule.abortFade
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = fade
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.allowsImplicitAnimation = false
+            overlay.animator().alphaValue = 0
+        }
+
+        // The sublayers keep travelling toward their destinations underneath the
+        // fade (their groups are `fillMode: .both`, not removed on completion), so
+        // this reads as the morph giving up rather than freezing then vanishing.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.finishWorkItem = nil
+            self.tearDownOverlay()
+            let handler = self.completionHandler
+            self.completionHandler = nil
+            self.animatingTaskID = nil
+            handler?()
+        }
+        finishWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + fade + HeroLandingSchedule.frame,
+            execute: work
+        )
     }
 
     /// Freeze a snapshot of the finishing Hero **before** layout collapses.
@@ -103,6 +161,9 @@ final class HeroListLandingAnimator {
         }
         completionHandler = completion
 
+        // `duration` already carries any QA slow-motion scale: the caller applies it
+        // once, to both this morph and the concurrent Hero-strip collapse, so the two
+        // cannot drift apart.
         let schedule = HeroLandingSchedule(duration: duration)
         let destPlate = destination.rowFrame.insetBy(dx: 6, dy: 2)
 
@@ -126,22 +187,15 @@ final class HeroListLandingAnimator {
             schedule: schedule
         )
 
-        // Crossfade live row in late — after the morph has mostly settled. Both
-        // deadlines come from the schedule, which measures from the animation's
-        // begin time rather than from this call; scheduling them from `now` left
-        // the teardown ~3ms after the last animated frame, and one busy frame then
-        // yanked the still-opaque cover — the "pop".
-        let revealWork = DispatchWorkItem { [weak self] in
-            guard self?.animatingTaskID == source.taskID else { return }
-            self?.revealWorkItem = nil
-            onReveal?()
-        }
-        revealWorkItem = revealWork
-        DispatchQueue.main.asyncAfter(deadline: .now() + schedule.revealAt, execute: revealWork)
-
+        // Hand off and tear down in the same work item, so there is never a frame
+        // with the overlay gone and the row not yet back. The deadline comes from the
+        // schedule, which measures from the animation's *begin* time; scheduling it
+        // from `now` left ~3ms after the last animated frame, and one busy frame then
+        // yanked the still-opaque cover — the original "pop".
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.finishWorkItem = nil
+            onReveal?()
             self.tearDownOverlay()
             let handler = self.completionHandler
             self.completionHandler = nil
@@ -385,11 +439,13 @@ final class HeroListLandingAnimator {
         plate.shadowOpacity = 0
         plate.opacity = 0
         chrome?.opacity = 0
+        // Destination-side layers end *visible*: at t=1 they are the row, and the
+        // handoff swaps them for it in the same frame. Source-side layers end hidden.
         if let cover {
             cover.frame = destination.glyphFrame
             cover.cornerRadius = 9
             cover.shadowOpacity = 0
-            cover.opacity = 0
+            cover.opacity = 1
         }
         if let nameFrom {
             nameFrom.frame = destination.nameFrame
@@ -397,14 +453,14 @@ final class HeroListLandingAnimator {
         }
         if let nameTo {
             nameTo.frame = destination.nameFrame
-            nameTo.opacity = 0
+            nameTo.opacity = 1
         }
         eyebrow?.opacity = 0
         speed?.opacity = 0
         progress?.opacity = 0
         if let status {
             status.frame = destination.statusFrame
-            status.opacity = 0
+            status.opacity = 1
         }
         outline?.opacity = 0
         CATransaction.commit()
@@ -483,10 +539,10 @@ final class HeroListLandingAnimator {
             let coverShadow = CABasicAnimation(keyPath: "shadowOpacity")
             coverShadow.fromValue = 0.2
             coverShadow.toValue = 0
-            let coverFade = CAKeyframeAnimation(keyPath: "opacity")
-            coverFade.values = [1, 1, 0]
-            coverFade.keyTimes = [0, 0.86, 1]
-            coverGroup.animations = [coverPos, coverBounds, coverRadius, coverShadow, coverFade]
+            // Held opaque to the end. The handoff happens at t=1, where this layer is
+            // exactly the row's glyph; fading it out beforehand only exposed the
+            // hidden row underneath.
+            coverGroup.animations = [coverPos, coverBounds, coverRadius, coverShadow]
             apply(coverGroup, to: cover, key: "coverMorph")
         }
 
@@ -507,8 +563,8 @@ final class HeroListLandingAnimator {
             let nameToPos = positionAnim(from: source.nameFrame, to: destination.nameFrame)
             let nameToBounds = boundsAnim(from: source.nameFrame.size, to: destination.nameFrame.size)
             let nameToFade = CAKeyframeAnimation(keyPath: "opacity")
-            nameToFade.values = [0, 0, 1, 1, 0]
-            nameToFade.keyTimes = [0, 0.5, 0.68, 0.86, 1]
+            nameToFade.values = [0, 0, 1, 1]
+            nameToFade.keyTimes = [0, 0.5, 0.68, 1]
             nameToGroup.animations = [nameToPos, nameToBounds, nameToFade]
             apply(nameToGroup, to: nameTo, key: "nameTo")
         }
@@ -533,8 +589,8 @@ final class HeroListLandingAnimator {
 
         if let status {
             let statusFade = CAKeyframeAnimation(keyPath: "opacity")
-            statusFade.values = [0, 0, 1, 1, 0]
-            statusFade.keyTimes = [0, 0.58, 0.72, 0.88, 1]
+            statusFade.values = [0, 0, 1, 1]
+            statusFade.keyTimes = [0, 0.58, 0.72, 1]
             statusFade.duration = duration
             statusFade.beginTime = begin
             statusFade.timingFunction = timing

@@ -2662,7 +2662,10 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             heroLandingAnimator.installCover(in: view, source: landingSource)
         }
 
-        let heroIDs = updateHero(rows, heightAnimated: landingSource == nil)
+        // When a landing is about to run, postpone the strip's collapse entirely
+        // rather than making it instant: instant is what put the list's whole 150pt
+        // shift into one frame, which is the snap seen at the completion moment.
+        let heroIDs = updateHero(rows, deferHeightCollapse: landingSource != nil)
         let rows = provisionalListRows
 
         let previousIDs = previousRows.map(\.taskID)
@@ -2695,11 +2698,13 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
         if previousIDs != nextIDs {
             // A mid-flight morph must not leave a covered ghost row after a
-            // filter / sort / other structural change.
+            // filter / sort / other structural change. Fade rather than yank: this
+            // fires whenever a second download finishes while the first is still
+            // landing (the source capture declines to build one while a morph runs),
+            // and an instant teardown there was a hard visible snap.
             if heroLandingAnimator.isRunning,
                landingSource?.taskID != heroLandingAnimator.animatingTaskID {
-                clearHeroLandingCover()
-                heroLandingAnimator.cancel()
+                abandonHeroLanding()
             }
             // NSTableView is virtualized. A structural reload is sufficient;
             // explicitly notifying every row height forces AppKit to create and
@@ -2709,13 +2714,13 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             // first row under the eye (a downward jump), and a later
             // scrollRowToVisible would bounce back up. One target, one set.
             let revealID = revealLandingID
-            let scrollPin: (taskID: Int64, offset: CGFloat)? = revealID.map { ($0, 0) }
-                ?? scrollAnchor
+            let scrollPin: ListPin? = revealID.map { ListPin.reveal(taskID: $0) }
+                ?? scrollAnchor.map { ListPin.anchor(taskID: $0.taskID, offset: $0.offset) }
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0
                 ctx.allowsImplicitAnimation = false
                 tableView.reloadData()
-                restoreScrollAnchor(scrollPin, in: rows)
+                applyListPin(scrollPin, in: rows)
             }
 
             // After the one-shot pin, morph the finishing Hero into its row.
@@ -2725,8 +2730,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                 startHeroListLanding(source: landingSource, rows: rows)
             } else {
                 if landingSource != nil || heroLandingAnimator.isRunning {
-                    clearHeroLandingCover()
-                    heroLandingAnimator.cancel()
+                    abandonHeroLanding()
                 }
                 if let revealID,
                    NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
@@ -2734,8 +2738,10 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                 }
             }
         } else {
+            // Cover was installed but the list did not restructure, so there is no
+            // row to morph into. The frozen hero is already on screen — fade it.
             if landingSource != nil {
-                heroLandingAnimator.cancel()
+                abandonHeroLanding()
             }
             if !rows.isEmpty {
                 var changedRows = IndexSet()
@@ -2746,7 +2752,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                         heightChangedRows.insert(index)
                     }
                 }
-                let visibleRows = visibleRowIndexes()
+                var visibleRows = visibleRowIndexes()
+                // A landing row is deliberately hidden while the overlay covers it.
+                // Reloading it mid-morph rebuilds the cell, which loses that hidden
+                // state and shows the live row *underneath* the frozen snapshot —
+                // two copies of the same card for the rest of the morph. The row is
+                // repainted at handoff anyway.
+                if let covered = heroLandingCoveredRow {
+                    visibleRows.remove(covered)
+                }
                 let visibleChangedRows = changedRows.intersection(visibleRows)
                 if !visibleChangedRows.isEmpty {
                     tableView.reloadData(
@@ -2822,18 +2836,50 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         return (previousRows[row].taskID, offset)
     }
 
-    private func restoreScrollAnchor(
-        _ anchor: (taskID: Int64, offset: CGFloat)?,
-        in rows: [TaskRowPresentation]
-    ) {
-        guard let anchor,
-              let row = rows.firstIndex(where: { $0.taskID == anchor.taskID }) else { return }
+    /// What the list should do about scrolling after a structural reload.
+    private enum ListPin {
+        /// Hold this task where it already was on screen.
+        case anchor(taskID: Int64, offset: CGFloat)
+        /// Make sure this task is visible, moving as little as possible.
+        case reveal(taskID: Int64)
+
+        var taskID: Int64 {
+            switch self {
+            case .anchor(let taskID, _), .reveal(let taskID): return taskID
+            }
+        }
+    }
+
+    /// Apply a pin in exactly one scroll set.
+    ///
+    /// `reveal` used to mean "put the row at offset 0", which is only harmless when
+    /// the row is already at the top. Under any other sort a finished download can
+    /// land far down the list, and forcing it to the viewport top threw the whole
+    /// list — the lurch reported as 列表跳动. `ListScrollGeometry` resolves the
+    /// minimum move instead, so the common case (row 0, user at the top) costs
+    /// nothing at all.
+    private func applyListPin(_ pin: ListPin?, in rows: [TaskRowPresentation]) {
+        guard let pin,
+              let row = rows.firstIndex(where: { $0.taskID == pin.taskID }) else { return }
         tableView.layoutSubtreeIfNeeded()
-        let visibleHeight = scrollView.contentView.bounds.height
-        let targetY = tableView.rect(ofRow: row).minY + anchor.offset
-        let maximumY = max(0, tableView.bounds.height - visibleHeight)
+        let rowRect = tableView.rect(ofRow: row)
+        let geometry = ListScrollGeometry(
+            currentY: scrollView.contentView.bounds.origin.y,
+            viewportHeight: scrollView.contentView.bounds.height,
+            contentHeight: tableView.bounds.height
+        )
+        let target: ListScrollTarget
+        switch pin {
+        case .anchor(_, let offset):
+            target = .anchor(rowMinY: rowRect.minY, offset: offset)
+        case .reveal:
+            target = .reveal(rowMinY: rowRect.minY, rowHeight: rowRect.height)
+        }
+        // Setting the same offset again is a no-op to AppKit but not to the eye when
+        // a morph is mid-flight; skip it outright.
+        guard !geometry.isSettled(for: target) else { return }
         var origin = scrollView.contentView.bounds.origin
-        origin.y = min(max(0, targetY), maximumY)
+        origin.y = geometry.scrollY(for: target)
         // Caller wraps this in a zero-duration context so the pin is not animated
         // (avoids a visible down-then-up after reloadData re-pins the old top).
         scrollView.contentView.scroll(to: origin)
@@ -2891,33 +2937,50 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         source: HeroListLandingSource,
         rows: [TaskRowPresentation]
     ) {
+        // Every bail-out below happens with the frozen cover already on screen, so
+        // all of them fade instead of vanishing.
         guard heroLandingAnimator.animatingTaskID == source.taskID,
               let rowIndex = rows.firstIndex(where: { $0.taskID == source.taskID }) else {
-            heroLandingAnimator.cancel()
+            abandonHeroLanding()
             return
         }
 
         view.layoutSubtreeIfNeeded()
         tableView.layoutSubtreeIfNeeded()
 
-        guard let cell = tableView.view(atColumn: 0, row: rowIndex, makeIfNecessary: true)
-                as? TaskRowCellView,
-              let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: true)
-                as? QuietFinderRowView,
-              let destination = cell.captureLandingDestination(in: view, taskID: source.taskID)
-        else {
-            heroLandingAnimator.cancel()
+        // Aim at where the row will be once the strip has closed, not where it is
+        // now. The two then animate together over one duration — the list rises to
+        // meet the card — instead of the strip closing afterwards and leaving its
+        // 150pt hole on screen for the whole morph.
+        let captured: (cell: TaskRowCellView, row: QuietFinderRowView, destination: HeroListLandingDestination)?
+        captured = withPostCollapseLayout {
+            guard let cell = tableView.view(atColumn: 0, row: rowIndex, makeIfNecessary: true)
+                    as? TaskRowCellView,
+                  let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: true)
+                    as? QuietFinderRowView,
+                  let destination = cell.captureLandingDestination(in: view, taskID: source.taskID)
+            else { return nil }
+            return (cell, rowView, destination)
+        }
+        guard let captured else {
+            abandonHeroLanding()
             return
         }
 
         // Live row stays invisible until the overlay hands off — no spring bounce.
         clearHeroLandingCover()
-        cell.setLandingCovered(true)
-        rowView.alphaValue = 0
+        captured.cell.setLandingCovered(true)
+        captured.row.alphaValue = 0
         heroLandingCoveredRow = rowIndex
 
+        // One duration drives both animations, QA slow-motion included — scaling only
+        // the morph would desync the strip from the card.
+        let morph = Self.heroLandingDuration * (QAPreviewOverrides.heroLandingDurationScale ?? 1)
+        // Start the strip closing now, on the morph's clock and curve.
+        flushDeferredHeroHeight(duration: morph)
         heroLandingAnimator.morphToDestination(
-            destination,
+            captured.destination,
+            duration: morph,
             onReveal: { [weak self] in
                 MainActor.assumeIsolated {
                     self?.handOffHeroLandingRow(taskID: source.taskID)
@@ -2930,10 +2993,16 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                     if self.heroLandingCoveredRow != nil {
                         self.handOffHeroLandingRow(taskID: source.taskID)
                     }
+                    // Belt and braces: if the strip somehow never got flushed above,
+                    // it must not be left standing at full height with nothing in it.
+                    self.flushDeferredHeroHeight()
                 }
             }
         )
     }
+
+    /// One duration for the whole landing: the card's flight and the strip's close.
+    private static let heroLandingDuration: TimeInterval = 0.46
 
     /// Swap overlay → live row mid-morph so the handoff never flashes empty.
     private func handOffHeroLandingRow(taskID: Int64) {
@@ -2997,10 +3066,14 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     /// a featured strip with ordinary progress rows. Returns the task IDs
     /// currently on stage so the list can exclude them.
     ///
-    /// When `heightAnimated` is false the strip snaps to its final height
-    /// under a pre-installed landing cover (so the user never sees the twitch).
+    /// When `deferHeightCollapse` is true the strip keeps its current height and the
+    /// target is remembered in `deferredHeroHeight` for a landing to flush later.
     @discardableResult
-    private func updateHero(_ rows: [TaskRowPresentation], heightAnimated: Bool = true) -> Set<Int64> {
+    private func updateHero(
+        _ rows: [TaskRowPresentation],
+        heightAnimated: Bool = true,
+        deferHeightCollapse: Bool = false
+    ) -> Set<Int64> {
         let active = rows.filter(\.isDownloading)
         heroOrderedIDs = active.map(\.taskID)
         heroTaskIDs = Set(heroOrderedIDs)
@@ -3022,6 +3095,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let targetHeight: CGFloat = CGFloat(active.count) * Self.heroCardHeight
         let targetAlpha: CGFloat = active.isEmpty ? 0 : 1
         guard heroHeight?.constant != targetHeight else { return heroTaskIDs }
+        // A landing owns the layout until the card is down. Remember where the strip
+        // has to end up and leave it alone for now.
+        if deferHeightCollapse {
+            deferredHeroHeight = (targetHeight, targetAlpha)
+            return heroTaskIDs
+        }
         guard view.window != nil, heightAnimated else {
             heroHeight?.constant = targetHeight
             heroContainer.alphaValue = targetAlpha
@@ -3036,6 +3115,79 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             view.layoutSubtreeIfNeeded()
         }
         return heroTaskIDs
+    }
+
+    /// Hero height that a landing has postponed, and the alpha that goes with it.
+    ///
+    /// Collapsing the strip is what moves the list. During a Hero → row morph it
+    /// must not happen at all: the frozen cover hides the hero card's own
+    /// disappearance but nothing hides the 150pt the list jumps to close the gap,
+    /// and making that jump instant only compressed it into a single frame — which is
+    /// the snap measured at the completion moment. So the morph runs with the strip
+    /// still occupying its space, nothing around the card moves, and the collapse is
+    /// flushed (animated) once the card is down.
+    private var deferredHeroHeight: (height: CGFloat, alpha: CGFloat)?
+
+    /// Give up on a landing: fade the frozen cover out, put the live row back, and
+    /// still close the strip. Every bail-out goes through here so the postponed
+    /// collapse cannot be forgotten and leave an empty full-height Hero behind.
+    private func abandonHeroLanding() {
+        heroLandingAnimator.abortGracefully { [weak self] in
+            self?.clearHeroLandingCover()
+        }
+        flushDeferredHeroHeight()
+    }
+
+    /// Lay the list out as it will be once the postponed Hero collapse has happened,
+    /// run `body` against that geometry, then put the layout back.
+    ///
+    /// Nothing is drawn between the two passes — this all happens inside one turn of
+    /// the run loop — so it costs two layouts and no flicker. It exists so the morph
+    /// can be aimed at where the row will *end up*, which lets the strip close at the
+    /// same time as the card flies instead of afterwards. Closing it afterwards is
+    /// correct but leaves a 150pt hole on screen for the length of the morph.
+    private func withPostCollapseLayout<T>(_ body: () -> T) -> T {
+        guard let pending = deferredHeroHeight,
+              let heroHeight,
+              heroHeight.constant != pending.height else { return body() }
+        let original = heroHeight.constant
+        heroHeight.constant = pending.height
+        view.layoutSubtreeIfNeeded()
+        tableView.layoutSubtreeIfNeeded()
+        let result = body()
+        heroHeight.constant = original
+        view.layoutSubtreeIfNeeded()
+        tableView.layoutSubtreeIfNeeded()
+        return result
+    }
+
+    /// Close the Hero strip that a landing postponed.
+    ///
+    /// Idempotent, and called from every way a landing can end — normal completion,
+    /// graceful abort, a destination that could not be captured — because leaving it
+    /// unflushed would strand the strip at full height with nothing in it.
+    ///
+    /// `duration` is matched to the morph when the two run together, so the list rises
+    /// to meet the card and both arrive on the same frame.
+    private func flushDeferredHeroHeight(duration: TimeInterval = 0.32) {
+        guard let pending = deferredHeroHeight else { return }
+        deferredHeroHeight = nil
+        guard heroHeight?.constant != pending.height else { return }
+        guard view.window != nil, duration > 0 else {
+            heroHeight?.constant = pending.height
+            heroContainer.alphaValue = pending.alpha
+            return
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = duration
+            // Same curve as the morph: they are one movement, not two that happen to
+            // overlap.
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.42, 0.0, 0.58, 1.0)
+            ctx.allowsImplicitAnimation = true
+            heroHeight?.animator().constant = pending.height
+            heroContainer.animator().alphaValue = pending.alpha
+            view.layoutSubtreeIfNeeded()
+        }
     }
 
     private static let heroCardHeight: CGFloat = 150

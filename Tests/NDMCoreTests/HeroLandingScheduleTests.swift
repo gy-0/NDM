@@ -24,12 +24,20 @@ final class HeroLandingScheduleTests: XCTestCase {
         )
     }
 
-    /// The overlay must still be covering the row when the live row appears,
-    /// otherwise there is a frame with neither drawn.
-    func testRevealHappensWhileTheOverlayIsStillOnScreen() {
+    /// The handoff lands exactly on the morph's last frame, where the overlay and the
+    /// row are in the same place. Earlier only worked while the row was stationary;
+    /// with the Hero strip collapsing during the morph the row is still travelling, so
+    /// an early reveal would show it offset from the overlay.
+    func testRevealLandsOnTheMorphsLastFrame() {
         let schedule = HeroLandingSchedule(duration: 0.46)
         XCTAssertGreaterThan(schedule.revealAt, schedule.beginsAt)
-        XCTAssertLessThan(schedule.revealAt, schedule.endsAt)
+        XCTAssertEqual(schedule.revealAt, schedule.endsAt, accuracy: 1e-9)
+    }
+
+    /// …and strictly before the overlay is removed, so the swap is never a frame with
+    /// nothing drawn.
+    func testRevealPrecedesTeardown() {
+        let schedule = HeroLandingSchedule(duration: 0.46)
         XCTAssertLessThan(schedule.revealAt, schedule.teardownAt)
     }
 
