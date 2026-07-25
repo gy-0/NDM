@@ -285,34 +285,40 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         }
     }
 
-    /// Known and deliberately accepted: below 1060pt of window width, revealing a
-    /// collapsed rail widens the window by the rail's width instead of taking the
-    /// space back from the list.
+    /// Known and deliberately accepted: on a narrow window, revealing a collapsed
+    /// rail widens the window by that rail's width instead of taking the space back
+    /// from the list.
     ///
-    /// `NSSplitViewController` pays for the reveal out of the window rather than out
-    /// of a neighbour, even when the neighbour has room. Collapsing the inspector
-    /// hands its width to the list, and revealing it does not take that back.
-    /// Measured, window width in → out after one collapse/reveal of either rail:
+    /// Collapsing hands the rail's width to the list; revealing does not take it
+    /// back, so `NSSplitViewController` finds the width by growing the window. The
+    /// growth is always exactly the rail plus one divider (338pt here), and nothing
+    /// else in the layout moves.
     ///
-    ///     840 → 1178    1020 → 1358    1060 → 1060
-    ///     900 → 1238    1040 → 1378    1100 → 1100
-    ///     1000 → 1338                  1440 → 1440
+    /// Measured with the split view's autosave cleared before every run — without
+    /// that it is unreproducible, because the autosave is rewritten on each launch
+    /// and one run's saved geometry biases the next:
     ///
-    /// So it is not only the 840pt floor: everything under 1060 is affected, which
-    /// is a real if unusual band given the 1440 default.
+    ///      840 → 1178      1000 → 1338      1100 → 1100
+    ///      900 → 1238      1060 → 1060      1440 → 1440
     ///
-    /// `holdingPriority` and `collapseBehavior =
-    /// .preferResizingSiblingsWithFixedSplitView` — whose name is this exact
-    /// contract — were both tried against those numbers and neither moved them. The
-    /// growth happens before either is consulted.
+    /// The boundary sits somewhere between 1000 and 1060, and is *not* a round
+    /// number we control. Ruled out by experiment: `holdingPriority`,
+    /// `collapseBehavior = .preferResizingSiblingsWithFixedSplitView` (whose name is
+    /// this exact contract), `preferredThicknessFraction`, and the autosaved layout
+    /// itself. Each was tried against the measurements above and none moved them, so
+    /// the decision lives inside AppKit somewhere we cannot reach from here.
+    ///
+    /// Worth knowing if you do try again: the inspector's effective minimum is its
+    /// content's fitting width, 332pt, not the 320 in `minimumThickness`.
     ///
     /// It *can* be prevented by restoring the frame inside the same run-loop turn,
-    /// but only by giving up `animator()`: the growth lands at the end of the
+    /// but only by giving up `animator()` — the growth lands at the end of the
     /// animation, too late to correct invisibly. That trade was made and then
-    /// deliberately reversed — the slide is worth more than a defect that needs the
-    /// window narrowed past 1060 to meet. Reproduce with
-    /// `NDM_QA_PROBE_INSPECTOR_TOGGLE=asis` (or `=min` to start from the floor)
-    /// before trying again, and check the animation survives whatever you do.
+    /// deliberately reversed: the slide is worth more than a defect you have to
+    /// narrow the window to meet. Reproduce with
+    /// `NDM_QA_PROBE_INSPECTOR_TOGGLE=asis` (`=min` to start from the floor), delete
+    /// `NSSplitView Subview Frames NDM.MainSplit.v9` from defaults between runs, and
+    /// check the animation still exists afterwards.
     private func configureSplit() {
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         // Room for semantic zoom without turning the navigation into a squeeze.
@@ -648,8 +654,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                         window.setFrame(frame, display: true)
                     }
                     self.splitController.view.layoutSubtreeIfNeeded()
-                    NSLog("QA probe: at minimum %.0f | panes %@",
-                          window.frame.width, self.paneWidthsDescription())
+                    NSLog("QA probe: at minimum %.0f | panes %@ | fitting s=%.0f l=%.0f i=%.0f",
+                          window.frame.width, self.paneWidthsDescription(),
+                          self.sidebarController.view.fittingSize.width,
+                          self.listController.view.fittingSize.width,
+                          self.inspectorController.view.fittingSize.width)
                     guard let sidebar = self.splitController.splitViewItems.first else { return }
                     @MainActor func step(_ label: String) {
                         NSLog("QA probe: %@ %.0f | panes %@",
