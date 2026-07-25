@@ -270,11 +270,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         }
         contentToolbar.onToggleSidebar = { [weak self] in
             guard let item = self?.splitController.splitViewItems.first else { return }
-            self?.toggleRail(item)
+            item.animator().isCollapsed.toggle()
         }
         contentToolbar.onToggleInspector = { [weak self] in
             guard let item = self?.splitController.splitViewItems.last else { return }
-            self?.toggleRail(item)
+            item.animator().isCollapsed.toggle()
         }
         contentToolbar.onClipboardOffer = { [weak self] in
             self?.openClipboardOffer()
@@ -285,56 +285,34 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         }
     }
 
-    /// Window size is state the user owns. Run a layout change that must not be
-    /// allowed to alter it.
+    /// Known and deliberately accepted: below 1060pt of window width, revealing a
+    /// collapsed rail widens the window by the rail's width instead of taking the
+    /// space back from the list.
     ///
-    /// `NSSplitViewController` pays for revealing a collapsed pane by widening the
-    /// *window*, even when a neighbour has room to give. Measured at the minimum
-    /// window with the inspector open: collapsing it handed the list 300 → 638pt,
-    /// and revealing it again grew the window 840 → 1178 rather than taking those
-    /// points back.
+    /// `NSSplitViewController` pays for the reveal out of the window rather than out
+    /// of a neighbour, even when the neighbour has room. Collapsing the inspector
+    /// hands its width to the list, and revealing it does not take that back.
+    /// Measured, window width in → out after one collapse/reveal of either rail:
     ///
-    /// Two framework-level fixes were tried against that measurement and neither
-    /// moved it: `holdingPriority` (rails 261, list 200) and
-    /// `collapseBehavior = .preferResizingSiblingsWithFixedSplitView`, whose name is
-    /// this exact contract. The growth happens before either is consulted. The
-    /// priorities are kept because they decide *which* sibling pays once the size is
-    /// pinned; the collapse behaviour was removed rather than left in as decoration.
+    ///     840 → 1178    1020 → 1358    1060 → 1060
+    ///     900 → 1238    1040 → 1378    1100 → 1100
+    ///     1000 → 1338                  1440 → 1440
     ///
-    /// So the policy is enforced here instead: the frame is restored inside the same
-    /// turn of the run loop, before anything is drawn, and the split view re-lays-out
-    /// within it. That always succeeds because the pane minimums together
-    /// (200 + 300 + 320 = 820) fit inside the 840 window minimum.
-    private func preservingWindowSize(_ change: () -> Void) {
-        guard let window else { return change() }
-        let frame = window.frame
-        change()
-        splitController.view.layoutSubtreeIfNeeded()
-        guard window.frame.size != frame.size else { return }
-        window.setFrame(frame, display: false)
-        splitController.view.layoutSubtreeIfNeeded()
-    }
-
-    /// Collapse or reveal a rail.
+    /// So it is not only the 840pt floor: everything under 1060 is affected, which
+    /// is a real if unusual band given the 1440 default.
     ///
-    /// Not `animator()`: the animated reveal is where the window growth happens, and
-    /// it happens at the end of the animation — too late to correct without a
-    /// visible jump. The geometry snaps and the revealed content fades in, which
-    /// keeps the one thing the user cares about (their window staying put) exact.
-    private func toggleRail(_ item: NSSplitViewItem) {
-        let isRevealing = item.isCollapsed
-        preservingWindowSize { item.isCollapsed.toggle() }
-        guard isRevealing,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let revealed = item.viewController.view
-        revealed.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            revealed.animator().alphaValue = 1
-        }
-    }
-
+    /// `holdingPriority` and `collapseBehavior =
+    /// .preferResizingSiblingsWithFixedSplitView` — whose name is this exact
+    /// contract — were both tried against those numbers and neither moved them. The
+    /// growth happens before either is consulted.
+    ///
+    /// It *can* be prevented by restoring the frame inside the same run-loop turn,
+    /// but only by giving up `animator()`: the growth lands at the end of the
+    /// animation, too late to correct invisibly. That trade was made and then
+    /// deliberately reversed — the slide is worth more than a defect that needs the
+    /// window narrowed past 1060 to meet. Reproduce with
+    /// `NDM_QA_PROBE_INSPECTOR_TOGGLE=asis` (or `=min` to start from the floor)
+    /// before trying again, and check the animation survives whatever you do.
     private func configureSplit() {
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         // Room for semantic zoom without turning the navigation into a squeeze.
@@ -347,9 +325,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         // — measured at the minimum window: collapsing the inspector took the list
         // from 300 to 638, and re-expanding grew the window from 840 to 1178 rather
         // than taking those points back.
-        // Rails hold their width; the list is the sibling that gives. See
-        // `preservingWindowSize` for why this is necessary but not sufficient.
-        sidebarItem.holdingPriority = NSLayoutConstraint.Priority(261)
         if #available(macOS 11.0, *) {
             sidebarItem.titlebarSeparatorStyle = .none
         }
@@ -361,9 +336,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         // Every combination of panes now fits inside `minSize`, so a toggle
         // redistributes space instead of resizing the window.
         listItem.minimumThickness = startsCompact ? 260 : 300
-        // Lowest of the three, so the list is the sibling that actually gives up
-        // the width when a rail is disclosed.
-        listItem.holdingPriority = NSLayoutConstraint.Priority(200)
 
         let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorController)
         // Full action labels (especially “Show in Finder”) need a real inspector,
@@ -373,7 +345,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         inspectorItem.preferredThicknessFraction = 0.30
         inspectorItem.canCollapse = true
         inspectorItem.isCollapsed = startsCompact
-        inspectorItem.holdingPriority = NSLayoutConstraint.Priority(261)
+        inspectorItem.holdingPriority = NSLayoutConstraint.Priority(260)
 
         splitController.addSplitViewItem(sidebarItem)
         splitController.addSplitViewItem(listItem)
@@ -665,12 +637,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                     guard let self, let window = self.window,
                           let item = self.splitController.splitViewItems.last else { return }
-                    var frame = window.frame
-                    frame.size = NSSize(
-                        width: window.minSize.width,
-                        height: window.minSize.height
-                    )
-                    window.setFrame(frame, display: true)
+                    // `=min` shrinks to the window minimum first (the reported
+                    // gesture); anything else probes the size as launched.
+                    if ProcessInfo.processInfo.environment["NDM_QA_PROBE_INSPECTOR_TOGGLE"] == "min" {
+                        var frame = window.frame
+                        frame.size = NSSize(
+                            width: window.minSize.width,
+                            height: window.minSize.height
+                        )
+                        window.setFrame(frame, display: true)
+                    }
                     self.splitController.view.layoutSubtreeIfNeeded()
                     NSLog("QA probe: at minimum %.0f | panes %@",
                           window.frame.width, self.paneWidthsDescription())
@@ -679,16 +655,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                         NSLog("QA probe: %@ %.0f | panes %@",
                               label, window.frame.width, self.paneWidthsDescription())
                     }
-                    self.toggleRail(item)
+                    item.animator().isCollapsed = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         step("inspector off")
-                        self.toggleRail(item)
+                        item.animator().isCollapsed = false
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             step("inspector on ")
-                            self.toggleRail(sidebar)
+                            sidebar.animator().isCollapsed = true
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 step("sidebar off  ")
-                                self.toggleRail(sidebar)
+                                sidebar.animator().isCollapsed = false
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                     step("sidebar on   ")
                                 }

@@ -126,7 +126,7 @@ enum QAPreviewOverrides {
     /// either side of it. The question "does opening the inspector resize the
     /// window" is not answerable by reading constraint constants.
     static var probeInspectorToggle: Bool {
-        isEnabled && environment["NDM_QA_PROBE_INSPECTOR_TOGGLE"] == "1"
+        isEnabled && environment["NDM_QA_PROBE_INSPECTOR_TOGGLE"] != nil
     }
 
     /// Pre-fills the search field, so the "a long query resizes the window" report
