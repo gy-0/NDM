@@ -97,6 +97,26 @@ final class SpeechLanguageAssetsTests: XCTestCase {
         )
     }
 
+    /// Regression: every installed locale must be preparable, not just the first five.
+    /// Creating an installation request reserves against a budget measured at five, so
+    /// probing readiness by creating one made the sixth locale onward report
+    /// "unsupported" — a diagnosis that points at nothing the user can fix.
+    func testEveryInstalledLanguagePreparesWithoutSpendingTheReservationBudget() async throws {
+        try requireFramework()
+        guard #available(macOS 26, *) else { return }
+
+        let environment = await SpeechTranscriptionEngine.environment()
+        let installed = environment.installedLocaleIdentifiers
+        try XCTSkipIf(installed.count < 6, "needs more than the reservation budget to be meaningful")
+        for identifier in installed {
+            do {
+                try await SpeechLanguageAssets().prepare(localeIdentifier: identifier)
+            } catch {
+                XCTFail("\(identifier) is installed but failed to prepare: \(error)")
+            }
+        }
+    }
+
     func testPreparingAnUnsupportedLanguageReportsUnsupportedRatherThanAFailure() async throws {
         try requireFramework()
         guard #available(macOS 26, *) else { return }

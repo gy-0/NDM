@@ -7,6 +7,8 @@ import NDMCore
 /// database, a media file, or the speech framework.
 public enum CLICommand: Equatable, Sendable {
     case transcribe(file: String, language: String?, writesTextFile: Bool)
+    /// Outline an already-transcribed file by reading its subtitles back.
+    case chapters(file: String, noSummary: Bool)
     case search(query: String, limit: Int)
     case rebuildIndex
     case help
@@ -55,6 +57,7 @@ public enum CLIParser: Sendable {
 
     USAGE
       ndm transcribe <file> [--language <tag>] [--no-text]
+      ndm chapters <file> [--no-summary]
       ndm search <words…> [--limit <n>]
       ndm index rebuild
       ndm --help | --version
@@ -62,6 +65,7 @@ public enum CLIParser: Sendable {
     OPTIONS
       --language <tag>   Force a language, e.g. zh-Hans. Default: decide from the file.
       --no-text          Write only subtitles, not the readable transcript.
+      --no-summary       Outline only; skip the summary and chapter titles.
       --limit <n>        Maximum downloads to list. Default 20.
       --json             Machine-readable output.
 
@@ -91,6 +95,8 @@ public enum CLIParser: Sendable {
             return CLIRequest(command: .version, json: json)
         case "transcribe":
             return CLIRequest(command: try parseTranscribe(rest), json: json)
+        case "chapters":
+            return CLIRequest(command: try parseChapters(rest), json: json)
         case "search":
             return CLIRequest(command: try parseSearch(rest), json: json)
         case "index":
@@ -141,6 +147,26 @@ public enum CLIParser: Sendable {
             throw CLIParseError.missingArgument(command: "transcribe", what: "a file to read")
         }
         return .transcribe(file: file, language: language, writesTextFile: writesText)
+    }
+
+    private static func parseChapters(_ arguments: [String]) throws -> CLICommand {
+        var file: String?
+        var noSummary = false
+        for argument in arguments {
+            if argument == "--no-summary" {
+                noSummary = true
+            } else if argument.hasPrefix("--") {
+                throw CLIParseError.unknownCommand(argument)
+            } else if file == nil {
+                file = argument
+            } else {
+                throw CLIParseError.unexpectedArgument(argument)
+            }
+        }
+        guard let file else {
+            throw CLIParseError.missingArgument(command: "chapters", what: "a file to outline")
+        }
+        return .chapters(file: file, noSummary: noSummary)
     }
 
     private static func parseSearch(_ arguments: [String]) throws -> CLICommand {

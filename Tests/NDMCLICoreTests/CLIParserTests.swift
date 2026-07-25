@@ -184,3 +184,45 @@ final class CLIParserTests: XCTestCase {
         XCTAssertTrue(CLIParser.usage.contains("macOS 26"))
     }
 }
+
+final class CLIChaptersParsingTests: XCTestCase {
+    func testChaptersTakesAFile() throws {
+        XCTAssertEqual(
+            try CLIParser.parse(["chapters", "/tmp/talk.mp4"]).command,
+            .chapters(file: "/tmp/talk.mp4", noSummary: false)
+        )
+    }
+
+    func testChaptersRequiresAFile() {
+        XCTAssertThrowsError(try CLIParser.parse(["chapters"])) { error in
+            XCTAssertEqual(
+                error as? CLIParseError,
+                .missingArgument(command: "chapters", what: "a file to outline")
+            )
+        }
+    }
+
+    func testNoSummarySkipsTheModel() throws {
+        XCTAssertEqual(
+            try CLIParser.parse(["chapters", "/tmp/a.mp4", "--no-summary"]).command,
+            .chapters(file: "/tmp/a.mp4", noSummary: true)
+        )
+    }
+
+    func testASecondFileIsRefused() {
+        XCTAssertThrowsError(try CLIParser.parse(["chapters", "/a.mp4", "/b.mp4"])) { error in
+            XCTAssertEqual(error as? CLIParseError, .unexpectedArgument("/b.mp4"))
+        }
+    }
+
+    func testAnUnknownFlagIsRefused() {
+        XCTAssertThrowsError(try CLIParser.parse(["chapters", "--wat", "/a.mp4"])) { error in
+            XCTAssertEqual(error as? CLIParseError, .unknownCommand("--wat"))
+        }
+    }
+
+    func testUsageMentionsChapters() {
+        XCTAssertTrue(CLIParser.usage.contains("chapters"))
+        XCTAssertTrue(CLIParser.usage.contains("--no-summary"))
+    }
+}

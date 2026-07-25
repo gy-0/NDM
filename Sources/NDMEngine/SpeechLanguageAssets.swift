@@ -36,12 +36,17 @@ public struct SpeechLanguageAssets: Sendable {
 
     public enum PreparationFailure: LocalizedError, Equatable {
         case unsupportedLanguage
+        /// Could not be prepared right now for a reason that is not about support —
+        /// most often the system's reservation budget, which is small and shared.
+        case temporarilyUnavailable(String)
         case downloadFailed(String)
 
         public var errorDescription: String? {
             switch self {
             case .unsupportedLanguage:
                 return "This Mac cannot read speech in that language"
+            case .temporarilyUnavailable(let detail):
+                return "The language could not be prepared right now: \(detail)"
             case .downloadFailed(let detail):
                 return "Preparing the language failed: \(detail)"
             }
@@ -61,6 +66,20 @@ public struct SpeechLanguageAssets: Sendable {
     ) async throws {
         if cancelToken?.isCancelled == true { return }
 
+        // Check readiness before creating anything. Two reasons, both learned the hard
+        // way: `readiness` and this method must agree (they used to disagree, one
+        // saying ready while the other said unsupported), and creating an installation
+        // request reserves a locale against a budget measured at five — so the common
+        // case of an already-installed language must never spend one.
+        switch await Self.readiness(forLocaleIdentifier: localeIdentifier) {
+        case .ready:
+            return
+        case .unsupported:
+            throw PreparationFailure.unsupportedLanguage
+        case .needsPreparation, .preparing:
+            break
+        }
+
         let transcriber = SpeechTranscriber(
             locale: Locale(identifier: localeIdentifier),
             preset: .timeIndexedTranscriptionWithAlternatives
@@ -70,9 +89,16 @@ public struct SpeechLanguageAssets: Sendable {
         do {
             request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
         } catch {
-            // Measured: an unsupported language throws here rather than returning
-            // nil. Reported as unsupported, not as a broken download.
-            throw PreparationFailure.unsupportedLanguage
+            // Do not report every throw as "unsupported". Measured error codes: 4 is an
+            // unsupported configuration, while 11 came back once the reservation budget
+            // was exhausted after five requests. Telling someone their language is
+            // unsupported when the truth is "not right now" sends them somewhere there
+            // is no fix.
+            let nsError = error as NSError
+            if nsError.code == 4 {
+                throw PreparationFailure.unsupportedLanguage
+            }
+            throw PreparationFailure.temporarilyUnavailable(error.localizedDescription)
         }
         guard let request else { return }  // already installed
 

@@ -1009,7 +1009,10 @@ public actor DownloadManager {
 
     /// Read a task's subtitles, following the naming C1-5 settled on: `Movie.srt`,
     /// or `Movie.transcribed.srt` when the site had already supplied one.
-    static func subtitleSegments(for task: DownloadTask) -> [TranscriptSegment]? {
+    ///
+    /// Public because the command line outlines a file from its existing subtitles, and
+    /// duplicating the naming rules there would be how the two conventions drift apart.
+    public static func subtitleSegments(for task: DownloadTask) -> [TranscriptSegment]? {
         guard let folder = task.folderPath, !task.filename.isEmpty else { return nil }
         let directory = URL(fileURLWithPath: folder, isDirectory: true)
         let stem = (task.filename as NSString).deletingPathExtension

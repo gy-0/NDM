@@ -256,3 +256,82 @@ final class CLIJSONOutputTests: XCTestCase {
         XCTAssertEqual(object["error"] as? String, "something went wrong")
     }
 }
+
+final class CLIChaptersOutputTests: XCTestCase {
+    private let outline = [
+        TranscriptChapter(startSeconds: 0, endSeconds: 60, text: "开场介绍背景与动机", segmentCount: 5, title: "开场"),
+        TranscriptChapter(startSeconds: 125, endSeconds: 260, text: "接着讲索引怎么建", segmentCount: 8, title: "索引"),
+    ]
+
+    func testOutlineIsPasteableMarkdown() {
+        let text = CLIOutput.chaptersText(outline, summary: "讲了两件事。", modelAvailable: true)
+        XCTAssertEqual(text, "讲了两件事。\n\n- 0:00  开场\n- 2:05  索引\n")
+    }
+
+    /// An unnamed chapter still needs something to show, so it borrows its own opening.
+    func testAnUnnamedChapterFallsBackToItsOpeningWords() {
+        let unnamed = [
+            TranscriptChapter(startSeconds: 0, endSeconds: 60, text: "开场介绍背景与动机", segmentCount: 5),
+        ]
+        let text = CLIOutput.chaptersText(unnamed, summary: nil, modelAvailable: true)
+        XCTAssertTrue(text.contains("开场介绍背景与动机"))
+    }
+
+    /// A missing summary with no reason reads like a bug, so the absence is explained.
+    func testAMissingSummaryIsExplainedWhenTheModelIsUnavailable() {
+        let text = CLIOutput.chaptersText(outline, summary: nil, modelAvailable: false)
+        XCTAssertTrue(text.lowercased().contains("no summary"))
+        XCTAssertTrue(text.contains("- 0:00  开场"), "the outline must still be there")
+    }
+
+    func testNoExplanationWhenTheModelWasAvailableButSkipped() {
+        let text = CLIOutput.chaptersText(outline, summary: nil, modelAvailable: true)
+        XCTAssertFalse(text.lowercased().contains("no summary"))
+    }
+
+    func testEmptyChaptersSaySo() {
+        XCTAssertTrue(
+            CLIOutput.chaptersText([], summary: nil, modelAvailable: true)
+                .lowercased().contains("no speech")
+        )
+    }
+
+    func testChaptersJSONShape() throws {
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(try CLIOutput.chaptersJSON(
+                    outline,
+                    summary: "讲了两件事。",
+                    modelAvailable: true
+                ).utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(object["summary"] as? String, "讲了两件事。")
+        XCTAssertEqual(object["modelAvailable"] as? Bool, true)
+        let chapters = try XCTUnwrap(object["chapters"] as? [[String: Any]])
+        XCTAssertEqual(chapters.count, 2)
+        XCTAssertEqual(chapters[1]["at"] as? String, "2:05")
+        XCTAssertEqual(chapters[1]["title"] as? String, "索引")
+        XCTAssertEqual(chapters[1]["segments"] as? Int, 8)
+    }
+
+    /// An unnamed chapter omits the field so a script can tell "no title" from "".
+    func testUntitledChaptersOmitTheTitleField() throws {
+        let unnamed = [
+            TranscriptChapter(startSeconds: 0, endSeconds: 10, text: "内容", segmentCount: 1),
+        ]
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(try CLIOutput.chaptersJSON(
+                    unnamed,
+                    summary: nil,
+                    modelAvailable: false
+                ).utf8)
+            ) as? [String: Any]
+        )
+        let chapters = try XCTUnwrap(object["chapters"] as? [[String: Any]])
+        XCTAssertNil(chapters[0]["title"])
+        XCTAssertNil(object["summary"])
+        XCTAssertEqual(object["modelAvailable"] as? Bool, false)
+    }
+}

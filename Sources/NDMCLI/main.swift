@@ -115,6 +115,57 @@ case .rebuildIndex:
         fail("rebuild failed: \(error.localizedDescription)", json: request.json, code: 70)
     }
 
+case .chapters(let file, let noSummary):
+    let mediaURL = URL(fileURLWithPath: file).standardizedFileURL
+    // Read the subtitles already on disk rather than transcribing again: an outline
+    // is cheap once the words exist, and re-reading speech to get one would be minutes
+    // of work for something already saved.
+    guard let segments = DownloadManager.subtitleSegments(
+        for: DownloadTask(
+            url: "",
+            filename: mediaURL.lastPathComponent,
+            folderPath: mediaURL.deletingLastPathComponent().path
+        )
+    ), !segments.isEmpty else {
+        fail(
+            "no subtitles beside \(mediaURL.lastPathComponent); run `ndm transcribe` first",
+            json: request.json,
+            code: 66
+        )
+    }
+
+    var chapters = TranscriptChapters.detect(segments: segments)
+    var summary: String?
+    var modelAvailable = false
+    if #available(macOS 26, *), !noSummary {
+        modelAvailable = TranscriptNarrator.isAvailable
+        if modelAvailable {
+            let narration = await TranscriptNarrator().narrate(
+                chapters: chapters,
+                languageName: "the same language as the transcript"
+            )
+            summary = narration.summary
+            chapters = TranscriptNarrator.applying(narration, to: chapters)
+        }
+    }
+    if request.json {
+        do {
+            print(try CLIOutput.chaptersJSON(
+                chapters,
+                summary: summary,
+                modelAvailable: modelAvailable
+            ))
+        } catch {
+            fail("could not render the outline: \(error.localizedDescription)", json: true, code: 70)
+        }
+    } else {
+        print(CLIOutput.chaptersText(
+            chapters,
+            summary: summary,
+            modelAvailable: modelAvailable
+        ), terminator: "")
+    }
+
 case .transcribe(let file, let language, let writesTextFile):
     guard #available(macOS 26, *) else {
         fail(

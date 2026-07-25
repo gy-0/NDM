@@ -77,6 +77,55 @@ public enum CLIOutput: Sendable {
         return lines.joined(separator: "\n")
     }
 
+    /// Markdown, because an outline's most likely destination is somewhere else — a
+    /// note, an issue, a message. Plain text that pastes well beats a prettier table.
+    public static func chaptersText(
+        _ chapters: [TranscriptChapter],
+        summary: String?,
+        modelAvailable: Bool
+    ) -> String {
+        guard !chapters.isEmpty else { return "No speech found.\n" }
+        var lines: [String] = []
+        if let summary {
+            lines.append(summary)
+            lines.append("")
+        } else if !modelAvailable {
+            // Explain the absence. A missing summary with no reason reads like a bug.
+            lines.append("(No summary: this Mac cannot write one. The outline is still below.)")
+            lines.append("")
+        }
+        for chapter in chapters {
+            let name = chapter.title ?? String(chapter.text.prefix(24))
+            lines.append("- \(clock(chapter.startSeconds))  \(name)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    public static func chaptersJSON(
+        _ chapters: [TranscriptChapter],
+        summary: String?,
+        modelAvailable: Bool
+    ) throws -> String {
+        var payload: [String: Any] = [
+            "modelAvailable": modelAvailable,
+            "chapters": chapters.map { chapter -> [String: Any] in
+                var entry: [String: Any] = [
+                    "startSeconds": chapter.startSeconds,
+                    "at": clock(chapter.startSeconds),
+                    "endSeconds": chapter.endSeconds,
+                    "segments": chapter.segmentCount,
+                    "text": chapter.text,
+                ]
+                // Omitted rather than blank when unnamed, so a script can tell
+                // "no title" from "empty title".
+                if let title = chapter.title { entry["title"] = title }
+                return entry
+            },
+        ]
+        if let summary { payload["summary"] = summary }
+        return try json(payload)
+    }
+
     // MARK: - JSON
 
     /// A stable shape for scripts. Field names are part of the contract; renaming one
