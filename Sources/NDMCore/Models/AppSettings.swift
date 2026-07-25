@@ -41,6 +41,31 @@ public enum AccentTheme: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
+/// When a transcript is produced without being asked for.
+///
+/// Default is `off`, and deliberately so. Reading speech is fast — measured at
+/// roughly sixteen times realtime — but a two-hour lecture is still minutes of
+/// sustained CPU, it writes two files the user did not request, and the first use
+/// of a language may pull a download. Most decisively: a large share of audio
+/// downloads are music, and transcribing a song produces nonsense. Discovery
+/// belongs to a visible one-click action on a finished download, not to work
+/// happening quietly on every file.
+public enum TranscriptionScope: String, Codable, Sendable, Equatable, CaseIterable {
+    /// Never automatic; still available on demand.
+    case off
+    /// Audio-only downloads, where the point is usually the words.
+    case audioOnly
+    case everything
+
+    public var settingsTitle: String {
+        switch self {
+        case .off: return L10n.t("Only when I ask", "只在我要求时")
+        case .audioOnly: return L10n.t("Audio downloads", "音频下载")
+        case .everything: return L10n.t("Every video and audio download", "所有视频和音频")
+        }
+    }
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var downloadDirectory: URL
     public var maxConnections: Int
@@ -80,11 +105,35 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// How to choose video quality: always ask, always highest, or highest up
     /// to a cap. Optional for backward-compatible decoding. Default: highest.
     public var mediaQuality: MediaQualityPreference?
+    /// Nil until the user chooses; see `transcriptionScopePreference`.
+    public var transcriptionScope: TranscriptionScope?
+    /// BCP-47 tag forcing a transcription language, e.g. `zh-Hans`. Nil means let
+    /// `TranscriptionWorkflow` decide from the source, the title and the user's own
+    /// languages — which is right far more often than a fixed choice.
+    public var transcriptionLanguage: String?
+    /// Whether a readable `.txt` accompanies the subtitles. On by default: the
+    /// transcript is the artifact that makes a download searchable and re-readable,
+    /// and it costs kilobytes.
+    public var transcriptionWritesTextFile: Bool?
 
     public var smartConnectionsEnabled: Bool { smartConnections ?? true }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
     public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
     public var mediaQualityPreference: MediaQualityPreference { mediaQuality ?? .highest }
+    public var transcriptionScopePreference: TranscriptionScope { transcriptionScope ?? .off }
+    public var transcriptionWritesTextFileEnabled: Bool { transcriptionWritesTextFile ?? true }
+
+    /// Whether a finished download should be transcribed without being asked.
+    ///
+    /// Category rather than file extension, so it agrees with what the rest of the
+    /// app already decided this download is.
+    public func transcribesAutomatically(category: DownloadCategory) -> Bool {
+        switch transcriptionScopePreference {
+        case .off: return false
+        case .audioOnly: return category == .audio
+        case .everything: return category == .audio || category == .video
+        }
+    }
 
     public init(
         downloadDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0],
@@ -110,7 +159,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
         customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,
         smartConnections: Bool? = true,
-        mediaQuality: MediaQualityPreference? = nil
+        mediaQuality: MediaQualityPreference? = nil,
+        transcriptionScope: TranscriptionScope? = nil,
+        transcriptionLanguage: String? = nil,
+        transcriptionWritesTextFile: Bool? = nil
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -134,6 +186,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.languageMode = languageMode
         self.smartConnections = smartConnections
         self.mediaQuality = mediaQuality
+        self.transcriptionScope = transcriptionScope
+        self.transcriptionLanguage = transcriptionLanguage
+        self.transcriptionWritesTextFile = transcriptionWritesTextFile
     }
 }
 

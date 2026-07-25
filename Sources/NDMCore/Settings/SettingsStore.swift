@@ -28,6 +28,12 @@ public enum SettingsStore {
         var smartConnections: Bool?
         var onboardingCompleted: Bool?
         var clipboardWatch: Bool?
+        /// Was missing entirely, so a chosen quality was silently discarded on every
+        /// relaunch even though the settings window read and wrote it.
+        var mediaQuality: MediaQualityPreference?
+        var transcriptionScope: String?
+        var transcriptionLanguage: String?
+        var transcriptionWritesTextFile: Bool?
     }
 
     public static func load() -> AppSettings {
@@ -70,6 +76,11 @@ public enum SettingsStore {
         )
         settings.onboardingCompleted = disk.onboardingCompleted
         settings.clipboardWatch = disk.clipboardWatch
+        settings.mediaQuality = disk.mediaQuality
+        settings.transcriptionScope = disk.transcriptionScope
+            .flatMap(TranscriptionScope.init(rawValue:))
+        settings.transcriptionLanguage = disk.transcriptionLanguage
+        settings.transcriptionWritesTextFile = disk.transcriptionWritesTextFile
         return settings
     }
 
@@ -102,7 +113,11 @@ public enum SettingsStore {
             languageMode: settings.languageMode.rawValue,
             smartConnections: settings.smartConnections,
             onboardingCompleted: settings.onboardingCompleted,
-            clipboardWatch: settings.clipboardWatch
+            clipboardWatch: settings.clipboardWatch,
+            mediaQuality: settings.mediaQuality,
+            transcriptionScope: settings.transcriptionScope?.rawValue,
+            transcriptionLanguage: settings.transcriptionLanguage,
+            transcriptionWritesTextFile: settings.transcriptionWritesTextFile
         )
         if let data = try? JSONEncoder().encode(disk) {
             defaults.set(data, forKey: key)

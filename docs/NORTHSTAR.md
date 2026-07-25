@@ -121,7 +121,51 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | C1-3 | `SpeechTranscriptionEngine` | ✅ 2026-07-24 文件 → `[TranscriptSegment]`，含取消、真实进度、`environment()` 接缝；8 个集成测试用 `say` 生成真语音 |
 | C1-4 | 语言包就绪呈现为明确阶段 | ✅ 2026-07-24 `LanguageAssetReadiness`（纯，11 测试）+ `SpeechLanguageAssets`（7 个实机测试）。**下载执行未验证**，见日志 |
 | C1-5 | 接入交付 | 🟡 2026-07-24 `TranscriptDelivery`：命名已定、落盘、进 CompletionStack、阶段并入单调旅程，端到端实测通过。**「何时自动运行」留给 C1-6**（那是设置项） |
-| C1-6 | 设置开关（默认行为待定）+ ScribeStudio 入口降级为"编辑" | 含视觉改动，需停下等审阅 |
+| C1-6 | 设置开关 + ScribeStudio 降级 + 完成页呈现 | 🟡 2026-07-24 **数据层已落地并有测试**（`TranscriptionScope` 等，默认关闭）；**UI 方案已写在下方专节等审**，未实现 |
+
+
+## C1-6 UI 方案（待审，未实现）
+
+> 2026-07-24 写。C1-1…C1-5 已把能力做通并有端到端测试，但**用户还碰不到它**。下面全部是视觉/交互改动，按协议停下等审。数据层（设置项）已经落地并有测试，不在待审范围。
+
+### ① 文稿需要自己的 `CompletionArtifact.Kind`
+
+现状：`txt` 被映射到既有的 `.metadata`，所以文稿在完成页里被标成"元数据"——不准确。加 `case transcript` 会破坏 `CompletionStackView` 的三处穷举 switch，需要新文案与图标：
+
+- **文案**：`文稿` / `Transcript`（不要叫"字幕文本"，那会和 `.srt` 混淆）
+- **图标**：建议 `text.alignleft`（SF Symbols）。字幕已有的是什么图标要照现有那套对齐，避免两个都用 `captions.bubble` 造成分不清
+- 排序：`transcript` 的 rawValue 放在 `subtitle` 之后、`cover` 之前（用户找"能读的东西"时，字幕和文稿应该挨着）
+
+### ② 完成页 / 详情页怎么呈现
+
+**克制原则**：主文件仍是唯一主角，文稿与字幕是折叠的附属文件——这已经是 CompletionStack 现有行为，不需要改结构，只需要：
+
+- 文稿行加一个**主动作**：点击直接打开（`.txt` 系统会用文本编辑器打开），而不是只有"在访达中显示"
+- 详情页的"更多"菜单里加「生成文稿」——**这是转写唯一的发现入口**，因为自动转写默认关闭。它必须出现在已完成的音视频任务上；不可用时（macOS 太旧、语言不支持）按 `TranscriptionWorkflow.UnavailableReason` 的人话文案显示为禁用+解释，而不是干脆不出现（不出现 = 用户以为软件没这功能）
+- 转写进行中：复用现有单调旅程，阶段文案取 `TranscriptDelivery.Stage.title(languageName:)`；语言包首次下载显示 `LanguageAssetReadiness` 的文案。**不要新开进度条**
+
+### ③ A11：`deliveryNote` 怎么呈现
+
+数据与文案已就绪（`DeliveryNote.title` / `.detail`，目前只有 `audioTrackMissing`）。建议：完成页在主文件行**下方**加一行安静的说明（不是黄色警告条、不是弹窗）——它不是错误，是一个需要知道的事实。详情页同一位置复用。用户忽略它也不影响使用。
+
+### ④ ScribeStudio 入口降级
+
+现状 `ScribeStudioIntegration` 是"转写"的唯一实现。降级后：
+
+- 文案从「转写」改为**「在 ScribeStudio 中编辑」**
+- 位置从主动作移到详情页「更多」菜单，与「生成文稿」并列且排在其后
+- 仅当已安装时出现（现有 `isAvailable(for:)` 已经这么判断了）
+- 叙事：**NDM 给你可读可搜的文稿，ScribeStudio 是要精修时才进的棚**（说话人分离、口水词清理、逐段编辑）
+
+### ⑤ 设置页放哪
+
+放在**「下载完成后」**那一节（和分类文件夹、完成弹窗同组），不要单开一节：转写是交付的一部分，不是一个独立子系统。三个控件：
+
+- 「自动生成文稿」下拉：`TranscriptionScope` 三档（只在我要求时 / 音频下载 / 所有视频和音频）
+- 「同时保存可读文稿」勾选（`transcriptionWritesTextFile`，默认开）
+- 「语言」下拉：默认「自动」，可覆盖为具体语言（`transcriptionLanguage`）
+
+**默认值判断（已落地，理由在此）**：自动转写**默认关闭**。理由不是保守：① 实测约 16 倍实时听起来很快，但两小时讲座仍是数分钟持续 CPU；② 会在用户没要求的情况下多写两个文件；③ 首次用某语言可能触发下载；④ **最关键**——音频下载里相当大比例是音乐，给歌曲转写只会产出垃圾。所以发现路径应该是完成页上一个显眼的一键动作，不是悄悄替所有人干活。
 
 ### 明确不做
 
@@ -151,6 +195,7 @@ yt-dlp 是免费公开的，谁都能 `pip install`。所以一个要收钱的 G
 | 2026-07-24 | 基线体检 | `swift build` 绿；三个测试目标全绿。把上一会话 16 个未提交文件收成 `d94ad1c` 拿到干净基线 |
 | 2026-07-24 | A1 引擎 POST 修复 | 提交 `1a37291`。3 个新测试；`LocalRangeServer` 增加方法/body 捕获并按 Content-Length 读完整请求（原来单次 receive 只拿到头，body 断言会假通过）。全套回归绿；期间遇到的一次 YouTube 403 已验证为限流抖动、非回归 → 立项 A2 |
 | 2026-07-24 | A2 触网测试门 | `LiveNetworkGate` + 3 个自测；4 个 live 测试改为显式开启，两个方向都验证过（默认跳过、`=1` 真的会跑）。确认没有发行脚本依赖 `swift test`，所以发行门禁未被削弱。顺带发现仓库无 CI → 立项 A6 |
+| 2026-07-24 | C1-6 数据层 + UI 方案待审 | 按协议不动 UI。落地设置数据层：`TranscriptionScope`（三档）、语言覆盖、是否写 `.txt`，全部沿用既有 `Bool?` + 计算属性默认值的惯例（向后兼容），加 `SettingsInputValidation.transcriptionLanguageTag` 严格校验形状但**不**校验可用性（哪些语言存在是运行时系统的答案，不是这个文件的）。15 个测试含未知枚举值不得开启自动工作、旧配置仍可加载。**默认自动转写关闭**，最关键的理由是音频下载里相当大比例是音乐，给歌曲转写产出垃圾；发现路径应是完成页一个显眼的一键动作。**顺手修了一个既有真 bug**：`mediaQuality` 在 `AppSettings` 上、设置界面也读写它，但 `SettingsStore.DiskSettings` 里根本没有这个字段——用户选的画质偏好每次重启静默丢失，不报错，就是不生效。已补进持久化并加测试。C1-6 的完整 UI 方案（文稿的 Kind/文案/图标、完成页呈现、A11 的 `deliveryNote` 呈现、ScribeStudio 降级、设置页位置）写进 NORTHSTAR 专节等审。490 passed |
 | 2026-07-24 | C1-5 接入交付 | `TranscriptDelivery`：命名规则纯函数化、落盘、阶段建模，26 个测试含一个**真实端到端**（`say` 生成中文 → 引擎 → `讲座录音.srt` + `讲座录音.txt` 落在媒体旁 → 被 `completionStack` 收为附属文件，CJK 文件名完整）。三个决定：① **命名沿用无语言后缀**，撞名时写 `片名.transcribed.srt` 而非纯编号——编号只说"有两个"不说"哪个是哪个"；**站点自带字幕绝不被机器转写覆盖**，有测试钉住原文件字节不变；② 把 `DownloadManager` 私有的 `uniqueDestination`（Finder 风格编号）提为 `DownloadFilename.uniqueURL` 共享，按要求复用而非另写一套，5 个测试含多段扩展名 `Talk.zh-Hans.srt` → `Talk.zh-Hans (2).srt`；③ 阶段复用**既有** `DownloadPhase.subtitles` / `.preparing` / `.finalizing`，不发明新词汇、不开第二条进度条。**两处按协议停手**：给 `CompletionArtifact.Kind` 加 `transcript` case 会破坏 UI 的穷举 switch，需要新的用户可见文案和图标——那是你该审的东西，所以退回把 `txt` 映射到既有 `.metadata`，本轮 diff 零 UI 改动；「转写何时自动运行」是设置项，留给 C1-6，不由"接线完成"这个动作替所有用户默默打开。475 passed |
 | 2026-07-24 | C1-4 语言包就绪阶段 | 探针实测推翻两个默认假设：① **`AssetInventory.status(forModules:)` 对已安装的 `zh_CN` 也返回 `.supported` 而不是 `.installed`**——它根本不能回答"是否就绪"，改用 `SpeechTranscriber.installedLocales`；② `assetInstallationRequest` 对**不支持**的语言是**抛错**（SFSpeechError 4）而非返回 nil，必须当"不支持"处理而不是下载失败。另两个事实：新建请求的 `progress` 是 indeterminate、total=0，所以下载启动前**不能显示 0%**（`preparing(fraction: nil)` 与 `preparing(fraction: 0)` 是不同状态，有测试钉住）；创建请求会预留 locale 且上限只有 5（`maximumReservedLocales`），所以就绪检查绝不能靠创建请求来试探——预留随请求对象生命周期释放，实测探针退出后 `reservedLocales` 回到 `[]`，没在机器上留东西。**诚实边界**：上一轮我预判"需要下载这条路本机无法触发"，实际**检测**能真实验证（系统里有支持但未安装的语言，实机测试确实报出 `.needsPreparation`）；但 `downloadAndInstall()` 我没有调用——它会往你机器上装真实模型，测试套件不该未经允许做这件事。所以下载执行路径**未验证**，只有状态机被纯逻辑测试覆盖。453 passed |
 | 2026-07-24 | C1-3 转写引擎 | `SpeechTranscriptionEngine`（`@available(macOS 26, *)`）只做「文件 → `[TranscriptSegment]`」，资格判断留在 C1-1、序列化留在 C1-2。**先探清结构再写**：`Result.range` 是结果级 `CMTimeRange`，`audioTimeRange` 属性给的是**字级**（中文每字一个 run）——字级对字幕太细，所以引擎出结果级分段，短段交给 C1-2 的合并逻辑吸收（实测 4 段里就有一段只含一个「用」）。`environment()` 是 C1-1 纯规则与真实系统之间唯一的接缝。**两个用探针实测出来的坑**：① analyzer 收到**零个 buffer** 会永久挂死在 `start` —— 所以已取消的运行必须在建 analyzer 之前就抛出，零帧文件也直接返回空；② `cancelAndFinishNow()` **不会**终止 `transcriber.results`，只有 `finalizeAndFinishThroughEndOfInput()` 会 —— 取消路径必须主动 `collector.cancel()`，等它自然结束就是挂住。第一版正是这么写的，测试跑到 600s 超时才暴露。8 个测试单独跑各 <1 秒。435 passed |
