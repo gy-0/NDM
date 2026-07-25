@@ -132,7 +132,7 @@ final class InspectorActionButton: NSButton {
             // Nothing inside a filled pill needs clipping, and clipping would eat
             // the shadow.
             layer.masksToBounds = false
-            layer.shadowColor = NDMChrome.accent.cgColor
+            layer.shadowColor = (overrideFilledColor ?? NDMChrome.accent).cgColor
             layer.shadowOpacity = isEnabled ? (isPressed ? 0.10 : 0.24) : 0
             layer.shadowRadius = isPressed ? 2 : 5
             layer.shadowOffset = CGSize(width: 0, height: isPressed ? -1 : -2)
@@ -174,8 +174,15 @@ final class InspectorActionButton: NSButton {
         }
     }
 
+    /// Overrides the accent for a filled action whose meaning is not "proceed" —
+    /// a destructive confirmation. Kept as a property rather than another `Style`
+    /// so hover, press and the tinted lift all keep working unchanged.
+    var overrideFilledColor: NSColor? {
+        didSet { needsDisplay = true }
+    }
+
     private var filledFill: NSColor {
-        let accent = NDMChrome.accent
+        let accent = overrideFilledColor ?? NDMChrome.accent
         guard isEnabled else { return accent.withAlphaComponent(0.35) }
         // Darken on interaction (same recipe as NewDownloadActionButton) —
         // bleaching with white looks washed-out on both light and dark chrome.

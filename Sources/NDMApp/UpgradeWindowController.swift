@@ -285,37 +285,36 @@ final class UpgradeWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func enterLicenseClicked() {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = L10n.proEnterLicense
-        alert.informativeText = L10n.proLicensePrompt
-        alert.addButton(withTitle: L10n.proActivate)
-        alert.addButton(withTitle: L10n.cancel)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
         field.placeholderString = "\(LicenseStore.keyPrefix).…"
-        alert.accessoryView = field
-        alert.layout()
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { [weak self, weak field] response in
-            guard response == .alertFirstButtonReturn,
-                  let self,
-                  let key = field?.stringValue else { return }
+        NDMDialog.present(
+            title: L10n.proEnterLicense,
+            body: L10n.proLicensePrompt,
+            subject: .info,
+            buttons: [
+                NDMDialog.Button(L10n.proActivate),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            accessory: field,
+            host: window
+        ) { [weak self, weak field] result in
+            guard result.buttonIndex == 0, let self, let key = field?.stringValue else { return }
             Task { @MainActor in self.activate(key) }
         }
     }
 
     private func activate(_ key: String) {
-        let confirmation = NSAlert()
         do {
             let license = try LicenseStore.activate(key)
             guard LicenseStore.isPro else {
-                confirmation.messageText = L10n.proInvalidKey
-                showConfirmation(confirmation)
+                showRejection(L10n.proInvalidKey)
                 return
             }
-            confirmation.messageText = L10n.proActivated(license.email)
-            guard let window else { return }
-            confirmation.beginSheetModal(for: window) { [weak self] _ in
+            NDMDialog.present(
+                title: L10n.proActivated(license.email),
+                subject: .info,
+                host: window
+            ) { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
                     let continuation = self.onActivated
@@ -323,17 +322,14 @@ final class UpgradeWindowController: NSWindowController, NSWindowDelegate {
                 }
             }
         } catch LicenseError.expired {
-            confirmation.messageText = L10n.proExpiredKey
-            showConfirmation(confirmation)
+            showRejection(L10n.proExpiredKey)
         } catch {
-            confirmation.messageText = L10n.proInvalidKey
-            showConfirmation(confirmation)
+            showRejection(L10n.proInvalidKey)
         }
     }
 
-    private func showConfirmation(_ alert: NSAlert) {
-        guard let window else { return }
-        alert.beginSheetModal(for: window)
+    private func showRejection(_ title: String) {
+        NDMDialog.present(title: title, subject: .failure, host: window)
     }
 
     @objc private func cancelClicked() {

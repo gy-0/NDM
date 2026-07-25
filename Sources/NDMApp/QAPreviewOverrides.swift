@@ -114,6 +114,12 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_COMPLETION"] == "1"
     }
 
+    /// Opens the remove confirmation for the initially selected task, so the
+    /// dialog can be inspected through its real code path rather than a mock.
+    static var showRemoveConfirm: Bool {
+        isEnabled && environment["NDM_QA_SHOW_REMOVE_CONFIRM"] == "1"
+    }
+
     static var showAbout: Bool {
         isEnabled && environment["NDM_QA_SHOW_ABOUT"] == "1"
     }
@@ -201,6 +207,7 @@ enum QAPreviewOverrides {
     static let selectedFilenameContains: String? = nil
     static let showUpgrade = false
     static let showCompletion = false
+    static let showRemoveConfirm = false
     static let showAbout = false
     static let showOnboarding = false
     static let showMediaAccess = false

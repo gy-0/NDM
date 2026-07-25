@@ -1340,14 +1340,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         Task {
             do {
                 let n = try await manager.importLegacyDB(from: url)
-                let alert = NSAlert()
-                alert.messageText = L10n.importedCount(n)
-                alert.runModal()
+                NDMDialog.present(
+                    title: L10n.importedCount(n),
+                    subject: .info,
+                    host: self.window
+                )
             } catch {
-                let alert = NSAlert()
-                alert.messageText = L10n.importFailed
-                alert.informativeText = error.localizedDescription
-                alert.runModal()
+                NDMDialog.present(
+                    title: L10n.importFailed,
+                    body: error.localizedDescription,
+                    subject: .failure,
+                    host: self.window
+                )
             }
         }
     }
@@ -1449,12 +1453,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                let alert = NSAlert(error: error)
-                alert.messageText = L10n.t(
-                    "Couldn’t change login settings",
-                    "无法更改登录项设置"
+                NDMDialog.present(
+                    title: L10n.t(
+                        "Couldn’t change login settings",
+                        "无法更改登录项设置"
+                    ),
+                    body: error.localizedDescription,
+                    subject: .failure,
+                    host: window
                 )
-                alert.beginSheetModal(for: window!)
                 return
             }
         }

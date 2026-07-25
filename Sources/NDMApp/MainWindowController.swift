@@ -565,6 +565,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             if QAPreviewOverrides.showProgress, let id = selectedTaskID {
                 showProgress(for: id)
             }
+            if QAPreviewOverrides.showRemoveConfirm, let id = selectedTaskID {
+                DispatchQueue.main.async { [weak self] in self?.deleteTask(id) }
+            }
         }
         // Keep the selected task only while it stays visible. Never select on
         // the user's behalf after the one-time launch focus: this runs from the
@@ -1307,29 +1310,27 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
 
     private func deleteTask(_ id: Int64) {
         let name = allTasks.first(where: { $0.id == id })?.filename ?? L10n.t("this download", "此下载")
-        let alert = NSAlert()
-        alert.messageText = L10n.removeConfirm(name)
-        alert.informativeText = L10n.removeConfirmBody
-        alert.addButton(withTitle: L10n.removeTask)
-        alert.addButton(withTitle: L10n.removeAndTrash)
-        alert.addButton(withTitle: L10n.cancel)
-        let response = alert.runModal()
-        let deleteFile: Bool
-        switch response {
-        case .alertFirstButtonReturn:
-            deleteFile = false
-        case .alertSecondButtonReturn:
-            deleteFile = true
-        default:
-            return
-        }
-        Task {
-            do {
-                try await manager.remove(taskID: id, deleteFile: deleteFile)
-                if selectedTaskID == id { selectedTaskID = nil }
-                await reload()
-            } catch {
-                showAlert(error)
+        NDMDialog.present(
+            title: L10n.removeConfirm(name),
+            body: L10n.removeConfirmBody,
+            subject: .file(name: name, cover: CoverArtCache.shared.image(for: id)),
+            buttons: [
+                NDMDialog.Button(L10n.remove, isDestructive: true),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            option: NDMDialog.Option(title: L10n.alsoTrashFile),
+            host: window
+        ) { [weak self] result in
+            guard let self, result.buttonIndex == 0 else { return }
+            let deleteFile = result.optionIsOn
+            Task {
+                do {
+                    try await self.manager.remove(taskID: id, deleteFile: deleteFile)
+                    if self.selectedTaskID == id { self.selectedTaskID = nil }
+                    await self.reload()
+                } catch {
+                    self.showAlert(error)
+                }
             }
         }
     }
@@ -1341,33 +1342,36 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             return
         }
         let current = task?.url ?? ""
-        let alert = NSAlert()
-        alert.messageText = L10n.renewURL
-        alert.informativeText = L10n.renewURLBody
-        alert.addButton(withTitle: L10n.renewAndStart)
-        alert.addButton(withTitle: L10n.cancel)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
         field.stringValue = current
         field.isEditable = true
         field.isSelectable = true
         field.usesSingleLineMode = true
-        alert.accessoryView = field
-        alert.layout()
-        alert.window.initialFirstResponder = field
-        _ = alert.window.makeFirstResponder(field)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        Task {
-            do {
-                try await manager.renewURL(taskID: id, newURL: url)
-                selectedTaskID = id
-                try await manager.start(taskID: id)
-                await reload()
-                focusStartedDownload(id)
-            } catch {
-                showAlert(error)
-                await reload()
+        NDMDialog.present(
+            title: L10n.renewURL,
+            body: L10n.renewURLBody,
+            subject: .caution,
+            buttons: [
+                NDMDialog.Button(L10n.renewAndStart),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            accessory: field,
+            host: window
+        ) { [weak self] result in
+            guard let self, result.buttonIndex == 0 else { return }
+            let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty else { return }
+            Task {
+                do {
+                    try await self.manager.renewURL(taskID: id, newURL: url)
+                    self.selectedTaskID = id
+                    try await self.manager.start(taskID: id)
+                    await self.reload()
+                    self.focusStartedDownload(id)
+                } catch {
+                    self.showAlert(error)
+                    await self.reload()
+                }
             }
         }
     }
@@ -1576,22 +1580,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             // produces every file at once rather than only the last one.
             copyFiles(for: taskIDs)
         case .delete:
-            let alert = NSAlert()
-            alert.messageText = L10n.removeConfirmMultiple(taskIDs.count)
-            alert.informativeText = L10n.removeConfirmBody
-            alert.addButton(withTitle: L10n.removeTask)
-            alert.addButton(withTitle: L10n.removeAndTrash)
-            alert.addButton(withTitle: L10n.cancel)
-            let response = alert.runModal()
-            let deleteFile: Bool
-            switch response {
-            case .alertFirstButtonReturn: deleteFile = false
-            case .alertSecondButtonReturn: deleteFile = true
-            default: return
-            }
-            Task {
-                for id in taskIDs { try? await manager.remove(taskID: id, deleteFile: deleteFile) }
-                await reload()
+            NDMDialog.present(
+                title: L10n.removeConfirmMultiple(taskIDs.count),
+                body: L10n.removeConfirmBody,
+                subject: .caution,
+                buttons: [
+                    NDMDialog.Button(L10n.remove, isDestructive: true),
+                    NDMDialog.Button(L10n.cancel, isCancel: true),
+                ],
+                option: NDMDialog.Option(title: L10n.alsoTrashFile),
+                host: window
+            ) { [weak self] result in
+                guard let self, result.buttonIndex == 0 else { return }
+                let deleteFile = result.optionIsOn
+                Task {
+                    for id in taskIDs {
+                        try? await self.manager.remove(taskID: id, deleteFile: deleteFile)
+                    }
+                    await self.reload()
+                }
             }
         default:
             break
@@ -1603,10 +1610,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     }
 
     private func showAlert(message: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
-        alert.runModal()
+        NDMDialog.present(
+            title: message,
+            body: detail,
+            subject: .failure,
+            host: window
+        )
     }
 }
 

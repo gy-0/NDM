@@ -130,7 +130,12 @@ final class TaskPropertiesWindowController: NSWindowController {
                 try await manager.updateTask(task)
                 window?.close()
             } catch {
-                NSAlert(error: error).runModal()
+                NDMDialog.present(
+                    title: L10n.somethingWentWrong,
+                    body: error.localizedDescription,
+                    subject: .failure,
+                    host: self.window
+                )
             }
         }
     }

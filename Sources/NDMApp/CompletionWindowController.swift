@@ -546,14 +546,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func showActionFailure(message: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
+        NDMDialog.present(title: message, body: detail, subject: .failure, host: window)
     }
 
     @objc private func showMoreActions(_ sender: NSButton) {

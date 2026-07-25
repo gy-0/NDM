@@ -1,5 +1,5 @@
 #!/bin/zsh
-# The three merge gates, in one command, so they mean the same thing to a human
+# The four merge gates, in one command, so they mean the same thing to a human
 # as they do to an automated development loop.
 #
 # Deliberately excluded: anything that touches the network. Those fail on rate
@@ -26,7 +26,7 @@ record() {
   fi
 }
 
-bold "1/3  swift build"
+bold "1/4  swift build"
 if build_log="$(cd "$ROOT" && swift build 2>&1)"; then
   record "swift build" ok ""
 else
@@ -54,7 +54,7 @@ else
   record "swift test" fail "$tally"
 fi
 
-bold "3/3  NDM Relay (node)"
+bold "3/4  NDM Relay (node)"
 if (( ! ${+commands[node]} )); then
   record "relay tests" fail "node is not installed"
 else
@@ -78,6 +78,22 @@ else
   else
     record "relay tests" fail "$relay_fail failed, $relay_pass passed"
   fi
+fi
+
+bold "4/4  design contracts"
+# Every alert in this app is an NDMDialog. NSAlert is the platform default: a grey
+# slab with a stock icon, which is exactly the surface a designed product must not
+# hand back to the system. Replacing them all is easy to undo one careless `let
+# alert = NSAlert()` at a time, so the absence is a gate rather than a convention.
+alert_uses="$(cd "$ROOT" && grep -rn 'NSAlert' Sources/NDMApp \
+  --include='*.swift' \
+  | grep -v '^Sources/NDMApp/NDMDialog.swift:' \
+  | grep -v '///' || true)"
+if [[ -z "$alert_uses" ]]; then
+  record "design contracts" ok "no NSAlert outside NDMDialog"
+else
+  print -r -- "$alert_uses" | head -5
+  record "design contracts" fail "$(print -r -- "$alert_uses" | grep -c .) NSAlert use(s)"
 fi
 
 print

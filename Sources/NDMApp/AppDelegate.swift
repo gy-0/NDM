@@ -246,10 +246,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         } catch {
-            let alert = NSAlert()
-            alert.messageText = L10n.failedToStart
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+            // No window exists yet, so this one is legitimately app-modal.
+            NDMDialog.runModal(
+                title: L10n.failedToStart,
+                body: error.localizedDescription,
+                subject: .failure
+            )
             NSApp.terminate(nil)
         }
     }
@@ -267,12 +269,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let sender else { return }
             var shouldTerminate = true
             if active {
-                let alert = NSAlert()
-                alert.messageText = L10n.downloadsInProgress
-                alert.informativeText = L10n.quitWithActiveBody
-                alert.addButton(withTitle: L10n.quit)
-                alert.addButton(withTitle: L10n.cancel)
-                shouldTerminate = alert.runModal() == .alertFirstButtonReturn
+                // Synchronous on purpose: AppKit is waiting on the reply below.
+                shouldTerminate = NDMDialog.runModal(
+                    title: L10n.downloadsInProgress,
+                    body: L10n.quitWithActiveBody,
+                    subject: .caution,
+                    buttons: [
+                        NDMDialog.Button(L10n.quit, isDestructive: true),
+                        NDMDialog.Button(L10n.cancel, isCancel: true),
+                    ]
+                ).buttonIndex == 0
             }
             self.terminationCheckInFlight = false
             sender.reply(toApplicationShouldTerminate: shouldTerminate)
@@ -1068,10 +1074,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             NSLog("handleBrowserDownloadRequest failed: \(error.localizedDescription)")
             let diag = DownloadDiagnostic.classify(error)
-            let alert = NSAlert()
-            alert.messageText = diag.title
-            alert.informativeText = "\(diag.message)\n(\(diag.rawLabel))"
-            alert.runModal()
+            NDMDialog.present(
+                title: diag.title,
+                body: "\(diag.message)\n(\(diag.rawLabel))",
+                subject: .failure,
+                host: mainWindow?.window
+            )
         }
     }
 
@@ -1256,9 +1264,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showBrowserMediaAlert(message: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
-        alert.runModal()
+        NDMDialog.present(
+            title: message,
+            body: detail,
+            subject: .caution,
+            host: mainWindow?.window
+        )
     }
 }

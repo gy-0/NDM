@@ -61,6 +61,12 @@ public enum L10n: Sendable {
 
     public static var cancel: String { t("Cancel", "取消") }
     public static var close: String { t("Close", "关闭") }
+    public static var ok: String { t("OK", "好") }
+    /// Replaces a third button in the remove confirmation: the file's fate is an
+    /// option on one decision, not a second decision.
+    public static var alsoTrashFile: String {
+        t("Also move the file to Trash", "同时将文件移到废纸篓")
+    }
     public static var save: String { t("Save", "保存") }
     public static var open: String { t("Open", "打开") }
     public static var quickLook: String { t("Quick Look", "快速查看") }
@@ -632,10 +638,16 @@ public enum L10n: Sendable {
 
     public static var removeConfirmBody: String {
         t(
-            "Remove from the list, or also move the downloaded file to Trash.",
-            "从列表移除，或同时把已下载文件移到废纸篓。"
+            "It will be removed from your download list.",
+            "它将从下载列表中移除。"
         )
     }
+
+    /// Neutral verb for the remove confirmation's primary button. `removeTask`
+    /// ("Remove Task" / "仅移除任务") was worded for the old three-button layout,
+    /// where "only" distinguished it from "Remove and Trash"; with the file's fate
+    /// now a checkbox, "only" contradicts the checkbox above it.
+    public static var remove: String { t("Remove", "移除") }
 
     public static var renewURLBody: String {
         t("Paste a fresh URL. Partial segments are kept.", "粘贴新的链接。已下载分段会保留。")

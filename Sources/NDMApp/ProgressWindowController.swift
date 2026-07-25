@@ -1466,7 +1466,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
                     try await manager.start(taskID: taskID)
                     startPolling()
                 } catch {
-                    NSAlert(error: error).runModal()
+                    showActionFailure(
+                        message: L10n.somethingWentWrong,
+                        detail: error.localizedDescription
+                    )
                 }
             } else {
                 await manager.pause(taskID: taskID)
@@ -1507,14 +1510,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func showActionFailure(message: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
+        NDMDialog.present(title: message, body: detail, subject: .failure, host: window)
     }
 
     @objc private func showMoreActions(_ sender: NSButton) {
@@ -1563,12 +1559,17 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let cap = LicenseStore.connectionsCap(isPro: LicenseStore.isPro)
         if n > cap {
             connectionsPopup.selectItem(at: cap - 1)
-            let alert = NSAlert()
-            alert.messageText = L10n.proGateConnectionsTitle
-            alert.informativeText = L10n.proGateConnectionsBody
-            alert.addButton(withTitle: L10n.proCTA)
-            alert.addButton(withTitle: L10n.cancel)
-            if alert.runModal() == .alertFirstButtonReturn {
+            NDMDialog.present(
+                title: L10n.proGateConnectionsTitle,
+                body: L10n.proGateConnectionsBody,
+                subject: .info,
+                buttons: [
+                    NDMDialog.Button(L10n.proCTA),
+                    NDMDialog.Button(L10n.cancel, isCancel: true),
+                ],
+                host: window
+            ) { result in
+                guard result.buttonIndex == 0 else { return }
                 UpgradeWindowController.present()
             }
             return
@@ -1579,7 +1580,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
                 startPolling()
                 await refresh()
             } catch {
-                NSAlert(error: error).runModal()
+                showActionFailure(
+                    message: L10n.somethingWentWrong,
+                    detail: error.localizedDescription
+                )
             }
         }
     }
@@ -1596,30 +1600,36 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func presentManualRenew() {
-        let alert = NSAlert()
-        alert.messageText = L10n.renewURL
-        alert.informativeText = L10n.renewURLBodyProgress
-        alert.addButton(withTitle: L10n.renew)
-        alert.addButton(withTitle: L10n.cancel)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         field.isEditable = true
         field.isSelectable = true
         field.usesSingleLineMode = true
-        alert.accessoryView = field
-        alert.layout()
-        alert.window.initialFirstResponder = field
-        _ = alert.window.makeFirstResponder(field)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        Task {
-            do {
-                try await manager.renewURL(taskID: taskID, newURL: url)
-                try await manager.start(taskID: taskID)
-                startPolling()
-                await refresh()
-            } catch {
-                NSAlert(error: error).runModal()
+        NDMDialog.present(
+            title: L10n.renewURL,
+            body: L10n.renewURLBodyProgress,
+            subject: .caution,
+            buttons: [
+                NDMDialog.Button(L10n.renew),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            accessory: field,
+            host: window
+        ) { [weak self] result in
+            guard let self, result.buttonIndex == 0 else { return }
+            let url = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty else { return }
+            Task {
+                do {
+                    try await self.manager.renewURL(taskID: self.taskID, newURL: url)
+                    try await self.manager.start(taskID: self.taskID)
+                    self.startPolling()
+                    await self.refresh()
+                } catch {
+                    self.showActionFailure(
+                        message: L10n.somethingWentWrong,
+                        detail: error.localizedDescription
+                    )
+                }
             }
         }
     }

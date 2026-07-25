@@ -85,10 +85,12 @@ final class BrowsersWindowController: NSWindowController {
             NSWorkspace.shared.activateFileViewerSelecting([url])
             return
         }
-        let alert = NSAlert()
-        alert.messageText = L10n.extensionFolderMissing
-        alert.informativeText = L10n.extensionFolderHint
-        alert.runModal()
+        NDMDialog.present(
+            title: L10n.extensionFolderMissing,
+            body: L10n.extensionFolderHint,
+            subject: .caution,
+            host: window
+        )
     }
 
     @objc private func copyEndpoint(_ sender: NSButton) {
