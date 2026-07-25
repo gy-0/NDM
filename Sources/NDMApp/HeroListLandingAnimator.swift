@@ -1,4 +1,5 @@
 import AppKit
+import NDMCore
 
 /// Destination geometry for Hero → list-row landing (host coordinates).
 struct HeroListLandingDestination {
@@ -102,6 +103,7 @@ final class HeroListLandingAnimator {
         }
         completionHandler = completion
 
+        let schedule = HeroLandingSchedule(duration: duration)
         let destPlate = destination.rowFrame.insetBy(dx: 6, dy: 2)
 
         // Destination text layers may not exist yet (built at cover time).
@@ -121,18 +123,21 @@ final class HeroListLandingAnimator {
             source: source,
             destination: destination,
             destPlate: destPlate,
-            duration: duration
+            schedule: schedule
         )
 
-        // Crossfade live row in late — after the morph has mostly settled.
-        let revealAt = duration * 0.82
+        // Crossfade live row in late — after the morph has mostly settled. Both
+        // deadlines come from the schedule, which measures from the animation's
+        // begin time rather than from this call; scheduling them from `now` left
+        // the teardown ~3ms after the last animated frame, and one busy frame then
+        // yanked the still-opaque cover — the "pop".
         let revealWork = DispatchWorkItem { [weak self] in
             guard self?.animatingTaskID == source.taskID else { return }
             self?.revealWorkItem = nil
             onReveal?()
         }
         revealWorkItem = revealWork
-        DispatchQueue.main.asyncAfter(deadline: .now() + revealAt, execute: revealWork)
+        DispatchQueue.main.asyncAfter(deadline: .now() + schedule.revealAt, execute: revealWork)
 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -144,7 +149,7 @@ final class HeroListLandingAnimator {
             handler?()
         }
         finishWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.02, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + schedule.teardownAt, execute: work)
     }
 
     /// Convenience: cover + morph in one call (when layout is already settled).
@@ -364,9 +369,12 @@ final class HeroListLandingAnimator {
         source: HeroListLandingSource,
         destination: HeroListLandingDestination,
         destPlate: NSRect,
-        duration: TimeInterval
+        schedule: HeroLandingSchedule
     ) {
-        let begin = CACurrentMediaTime() + 1.0 / 60.0
+        // One frame out, so the group cannot start mid-commit. The wall-clock
+        // reveal/teardown timers are derived from the same offset.
+        let begin = CACurrentMediaTime() + schedule.beginOffset
+        let duration = schedule.duration
         let timing = Self.morphTiming
 
         // Commit final model values; presentation interpolates from current freeze.
