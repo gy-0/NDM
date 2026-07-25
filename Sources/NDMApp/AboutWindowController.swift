@@ -57,9 +57,26 @@ final class AboutWindowController: NSWindowController {
             font: .systemFont(ofSize: 13, weight: .medium),
             color: .labelColor
         )
+        // The facts are the controls. A row whose value you might want carries its
+        // own affordance, so there is no button elsewhere in the window referring
+        // back to a line of text sitting right here.
         let specs = NSStackView(views: [
-            SpecRow(label: L10n.dataLocation, value: dataPath),
-            SpecRow(label: L10n.bridgeLabel, value: bridgeEndpoint),
+            SpecRow(
+                label: L10n.dataLocation,
+                value: dataPath,
+                action: .init(symbol: "folder", hint: L10n.revealDataFolder) { [weak self] in
+                    self?.revealDataFolder()
+                    return nil
+                }
+            ),
+            SpecRow(
+                label: L10n.bridgeLabel,
+                value: bridgeEndpoint,
+                action: .init(symbol: "doc.on.doc", hint: L10n.copyBridgeAddress) { [weak self] in
+                    self?.copyBridgeAddress()
+                    return L10n.copiedToClipboard
+                }
+            ),
             SpecRow(label: L10n.extensionLabel, value: "NDM Relay"),
         ])
         specs.orientation = .vertical
@@ -67,31 +84,24 @@ final class AboutWindowController: NSWindowController {
         specs.spacing = 8
         specs.translatesAutoresizingMaskIntoConstraints = false
 
-        let copyBridge = Self.outlinedButton(title: L10n.copyBridgeAddress)
-        copyBridge.target = self
-        copyBridge.action = #selector(copyBridge(_:))
-        let revealData = Self.outlinedButton(title: L10n.revealDataFolder)
-        revealData.target = self
-        revealData.action = #selector(revealData(_:))
+        // One button, because there is one thing left to do. Two gray outlined
+        // rectangles flanking it added chrome, not capability.
         let close = InspectorActionButton(title: L10n.close, style: .filled)
         close.target = self
         close.action = #selector(closeWindow(_:))
         close.keyEquivalent = "\r"
-        // Return already activates it; the exterior focus ring on top of a filled
-        // accent pill just reads as a stray outline.
+        // Return already activates it; the exterior focus ring on a filled accent
+        // pill just reads as a stray outline.
         close.focusRingType = .none
+        close.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        let actions = NSStackView(views: [copyBridge, revealData, NSView(), close])
+        let actions = NSStackView(views: [NSView(), close])
         actions.orientation = .horizontal
-        actions.spacing = 9
         actions.alignment = .centerY
         actions.translatesAutoresizingMaskIntoConstraints = false
-        let actionHeight = NDMChrome.sheetActionHeight
         NSLayoutConstraint.activate([
-            copyBridge.heightAnchor.constraint(equalToConstant: actionHeight),
-            revealData.heightAnchor.constraint(equalToConstant: actionHeight),
-            close.heightAnchor.constraint(equalToConstant: actionHeight),
-            close.widthAnchor.constraint(greaterThanOrEqualToConstant: 84),
+            close.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight),
+            close.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
         ])
 
         let deck = NSStackView(views: [tagline, specs, actions])
@@ -135,17 +145,6 @@ final class AboutWindowController: NSWindowController {
         }
     }
 
-    /// Hairline outlined pill — the same secondary-action treatment the completion
-    /// panel uses, so a dialog's buttons read as buttons instead of as loose text.
-    private static func outlinedButton(title: String) -> InspectorActionButton {
-        let button = InspectorActionButton(title: title, style: .flat)
-        button.usesOutlinedHover = true
-        button.wantsLayer = true
-        button.layer?.borderWidth = 1
-        button.layer?.borderColor = NDMChrome.hairline.cgColor
-        return button
-    }
-
     private static func label(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.font = font
@@ -154,13 +153,13 @@ final class AboutWindowController: NSWindowController {
         return field
     }
 
-    @objc private func copyBridge(_ sender: Any?) {
+    private func copyBridgeAddress() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(bridgeEndpoint, forType: .string)
     }
 
-    @objc private func revealData(_ sender: Any?) {
+    private func revealDataFolder() {
         let expanded = (dataPath as NSString).expandingTildeInPath
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: expanded)
     }
@@ -242,12 +241,38 @@ private final class AboutBandView: NSView {
     }
 }
 
-/// One `label — value` line. The value is monospaced because every one of them is
-/// a path or an address the user may want to read character by character.
+/// One `label — value` line, and the control for that value.
+///
+/// A path or an address is something you want to *do* something with, so the row
+/// carries the action instead of a button somewhere else pointing back at it. The
+/// affordance stays invisible until the pointer is over the row — at rest this is a
+/// list of facts, and it only becomes a control when you reach for it.
+///
+/// No gray cushion: hover is a low accent tint, matching the rails elsewhere in the
+/// app rather than the boxed-in look of a system dialog.
 private final class SpecRow: NSView {
-    init(label: String, value: String) {
+    struct Action {
+        let symbol: String
+        let hint: String
+        /// Returns confirmation text to flash in place of the value, if any.
+        let perform: () -> String?
+    }
+
+    private let field = NSTextField(labelWithString: "")
+    private let glyph = NSImageView()
+    private let value: String
+    private let action: Action?
+    private var isHovering = false
+    private var trackingAreaRef: NSTrackingArea?
+    private var confirmationWork: DispatchWorkItem?
+
+    init(label: String, value: String, action: Action? = nil) {
+        self.value = value
+        self.action = action
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = NDMChrome.controlCornerRadius
 
         let key = NSTextField(labelWithString: label)
         key.font = .systemFont(ofSize: 11.5, weight: .semibold)
@@ -255,27 +280,108 @@ private final class SpecRow: NSView {
         key.translatesAutoresizingMaskIntoConstraints = false
         key.setContentHuggingPriority(.required, for: .horizontal)
 
-        let field = NSTextField(labelWithString: value)
+        field.stringValue = value
         field.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
         field.textColor = .secondaryLabelColor
         field.lineBreakMode = .byTruncatingMiddle
         field.translatesAutoresizingMaskIntoConstraints = false
-        // Selectable so the path can be picked out without a Copy button for each.
-        field.isSelectable = true
+
+        glyph.image = action.flatMap { NDMChrome.symbol($0.symbol, pointSize: 11, weight: .semibold) }
+        glyph.contentTintColor = NDMChrome.accent
+        glyph.alphaValue = 0
+        glyph.translatesAutoresizingMaskIntoConstraints = false
+        glyph.setAccessibilityElement(false)
 
         addSubview(key)
         addSubview(field)
+        addSubview(glyph)
         NSLayoutConstraint.activate([
-            key.leadingAnchor.constraint(equalTo: leadingAnchor),
-            key.topAnchor.constraint(equalTo: topAnchor),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            key.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             key.widthAnchor.constraint(equalToConstant: 84),
             field.leadingAnchor.constraint(equalTo: key.trailingAnchor, constant: 10),
-            field.trailingAnchor.constraint(equalTo: trailingAnchor),
             field.firstBaselineAnchor.constraint(equalTo: key.firstBaselineAnchor),
-            bottomAnchor.constraint(equalTo: key.bottomAnchor),
+            field.trailingAnchor.constraint(lessThanOrEqualTo: glyph.leadingAnchor, constant: -8),
+            glyph.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            glyph.centerYAnchor.constraint(equalTo: key.centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: 14),
+            bottomAnchor.constraint(equalTo: key.bottomAnchor, constant: 5),
         ])
+
+        if let action {
+            toolTip = action.hint
+            setAccessibilityElement(true)
+            setAccessibilityRole(.button)
+            setAccessibilityLabel("\(label): \(action.hint)")
+        } else {
+            // Nothing to do with it, so let it be selected and read instead.
+            field.isSelectable = true
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingAreaRef { removeTrackingArea(existing) }
+        guard action != nil else { return }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+        refreshHover()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+        refreshHover()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let action else { return super.mouseDown(with: event) }
+        guard let confirmation = action.perform() else { return }
+        flash(confirmation)
+    }
+
+    /// Say it happened where it happened, rather than in a separate alert.
+    private func flash(_ text: String) {
+        confirmationWork?.cancel()
+        field.stringValue = text
+        field.textColor = NDMChrome.accent
+        field.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        let restore = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.field.stringValue = self.value
+            self.field.textColor = .secondaryLabelColor
+            self.field.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        }
+        confirmationWork = restore
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: restore)
+    }
+
+    private func refreshHover() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            glyph.animator().alphaValue = isHovering ? 1 : 0
+        }
+        layer?.backgroundColor = isHovering
+            ? NDMChrome.accent.withAlphaComponent(0.08).cgColor
+            : NSColor.clear.cgColor
+        NSCursor.pointingHand.set()
+        if !isHovering { NSCursor.arrow.set() }
+    }
+
+    override func updateLayer() {
+        layer?.backgroundColor = isHovering
+            ? NDMChrome.accent.withAlphaComponent(0.08).cgColor
+            : NSColor.clear.cgColor
+    }
 }

@@ -114,6 +114,31 @@ final class InspectorActionButton: NSButton {
             case .filled:
                 layer?.backgroundColor = filledFill.cgColor
             }
+            applyDepth()
+        }
+    }
+
+    /// A primary action should sit *above* the surface it acts on rather than be
+    /// painted flat onto it — a flat accent rectangle is what makes a dialog look
+    /// like a form. The lift is tinted with the accent, not black: a grey drop
+    /// shadow under a coloured pill reads as dirt, an accent one reads as light.
+    ///
+    /// Pressed pulls it down toward the surface instead of merely darkening the
+    /// fill, so the control has somewhere to travel.
+    private func applyDepth() {
+        guard let layer else { return }
+        switch style {
+        case .filled:
+            // Nothing inside a filled pill needs clipping, and clipping would eat
+            // the shadow.
+            layer.masksToBounds = false
+            layer.shadowColor = NDMChrome.accent.cgColor
+            layer.shadowOpacity = isEnabled ? (isPressed ? 0.10 : 0.24) : 0
+            layer.shadowRadius = isPressed ? 2 : 5
+            layer.shadowOffset = CGSize(width: 0, height: isPressed ? -1 : -2)
+        case .flat:
+            layer.masksToBounds = true
+            layer.shadowOpacity = 0
         }
     }
 
