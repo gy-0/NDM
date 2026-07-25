@@ -13,6 +13,7 @@ public actor HLSEngine {
     private let session: URLSession
     private let token = CancelToken()
     private var logHandle: FileHandle?
+    private var liveLimits = LiveLimits.default
 
     public init(
         taskID: Int64,
@@ -91,11 +92,20 @@ public actor HLSEngine {
         try FileManager.default.createDirectory(at: tsDir, withIntermediateDirectories: true)
 
         var completed: Int64 = 0
-        try await downloadSegments(media, into: tsDir, label: "TS", completedBase: &completed)
+        // A playlist without #EXT-X-ENDLIST is a live stream: what we just fetched is a
+        // sliding window, not the whole thing. Downloading it once would hand the user
+        // the last thirty seconds and call it done — which is what this engine did until
+        // now, silently.
+        var capturedSegmentCount: Int?
+        if !media.endList {
+            capturedSegmentCount = try await captureLive(startingFrom: media, into: tsDir)
+        } else {
+            try await downloadSegments(media, into: tsDir, label: "TS", completedBase: &completed)
+        }
 
         // Separate audio rendition: download its segments too.
         var audioMergedURL: URL?
-        if let audio = streams.audio, !audio.segments.isEmpty {
+        if capturedSegmentCount == nil, let audio = streams.audio, !audio.segments.isEmpty {
             let audioDir = workDirectory.appendingPathComponent("audio", isDirectory: true)
             try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
             try await downloadSegments(audio, into: audioDir, label: "Audio", completedBase: &completed)
@@ -113,7 +123,7 @@ public actor HLSEngine {
 
         // Merge in the work directory first, then finalize into the destination.
         let mergedURL = workDirectory.appendingPathComponent("merged.ts")
-        try mergeTS(count: media.segments.count, from: tsDir, to: mergedURL)
+        try mergeTS(count: capturedSegmentCount ?? media.segments.count, from: tsDir, to: mergedURL)
 
         // "下完就是能播的 MP4": lossless remux by default when ffmpeg is present.
         // Fake/broken streams (or exotic codecs) fail fast → keep the TS as-is.
@@ -163,6 +173,142 @@ public actor HLSEngine {
         log("DownloadEngine State Changed : Merging... -> Completed")
         closeLog()
         return finalURL
+    }
+
+    // MARK: - Live capture
+
+    /// Ceilings on an inherently unbounded recording.
+    ///
+    /// A live stream has no end, so something has to stop it. These are safety rails,
+    /// not a feature: without them a forgotten capture fills the disk.
+    public struct LiveLimits: Sendable, Equatable {
+        public var maximumDuration: TimeInterval
+        public var maximumBytes: Int64
+
+        public init(
+            maximumDuration: TimeInterval = 4 * 3600,
+            maximumBytes: Int64 = 8 * 1024 * 1024 * 1024
+        ) {
+            self.maximumDuration = maximumDuration
+            self.maximumBytes = maximumBytes
+        }
+
+        public static let `default` = LiveLimits()
+    }
+
+    public func setLiveLimits(_ limits: LiveLimits) {
+        liveLimits = limits
+    }
+
+    /// Follow a rolling playlist until it ends, the user stops it, or a limit is hit.
+    ///
+    /// Returns the number of segments written, which is what the merge needs — the
+    /// playlist's own count is meaningless here, since it only ever describes the
+    /// current window.
+    private func captureLive(
+        startingFrom first: HLSPlaylist.Media,
+        into dir: URL
+    ) async throws -> Int {
+        log("Playlist has no #EXT-X-ENDLIST: capturing a live stream.")
+        var tracker = LiveSegmentTracker()
+        var media = first
+        var bytesWritten: Int64 = 0
+        let startedAt = Date()
+        var keyCache: [String: Data] = [:]
+
+        while true {
+            if token.isCancelled {
+                // Stopping a live capture is the normal way it ends, not a failure —
+                // but pausing one is meaningless, since the missed span can never be
+                // recovered. Both keep what was captured.
+                log("Live capture stopped by user after \(tracker.takenCount) segment(s).")
+                break
+            }
+
+            for pending in tracker.absorb(media) {
+                if token.isCancelled { break }
+                guard let segmentURL = HLSPlaylist.resolveURL(
+                    pending.segment.uri,
+                    against: request.url
+                ) else {
+                    throw HLSError.unresolvedURL(pending.segment.uri)
+                }
+                var data = try await fetchData(segmentURL, byteRange: pending.segment.byteRange)
+                if let key = pending.segment.key, key.isAES128 {
+                    data = try Self.decryptAES128(
+                        data,
+                        key: try await liveKeyData(for: key, cache: &keyCache),
+                        iv: Self.ivData(hex: key.ivHex, mediaSequence: pending.sequence)
+                    )
+                }
+                let partURL = dir.appendingPathComponent(
+                    String(format: "seg_%05d.ts", pending.outputIndex)
+                )
+                try data.write(to: partURL, options: .atomic)
+                tracker.commit(pending)
+                bytesWritten += Int64(data.count)
+                // Bytes are the honest measure while recording: there is no total to be
+                // a fraction of, so reporting a percentage would mean inventing one.
+                progress.completedBytes = bytesWritten
+                progress.totalBytes = bytesWritten
+            }
+
+            if media.endList {
+                log("Stream ended (#EXT-X-ENDLIST) after \(tracker.takenCount) segment(s).")
+                break
+            }
+            if Date().timeIntervalSince(startedAt) >= liveLimits.maximumDuration {
+                log("Live capture reached its time limit after \(tracker.takenCount) segment(s).")
+                break
+            }
+            if bytesWritten >= liveLimits.maximumBytes {
+                log("Live capture reached its size limit at \(bytesWritten) bytes.")
+                break
+            }
+            if token.isCancelled { break }
+
+            let delay = LiveSegmentTracker.refreshDelay(targetDuration: media.targetDuration)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if token.isCancelled { break }
+
+            // Refetch the playlist. A refresh that fails is not fatal: a live stream
+            // hiccups, and giving up on one bad response would throw away the rest of
+            // the recording.
+            do {
+                let text = try await fetchText(request.url)
+                if case .media(let refreshed) = try HLSPlaylist.parse(text) {
+                    media = absolutize(refreshed, base: request.url)
+                }
+            } catch {
+                log("Playlist refresh failed, retrying: \(error.localizedDescription)")
+            }
+        }
+
+        if tracker.missedSegmentCount > 0 {
+            // Said out loud rather than hidden: the recording has holes because the
+            // window slid past while we were behind.
+            log("Live capture missed \(tracker.missedSegmentCount) segment(s); the recording has gaps.")
+        }
+        guard tracker.takenCount > 0 else {
+            throw EngineError.invalidResponse
+        }
+        return tracker.takenCount
+    }
+
+    /// Key fetch with a cache shared across refreshes, since a live stream rotates keys
+    /// over hours and re-fetching the same one every few seconds would be wasteful.
+    private func liveKeyData(
+        for key: HLSPlaylist.EncryptionKey,
+        cache: inout [String: Data]
+    ) async throws -> Data {
+        guard let uri = key.uri,
+              let keyURL = HLSPlaylist.resolveURL(uri, against: request.url) else {
+            throw HLSError.missingKey
+        }
+        if let cached = cache[keyURL.absoluteString] { return cached }
+        let data = try await fetchData(keyURL)
+        cache[keyURL.absoluteString] = data
+        return data
     }
 
     /// Download every segment of one media playlist into `dir` (seg_%05d.ts),
