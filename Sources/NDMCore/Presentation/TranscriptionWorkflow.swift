@@ -303,7 +303,9 @@ public enum TranscriptionWorkflow: Sendable {
 
     // MARK: - Identifier matching
 
-    static func normalized(_ identifier: String) -> String {
+    /// Public because the engine layer must compare identifiers the same way this
+    /// file does — two spellings of one language pack are the same pack.
+    public static func normalized(_ identifier: String) -> String {
         identifier
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "-", with: "_")
@@ -334,7 +336,7 @@ public enum TranscriptionWorkflow: Sendable {
 
     /// Resolve a tag against what the system supports, returning the identifier in
     /// the system's own spelling so the engine gets something it recognises.
-    static func match(tag: String, in supported: [String]) -> String? {
+    public static func match(tag: String, in supported: [String]) -> String? {
         let candidates = candidates(for: tag)
         for candidate in candidates {
             if let hit = supported.first(where: { normalized($0) == candidate }) {
