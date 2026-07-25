@@ -208,7 +208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let renderPath = QAPreviewOverrides.renderToPath {
                 // Give the window one full layout + a beat for async covers, then
                 // draw it offscreen and quit. No display server involvement.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                // Long enough for async cover art to land; a render that catches
+                // the loading state documents the loading state, not the design.
+                let settle = ProcessInfo.processInfo.environment["NDM_QA_RENDER_DELAY"]
+                    .flatMap(Double.init) ?? 5.0
+                DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
                     QAWindowRenderer.renderMainWindow(to: renderPath)
                     NSApp.terminate(nil)
                 }
