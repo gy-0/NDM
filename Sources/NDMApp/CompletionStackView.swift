@@ -294,6 +294,10 @@ final class CompletionStackView: NSView {
 }
 
 private final class ArtifactActionsButton: NSButton {
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     let fileURL: URL
 
     init(url: URL) {
@@ -303,7 +307,8 @@ private final class ArtifactActionsButton: NSButton {
         bezelStyle = .inline
         isBordered = false
         contentTintColor = .secondaryLabelColor
-        focusRingType = .default
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         toolTip = L10n.moreActions
         setAccessibilityLabel(L10n.t(
             "More actions for \(url.lastPathComponent)",

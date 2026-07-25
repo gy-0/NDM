@@ -484,11 +484,16 @@ private final class ToolbarSearchField: NSTextField {
 /// A temporary affordance, not another toolbar chip: no border, no permanent
 /// surface, just source-aware copy in the toolbar's existing whitespace.
 private final class ClipboardOfferButton: NSButton {
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         bezelStyle = .inline
         isBordered = false
-        focusRingType = .default
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         font = .systemFont(ofSize: 12.5, weight: .medium)
         image = NDMChrome.symbol("doc.on.clipboard", pointSize: 13, weight: .medium)
         imagePosition = .imageLeading

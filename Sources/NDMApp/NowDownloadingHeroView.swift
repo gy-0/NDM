@@ -78,12 +78,18 @@ final class NowDownloadingHeroView: NSView {
     /// Cached row for cover-art refresh without re-querying the list.
     private var currentRow: TaskRowPresentation?
 
+
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.masksToBounds = true
-        focusRingType = .default
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel(L10n.nowDownloading)

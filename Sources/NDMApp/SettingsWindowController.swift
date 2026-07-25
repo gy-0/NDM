@@ -1570,6 +1570,10 @@ private final class SettingsAccentSwitch: NSButton {
 
 /// Full-rail sidebar row — selection paints `bounds`, label stays leading.
 private final class SettingsNavigationButton: NSButton, AccentChromeRefreshing {
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     private let symbolName: String
     private let titleText: String
     private let iconView = NSImageView()
@@ -1610,7 +1614,8 @@ private final class SettingsNavigationButton: NSButton, AccentChromeRefreshing {
         self.title = ""
         isBordered = false
         bezelStyle = .inline
-        focusRingType = .default
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         setAccessibilityRole(.radioButton)
         setAccessibilityLabel(title)
 
@@ -1717,6 +1722,10 @@ private final class SettingsNavigationButton: NSButton, AccentChromeRefreshing {
 /// segment was heavier than every surrounding control. Retain native menu,
 /// keyboard and accessibility behavior, but draw a quiet shell and chevron.
 private final class SettingsPopupButton: NSPopUpButton {
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     private let chevronView = NSImageView()
 
     init() {
@@ -1725,7 +1734,8 @@ private final class SettingsPopupButton: NSPopUpButton {
         bezelStyle = .inline
         isBordered = false
         alignment = .left
-        focusRingType = .exterior
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 1

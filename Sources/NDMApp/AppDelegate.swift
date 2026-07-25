@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var languageRebuildScheduled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Focus rings answer "where will my next keystroke go". Someone who just
+        // clicked already knows; someone tabbing has no other way to find out.
+        FocusRingPolicy.install()
         L10n.apply(settings.languageMode)
         AppearanceApplicator.apply(settings.appearanceMode)
         NDMChrome.applyAccentTheme(settings.accentTheme, customHex: settings.customAccentHex)

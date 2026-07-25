@@ -81,9 +81,10 @@ final class InspectorActionButton: NSButton {
         wantsLayer = true
         applyCornerRadius()
         layer?.masksToBounds = true
-        // Native exterior ring for keyboard focus — quieter than painting our
-        // own accent stroke on every flat rail control.
-        focusRingType = .exterior
+        // Ring only when focus arrived by keyboard; `FocusRingPolicy` decides.
+        // Starting at `.none` means a pointer-driven focus never flashes one
+        // before `becomeFirstResponder` runs.
+        focusRingType = .none
     }
 
     private func applyCornerRadius() {
@@ -97,6 +98,10 @@ final class InspectorActionButton: NSButton {
                 ? NDMChrome.controlCornerRadius
                 : NDMChrome.railCornerRadius
         }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
     }
 
     override var wantsUpdateLayer: Bool { true }

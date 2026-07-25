@@ -3983,6 +3983,10 @@ private final class ContextMenuDelegate: NSObject, NSMenuDelegate {
 /// tint only — do not assign `contentTintColor` from `updateLayer`, or AppKit
 /// can re-invalidate the layer into a permanent display loop.
 private final class HoverIconButton: NSButton {
+    override func becomeFirstResponder() -> Bool {
+        adoptFocusRingPolicy(super.becomeFirstResponder())
+    }
+
     private var isHoveringMouse = false
     private var tracking: NSTrackingArea?
 
@@ -3990,7 +3994,8 @@ private final class HoverIconButton: NSButton {
         super.init(frame: .zero)
         bezelStyle = .inline
         isBordered = false
-        focusRingType = .exterior
+        // Ring only for keyboard focus — see FocusRingPolicy.
+        focusRingType = .none
         imagePosition = .imageOnly
         contentTintColor = .secondaryLabelColor
         wantsLayer = true
