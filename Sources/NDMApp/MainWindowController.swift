@@ -91,9 +91,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         // Never make the minimum larger than the active display. On compact
         // screens the inspector launches collapsed and the remaining columns
         // use smaller, still-usable floors.
+        // Floor, not a preference. 200 + 300 + 320 = 820 is every pane at its
+        // minimum simultaneously, so the window can always hold all three and a
+        // toggle never has to grow it; the rest is breathing room. Height only has
+        // to fit the toolbar, a couple of rows and the batch bar.
         window.minSize = NSSize(
-            width: min(1060, availableWidth),
-            height: min(680, availableHeight)
+            width: min(840, availableWidth),
+            height: min(520, availableHeight)
         )
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
@@ -284,7 +288,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private func configureSplit() {
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         // Room for semantic zoom without turning the navigation into a squeeze.
-        sidebarItem.minimumThickness = startsCompact ? 180 : 215
+        sidebarItem.minimumThickness = startsCompact ? 180 : 200
         sidebarItem.maximumThickness = 268
         sidebarItem.preferredThicknessFraction = 0.175
         if #available(macOS 11.0, *) {
@@ -292,12 +296,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         }
 
         let listItem = NSSplitViewItem(viewController: listController)
-        listItem.minimumThickness = startsCompact ? 320 : 420
+        // The list is the pane that yields. Its old 420 floor meant that opening
+        // the inspector could not be paid for out of the window, so AppKit paid for
+        // it by making the window wider — the user had already chosen that width.
+        // Every combination of panes now fits inside `minSize`, so a toggle
+        // redistributes space instead of resizing the window.
+        listItem.minimumThickness = startsCompact ? 260 : 300
 
         let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorController)
         // Full action labels (especially “Show in Finder”) need a real inspector,
         // not a narrow utility strip.
-        inspectorItem.minimumThickness = 360
+        inspectorItem.minimumThickness = 320
         inspectorItem.maximumThickness = 450
         inspectorItem.preferredThicknessFraction = 0.30
         inspectorItem.canCollapse = true
@@ -564,6 +573,29 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             selectedTaskID = selectedTaskID ?? qaPreferredTaskID ?? displayedRows.first?.taskID
             if QAPreviewOverrides.showProgress, let id = selectedTaskID {
                 showProgress(for: id)
+            }
+            if let qaSearch = QAPreviewOverrides.searchQuery, searchQuery.isEmpty {
+                searchQuery = qaSearch
+                contentToolbar.setSearchQuery(qaSearch)
+                rebuildDisplayedRows()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let w = self?.window else { return }
+                    NSLog("QA search width: %.0f x %.0f", w.frame.width, w.frame.height)
+                }
+            }
+            if QAPreviewOverrides.probeInspectorToggle {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    guard let self, let window = self.window,
+                          let item = self.splitController.splitViewItems.last else { return }
+                    let before = window.frame.width
+                    item.isCollapsed.toggle()
+                    window.layoutIfNeeded()
+                    let mid = window.frame.width
+                    item.isCollapsed.toggle()
+                    window.layoutIfNeeded()
+                    NSLog("QA inspector toggle: %.0f -> %.0f -> %.0f",
+                          before, mid, window.frame.width)
+                }
             }
             if QAPreviewOverrides.showRemoveConfirm, let id = selectedTaskID {
                 DispatchQueue.main.async { [weak self] in self?.deleteTask(id) }
@@ -2318,10 +2350,28 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         emptyLabel.font = .systemFont(ofSize: 20, weight: .bold)
         emptyLabel.textColor = .labelColor
         emptyLabel.alignment = .center
+        // This label carries whatever the user typed into the search field. Left
+        // unbounded it grows a single very long line, and because the window takes
+        // its `contentMinSize` from the content's fitting size, that *forces the
+        // window wider*. Worse, `emptyStack` is a direct subview rather than an
+        // arranged one, so hiding it does not remove it from layout: a long query
+        // resized the window even when the search had results and this was never on
+        // screen. Wrap it, cap it, and let it be compressed.
+        // Wrap to two lines and clip the tail. Middle-truncating a *sentence*
+        // deletes the only part carrying information — "没有匹配「…」的结果" keeps the
+        // grammar and loses the query, which is precisely backwards. Two lines is
+        // also a hard ceiling, so this can no longer grow the window vertically
+        // either.
+        emptyLabel.lineBreakMode = .byTruncatingTail
+        emptyLabel.maximumNumberOfLines = 2
+        emptyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        emptyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         emptySubtitleLabel.font = .systemFont(ofSize: 13)
         emptySubtitleLabel.textColor = .secondaryLabelColor
         emptySubtitleLabel.alignment = .center
         emptySubtitleLabel.maximumNumberOfLines = 3
+        emptySubtitleLabel.lineBreakMode = .byTruncatingTail
+        emptySubtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         emptyStack.orientation = .vertical
         emptyStack.alignment = .centerX
         emptyStack.spacing = 10
@@ -2342,6 +2392,10 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
         emptyStack.isHidden = true
         emptyStack.translatesAutoresizingMaskIntoConstraints = false
+        // A hard ceiling as well as low compression resistance: the empty state is
+        // a message, and no message is allowed to be the thing that decides how
+        // wide this window can be.
+        emptyStack.widthAnchor.constraint(lessThanOrEqualToConstant: 420).isActive = true
 
         batchBar.onStart = { [weak self] in self?.emitBatchAction(.start) }
         batchBar.onPause = { [weak self] in self?.emitBatchAction(.pause) }
@@ -3933,6 +3987,7 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.maximumNumberOfLines = 1
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         badgeLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         badgeLabel.textColor = .secondaryLabelColor
@@ -3946,6 +4001,11 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.lineBreakMode = .byTruncatingTail
+        // `lineBreakMode` alone does not truncate a label that is allowed to wrap:
+        // AppKit wraps first and only truncates the final line, which at narrow
+        // widths broke a date across two rows ("2025年7月16 / 日 14:06"). One line,
+        // then an ellipsis.
+        subtitleLabel.maximumNumberOfLines = 1
         subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         trailingLabel.alignment = .right

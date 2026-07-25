@@ -197,7 +197,22 @@ public enum L10n: Sendable {
     }
 
     public static func emptyNoMatches(_ query: String) -> String {
-        t("No matches for “\(query)”", "没有匹配「\(query)」的结果")
+        let shown = truncatedForDisplay(query)
+        return t("No matches for “\(shown)”", "没有匹配「\(shown)」的结果")
+    }
+
+    /// Shorten a user-supplied string before it goes into a sentence.
+    ///
+    /// Truncating the finished sentence instead is what produced "没有匹配 …9」的
+    /// 结果": the label's own ellipsis ate the query *and* the opening quote, so the
+    /// message stopped being a sentence. Cutting the query keeps the frame intact
+    /// and only shortens the part that is variable.
+    ///
+    /// Counted in Characters, not UTF-16 units, so a CJK query is cut where a reader
+    /// would cut it and an emoji is never split in half.
+    public static func truncatedForDisplay(_ value: String, limit: Int = 18) -> String {
+        guard value.count > limit else { return value }
+        return value.prefix(max(1, limit - 1)) + "…"
     }
 
     public static func emptyNoFilter(_ filterTitle: String) -> String {

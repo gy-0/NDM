@@ -85,7 +85,9 @@ enum QAPreviewOverrides {
               let heightRaw = environment["NDM_QA_WINDOW_HEIGHT"],
               let width = Double(widthRaw),
               let height = Double(heightRaw) else { return nil }
-        return NSSize(width: max(960, width), height: max(620, height))
+        // Floored at the window's own minimum and no higher: a scaffold stricter
+        // than the thing it tests cannot be used to check that minimum.
+        return NSSize(width: max(400, width), height: max(300, height))
     }
 
     static var performanceTaskCount: Int? {
@@ -118,6 +120,22 @@ enum QAPreviewOverrides {
     /// dialog can be inspected through its real code path rather than a mock.
     static var showRemoveConfirm: Bool {
         isEnabled && environment["NDM_QA_SHOW_REMOVE_CONFIRM"] == "1"
+    }
+
+    /// Toggles the inspector shortly after launch and logs the window width on
+    /// either side of it. The question "does opening the inspector resize the
+    /// window" is not answerable by reading constraint constants.
+    static var probeInspectorToggle: Bool {
+        isEnabled && environment["NDM_QA_PROBE_INSPECTOR_TOGGLE"] == "1"
+    }
+
+    /// Pre-fills the search field, so the "a long query resizes the window" report
+    /// can be reproduced and then measured rather than argued about.
+    static var searchQuery: String? {
+        guard isEnabled,
+              let value = environment["NDM_QA_SEARCH"],
+              !value.isEmpty else { return nil }
+        return value
     }
 
     static var showAbout: Bool {
@@ -208,6 +226,8 @@ enum QAPreviewOverrides {
     static let showUpgrade = false
     static let showCompletion = false
     static let showRemoveConfirm = false
+    static let searchQuery: String? = nil
+    static let probeInspectorToggle = false
     static let showAbout = false
     static let showOnboarding = false
     static let showMediaAccess = false
