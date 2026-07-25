@@ -81,3 +81,20 @@ test("site-native actions retain explicit accessible labels", () => {
     assert.match(adapters, /button\.setAttribute\("aria-label", button\.title\)/);
     assert.match(adapters, /正在打开 NDM/);
 });
+
+test("bilibili chip yields room instead of displacing 记笔记", () => {
+    const adapters = source("site-adapters.js");
+    // The fit ladder must exist and be driven by a measured baseline.
+    assert.match(adapters, /fitBilibiliChip/);
+    assert.match(adapters, /crowdingScore/);
+    assert.match(adapters, /fitChipMode/);
+    assert.match(adapters, /better-ndm-bilibili-compact/);
+    assert.match(adapters, /better-ndm-bilibili-yield\{display:none\}/);
+    // Concessions may only ever shrink or hide our own chip. Any rule that
+    // reaches for a native toolbar item to make room is the original bug.
+    assert.doesNotMatch(adapters, /\.video-toolbar-item-text\s*\{[^}]*display:\s*none/);
+    assert.doesNotMatch(adapters, /toolbar-right-note[^\n]*\{[^}]*(display|width|flex)/);
+    // Width is half the decision and mutation observers do not see a resize.
+    assert.match(adapters, /addEventListener\("resize"/);
+    assert.match(adapters, /removeEventListener\("resize"/);
+});

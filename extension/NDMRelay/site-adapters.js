@@ -205,6 +205,11 @@
             ".better-ndm-bilibili-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;color:inherit;cursor:pointer;font:inherit;line-height:inherit;white-space:nowrap}",
             ".better-ndm-bilibili-button:focus-visible{outline:none}",
             ".better-ndm-bilibili-button .video-toolbar-item-icon{fill:currentColor}",
+            // Two concession steps for a full toolbar. We only ever shrink or hide
+            // ourselves — never restyle 记笔记 / 稿件举报 to make room.
+            ".better-ndm-bilibili-compact .better-ndm-bilibili-label{display:none}",
+            ".better-ndm-bilibili-compact{margin-right:8px}",
+            ".better-ndm-bilibili-yield{display:none}",
             ".better-ndm-site-inline-action{display:inline-flex;align-items:center;margin-left:8px}",
             ".better-ndm-site-inline-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid rgba(120,120,128,.25);border-radius:8px;background:rgba(120,120,128,.08);color:inherit;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap}",
             ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(53,120,246,.12);border-color:rgba(53,120,246,.45);color:#3478f6;outline:none}",
@@ -223,6 +228,58 @@
         path.setAttribute("d", "M11 3a1 1 0 0 1 2 0v9.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42l2.3 2.3V3ZM5 17a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z");
         svg.appendChild(path);
         return svg;
+    }
+
+    /// How crowded a toolbar row is, as a single comparable number.
+    ///
+    /// Load-bearing definition, hence pure and duck-typed so it can be tested
+    /// without a browser. Bilibili's right-hand cluster has a fixed width budget:
+    /// adding an item without giving anything back pushes a native one out. Logged
+    /// out there is no 记笔记 to displace and the row happens to fit, which is
+    /// exactly why the bug only ever showed in a normal profile.
+    ///
+    /// Counts overflow pixels, plus a heavy penalty per native item that is either
+    /// squeezed below its own content width or pushed past the row's right edge.
+    /// `isOurs` marks the chip so our own clipping never counts against us.
+    function crowdingScore(container, isOurs) {
+        if (!container) return 0;
+        var score = Math.max(0, num(container.scrollWidth) - num(container.clientWidth));
+        var edge = rightEdge(container);
+        var children = container.children || [];
+        for (var i = 0; i < children.length; i++) {
+            var child = children[i];
+            if (!child || (isOurs && isOurs(child))) continue;
+            if (num(child.scrollWidth) - num(child.clientWidth) > 1) score += 1000;
+            if (edge !== null && rightEdge(child) > edge + 1) score += 1000;
+        }
+        return score;
+    }
+
+    function num(value) {
+        return typeof value === "number" && isFinite(value) ? value : 0;
+    }
+
+    function rightEdge(node) {
+        if (!node || typeof node.getBoundingClientRect !== "function") return null;
+        var rect = node.getBoundingClientRect();
+        return rect && typeof rect.right === "number" ? rect.right : null;
+    }
+
+    /// Richest chip rendering that does not make the row more crowded than we
+    /// found it. Pure; `observe(mode)` applies a mode and returns its score.
+    function fitChipMode(baseline, observe) {
+        var ladder = ["labelled", "compact"];
+        for (var i = 0; i < ladder.length; i++) {
+            if (observe(ladder[i]) <= baseline) return ladder[i];
+        }
+        // Out of room. Concede the slot rather than keep a native item squeezed —
+        // the resource shelf and the NDM float are still reachable.
+        observe("yield");
+        return "yield";
+    }
+
+    function isOurChipNode(node) {
+        return Boolean(node && node.dataset && node.dataset.betterNdmSiteAction);
     }
 
     function SiteAdapterManager(options) {
@@ -294,6 +351,12 @@
             if (!manager.observer && window.MutationObserver) {
                 manager.observer = new MutationObserver(function() { manager.schedule(); });
                 manager.observer.observe(target, { childList: true, subtree: true });
+            }
+            // Width is half of the fit decision, and a resize mutates nothing the
+            // observer would see.
+            if (!manager._biliResize) {
+                manager._biliResize = function() { manager.schedule(); };
+                window.addEventListener("resize", manager._biliResize);
             }
         };
         attach();
@@ -453,6 +516,9 @@
             } else if (misplaced && !more && existingWrap.parentElement !== right) {
                 right.appendChild(existingWrap);
             }
+            // Re-decide every pass: login state, SPA re-render and window width all
+            // change how much room the row has.
+            this.fitBilibiliChip(existingWrap, existingWrap.parentElement || right);
             return;
         }
         if (document.querySelector('[data-better-ndm-site-action="bilibili"]')) return;
@@ -465,7 +531,25 @@
         wrapper.appendChild(this.makeButton("bilibili", function() { return canonicalBilibiliURL(window.location.href) || pageURL; }));
         if (more && more.parentElement) more.parentElement.insertBefore(wrapper, more);
         else right.appendChild(wrapper);
+        this.fitBilibiliChip(wrapper, wrapper.parentElement || right);
         this.notifyActionReady();
+    };
+
+    /// Give the chip the most room the row can spare, and no more.
+    ///
+    /// The baseline is measured with the chip laid out as `yield` (display:none),
+    /// which reproduces the row exactly as it was before we existed. Any mode that
+    /// scores worse than that baseline is displacing something of Bilibili's, so we
+    /// step down instead of keeping it.
+    SiteAdapterManager.prototype.fitBilibiliChip = function(wrapper, container) {
+        if (!wrapper || !container || typeof container.getBoundingClientRect !== "function") return;
+        var apply = function(mode) {
+            wrapper.classList.remove("better-ndm-bilibili-compact", "better-ndm-bilibili-yield");
+            if (mode === "compact") wrapper.classList.add("better-ndm-bilibili-compact");
+            else if (mode === "yield") wrapper.classList.add("better-ndm-bilibili-yield");
+            return crowdingScore(container, isOurChipNode);
+        };
+        wrapper.dataset.betterNdmFit = fitChipMode(apply("yield"), apply);
     };
 
     SiteAdapterManager.prototype.scanVimeo = function() {
@@ -539,6 +623,10 @@
         if (this.observer) this.observer.disconnect();
         if (this.timer) clearTimeout(this.timer);
         if (this._biliPoll) clearTimeout(this._biliPoll);
+        if (this._biliResize && typeof window !== "undefined") {
+            window.removeEventListener("resize", this._biliResize);
+            this._biliResize = null;
+        }
         this.observer = null;
         this.timer = null;
         this._biliPoll = null;
@@ -558,6 +646,8 @@
         canonicalVimeoURL: canonicalVimeoURL,
         canonicalXURL: canonicalXURL,
         canonicalYouTubeURL: canonicalYouTubeURL,
+        crowdingScore: crowdingScore,
+        fitChipMode: fitChipMode,
         hasInlineAction: hasInlineAction,
         install: install,
         pageURLForElement: pageURLForElement,
