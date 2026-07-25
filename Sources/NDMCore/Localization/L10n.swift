@@ -82,6 +82,9 @@ public enum L10n: Sendable {
     public static var share: String { t("Share", "分享") }
     public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
+    /// Puts the finished file itself on the pasteboard, so ⌘V in Finder copies it.
+    public static var copyFile: String { t("Copy File", "复制文件") }
+    public static var copyFiles: String { t("Copy Files", "复制文件") }
     public static var copiedToClipboard: String { t("Copied", "已复制") }
     public static var copyFailed: String { t("Copy failed", "复制失败") }
     public static var copyFailedDetail: String {
@@ -1287,6 +1290,13 @@ public enum L10n: Sendable {
     // MARK: - Menus / About / bridge
 
     public static var aboutNDM: String { t("About NDM", "关于 NDM") }
+    public static var aboutTagline: String {
+        t("Open-source download manager for macOS.", "面向 macOS 的开源下载工具。")
+    }
+    public static var dataLocation: String { t("Data", "数据位置") }
+    public static var bridgeLabel: String { t("Bridge", "浏览器桥接") }
+    public static var extensionLabel: String { t("Extension", "浏览器扩展") }
+    public static var revealDataFolder: String { t("Show Data Folder", "显示数据目录") }
     public static var quitNDM: String { t("Quit NDM", "退出 NDM") }
     public static var fileMenu: String { t("File", "文件") }
     public static var editMenu: String { t("Edit", "编辑") }

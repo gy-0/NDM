@@ -114,6 +114,10 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_COMPLETION"] == "1"
     }
 
+    static var showAbout: Bool {
+        isEnabled && environment["NDM_QA_SHOW_ABOUT"] == "1"
+    }
+
     static var showOnboarding: Bool {
         isEnabled && environment["NDM_QA_SHOW_ONBOARDING"] == "1"
     }
@@ -197,6 +201,7 @@ enum QAPreviewOverrides {
     static let selectedFilenameContains: String? = nil
     static let showUpgrade = false
     static let showCompletion = false
+    static let showAbout = false
     static let showOnboarding = false
     static let showMediaAccess = false
     static let showSettings = false

@@ -630,6 +630,8 @@ final class CompletionCinemaHero: NSView {
     var onClose: (() -> Void)?
 
     private let backdrop = ThumbnailBackdropView()
+    private let flourish = FlourishHostView()
+    private var hasShownThumbnail = false
     private let restGlyph = NSImageView()
     private let closeButton = HeroCloseButton()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -682,8 +684,17 @@ final class CompletionCinemaHero: NSView {
         addSubview(titleLabel)
         addSubview(underline)
         addSubview(closeButton)
+        // Last, and re-raised whenever the artwork changes: the flourish must never
+        // end up behind the poster.
+        flourish.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(flourish)
 
         NSLayoutConstraint.activate([
+            flourish.leadingAnchor.constraint(equalTo: leadingAnchor),
+            flourish.trailingAnchor.constraint(equalTo: trailingAnchor),
+            flourish.topAnchor.constraint(equalTo: topAnchor),
+            flourish.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
             backdrop.topAnchor.constraint(equalTo: topAnchor),
@@ -713,8 +724,14 @@ final class CompletionCinemaHero: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func showThumbnail(_ image: NSImage) {
-        backdrop.setImage(image)
+        // First artwork after the card is already up is the poster *arriving* —
+        // fade it in. Replacing one poster with another is bookkeeping, not an event.
+        backdrop.setImage(image, dissolving: !hasShownThumbnail && window != nil)
+        hasShownThumbnail = true
         restGlyph.isHidden = true
+        // Re-laying out for the new artwork is precisely what used to bury the
+        // sparks. Put the flourish back on top.
+        addSubview(flourish, positioned: .above, relativeTo: nil)
     }
 
     func handoffDestinationRect(in ancestor: NSView, isArtwork: Bool) -> NSRect {
@@ -727,9 +744,11 @@ final class CompletionCinemaHero: NSView {
     /// No emoji, looping confetti, sound, or interaction-blocking overlay.
     func celebrateCompletion() {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              let hostLayer = layer,
+              let hostLayer = flourish.layer,
               bounds.width > 0,
               bounds.height > 0 else { return }
+        // Cheap insurance: the poster may land in the same runloop turn as this.
+        addSubview(flourish, positioned: .above, relativeTo: nil)
 
         let shine = CAGradientLayer()
         shine.colors = [
@@ -894,10 +913,46 @@ private final class ThumbnailBackdropView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func setImage(_ image: NSImage) {
+    /// - Parameter dissolving: cross-fade instead of cutting. Used when the poster
+    ///   is generated after the window is already on screen, which is the normal case
+    ///   for video: there is nothing to make a picture of until the file exists, so
+    ///   the artwork lands a beat after the card does. Cutting made it look like a
+    ///   glitch; a fade makes it look like the point.
+    func setImage(_ image: NSImage, dissolving: Bool = false) {
         var rect = CGRect(origin: .zero, size: image.size)
-        layer?.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        let contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        if dissolving, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.34
+            fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 0.2, 1.0)
+            layer?.add(fade, forKey: "posterArrival")
+        }
+        layer?.contents = contents
     }
+}
+
+/// Transparent, non-interactive host for the completion flourish.
+///
+/// The sparks used to be added straight to the hero's backing layer. That works
+/// until anything re-lays-out the hero — and the poster arriving does exactly that,
+/// because a video has no artwork until the file exists. AppKit then reasserts the
+/// subview layer order and the hand-added spark layers sink *underneath* the
+/// backdrop, so the one file type whose artwork arrives late is the one whose
+/// celebration disappears behind it. Being a real subview, kept last, makes the
+/// ordering AppKit's problem rather than ours.
+private final class FlourishHostView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Never steal the close button's clicks.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Translucent close puck for the hero: a soft dark disc that brightens on

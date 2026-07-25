@@ -103,13 +103,13 @@ final class QuietFinderRowView: NSTableRowView {
                 height: inset.height * 1.56
             )
             let artRect = Self.aspectFitRect(for: artwork.size, in: artBounds)
-            artwork.draw(
+            let fraction: CGFloat = paintsSelected
+                ? (artworkStyle == .fullBleed ? 0.22 : 0.16)
+                : 0.105
+            Self.drawArtworkWithSoftLeadingEdge(
+                artwork,
                 in: artRect,
-                from: .zero,
-                operation: .sourceOver,
-                fraction: paintsSelected ? (artworkStyle == .fullBleed ? 0.22 : 0.16) : 0.105,
-                respectFlipped: true,
-                hints: [.interpolation: NSImageInterpolation.high]
+                fraction: fraction
             )
 
             switch QuietFinderRowScrim.style {
@@ -238,6 +238,79 @@ final class QuietFinderRowView: NSTableRowView {
         // clears when the row is deselected — leaving ghost white text.
         // Sidebar/list cells paint their own ink from model selection instead.
         .normal
+    }
+
+    /// Draw the trailing preview so its leading edge dissolves into the row.
+    ///
+    /// The poster used to be pasted in as a plain rectangle and merely dimmed by the
+    /// readability veil, which left a razor-straight vertical seam running down the
+    /// middle of every selected media row — the artwork looked cut out and stuck on
+    /// rather than part of the surface. Masking the image's own alpha with a
+    /// horizontal ramp lets it emerge from the row instead.
+    ///
+    /// The ramp is deliberately long (most of the image's width). A short one just
+    /// moves the seam a few points to the right and blurs it; the edge only stops
+    /// reading as an edge when the fade is wide enough to have no locatable start.
+    private static func drawArtworkWithSoftLeadingEdge(
+        _ artwork: NSImage,
+        in artRect: NSRect,
+        fraction: CGFloat
+    ) {
+        guard let context = NSGraphicsContext.current?.cgContext,
+              artRect.width > 1, artRect.height > 1 else {
+            artwork.draw(
+                in: artRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: fraction,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            return
+        }
+
+        context.saveGState()
+        // A transparency layer is what makes `.destinationIn` mask only the artwork
+        // rather than punching a hole through everything already painted behind it.
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        artwork.draw(
+            in: artRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: fraction,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+
+        context.setBlendMode(.destinationIn)
+        let rampWidth = artRect.width * 0.62
+        if let ramp = NSGradient(
+            colorsAndLocations:
+                (NSColor(white: 0, alpha: 0), 0.0),
+                (NSColor(white: 0, alpha: 0.35), 0.55),
+                (NSColor(white: 0, alpha: 1), 1.0)
+        ) {
+            ramp.draw(
+                in: NSRect(
+                    x: artRect.minX,
+                    y: artRect.minY,
+                    width: rampWidth,
+                    height: artRect.height
+                ),
+                angle: 0
+            )
+        }
+        // Everything past the ramp keeps full alpha.
+        NSColor(white: 0, alpha: 1).setFill()
+        NSRect(
+            x: artRect.minX + rampWidth,
+            y: artRect.minY,
+            width: max(0, artRect.width - rampWidth),
+            height: artRect.height
+        ).fill()
+
+        context.endTransparencyLayer()
+        context.restoreGState()
     }
 
     private static func aspectFitRect(for imageSize: NSSize, in bounds: NSRect) -> NSRect {

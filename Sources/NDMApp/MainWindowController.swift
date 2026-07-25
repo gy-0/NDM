@@ -24,6 +24,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private var selectedFilter: SidebarFilter = QAPreviewOverrides.initialFilter ?? .all
     private var searchQuery = ""
     private var selectedTaskID: Int64?
+    /// Live multi-selection, mirrored from the list so ⌘C copies all of it rather
+    /// than just the anchor row.
+    private var multiSelectedTaskIDs: [Int64] = []
     /// Establish a useful launch focus once, without re-selecting after the
     /// user deliberately clears selection during later one-second refreshes.
     private var hasEstablishedInitialSelection = false
@@ -323,11 +326,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             self?.rebuildDisplayedRows()
         }
         listController.onSelectTaskID = { [weak self] taskID in
+            self?.multiSelectedTaskIDs = []
             self?.selectedTaskID = taskID
             self?.updateInspector()
             self?.updateToolbarEnablement()
         }
         listController.onSelectMultipleTaskIDs = { [weak self] taskIDs in
+            self?.multiSelectedTaskIDs = taskIDs
             self?.inspectorController.showMultiSelection(count: taskIDs.count)
             self?.updateToolbarEnablement()
         }
@@ -737,6 +742,45 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             showAlert(message: L10n.copyFailed, detail: L10n.copyFailedDetail)
         }
         return succeeded
+    }
+
+    /// Everything the user currently has selected, single or multiple.
+    private func selectedTaskIDs() -> [Int64] {
+        if !multiSelectedTaskIDs.isEmpty { return multiSelectedTaskIDs }
+        return selectedTaskID.map { [$0] } ?? []
+    }
+
+    /// Put the finished files themselves on the pasteboard.
+    ///
+    /// Writing the file URLs (not a string) is what makes ⌘V work in Finder, the
+    /// Dock, Mail and every other app that accepts files — the same thing Finder's
+    /// own ⌘C does. A path string would paste as text and copy nothing.
+    @discardableResult
+    private func copyFiles(for taskIDs: [Int64]) -> Bool {
+        let urls = taskIDs
+            .compactMap { id in allTasks.first(where: { $0.id == id }) }
+            .compactMap(\.destinationFileURL)
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else {
+            showAlert(message: L10n.copyFailed, detail: L10n.fileNotFound)
+            return false
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects(urls as [NSURL]) else {
+            showAlert(message: L10n.copyFailed, detail: L10n.copyFailedDetail)
+            return false
+        }
+        return true
+    }
+
+    /// ⌘C with the list focused. The Edit menu's Copy is wired to the standard
+    /// `copy:` action, so it arrives here through the responder chain — and a text
+    /// field being edited still gets its own copy first, which is correct.
+    @objc func copy(_ sender: Any?) {
+        let ids = selectedTaskIDs()
+        guard !ids.isEmpty else { return }
+        copyFiles(for: ids)
     }
 
     private func selectedRow() -> TaskRowPresentation? {
@@ -1504,6 +1548,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             showProperties(for: taskID)
         case .copyURL:
             _ = copyURL(for: taskID, reportFailure: true)
+        case .copyFile:
+            copyFiles(for: [taskID])
         case .delete:
             deleteTask(taskID)
         }
@@ -1525,6 +1571,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 for id in taskIDs { await manager.pause(taskID: id) }
                 await reload()
             }
+        case .copyFile:
+            // One pasteboard write for the whole selection, so ⌘V in Finder
+            // produces every file at once rather than only the last one.
+            copyFiles(for: taskIDs)
         case .delete:
             let alert = NSAlert()
             alert.messageText = L10n.removeConfirmMultiple(taskIDs.count)
@@ -2042,7 +2092,7 @@ private final class SidebarFilterCellView: NSTableCellView, AccentChromeRefreshi
 // MARK: - Task list
 
 enum TaskListContextAction {
-    case quickLook, open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, delete
+    case quickLook, open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, copyFile, delete
 }
 
 /// Floating bar that surfaces once more than one row is selected — plain
@@ -3503,9 +3553,18 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     private func applyArtwork(to rowView: QuietFinderRowView, item: TaskRowPresentation) {
         let ext = (item.filename as NSString).pathExtension.lowercased()
+        // Which file types earn a trailing preview at all.
+        //
+        // The test is "does this file contain something worth looking at", not "can
+        // Quick Look produce a bitmap" — it can produce one for a .zip too, and a
+        // washed-out generic archive icon bleeding across the row is noise. Video and
+        // images have frames, PDFs have a first page, audio usually has cover art.
+        // Everything else stays quiet and keeps only its leading glyph.
         let usesContentBackdrop = [
             "mp4", "mkv", "mov", "m4v", "webm", "avi", "ts",
             "png", "jpg", "jpeg", "gif", "webp", "heic",
+            "pdf",
+            "mp3", "m4a", "flac", "aac", "wav", "aiff", "alac", "ogg",
         ].contains(ext)
         let preview = CoverArtCache.shared.image(for: item.taskID)
         if preview == nil, usesContentBackdrop {
@@ -3634,18 +3693,25 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         quickLook.target = self
         quickLook.ndmSymbol("eye")
         menu.addItem(quickLook)
+        // Grouped by what the user is trying to do, rather than by the order the
+        // actions happened to be written in: look at it → take it somewhere →
+        // control the transfer → inspect it → destroy it. Copy File carries ⌘C so
+        // the menu advertises the shortcut that also works with the list focused.
         let specs: [(String, Selector, String?, String)?] = [
             (L10n.open, #selector(ctxOpen), "o", "doc.fill"),
             (L10n.showInFinder, #selector(ctxReveal), "r", "folder.fill"),
+            nil,
+            (L10n.copyFile, #selector(ctxCopyFile), "c", "doc.on.doc.fill"),
+            (L10n.copyURL, #selector(ctxCopyURL), nil, "link"),
             (L10n.share, #selector(ctxShare), nil, "square.and.arrow.up"),
             nil,
-            (L10n.retry, #selector(ctxRetry), nil, "arrow.clockwise"),
-            (L10n.renewURLEllipsis, #selector(ctxRenew), nil, "link"),
             (L10n.start, #selector(ctxStart), nil, "play.fill"),
             (L10n.pause, #selector(ctxPause), nil, "pause.fill"),
+            (L10n.retry, #selector(ctxRetry), nil, "arrow.clockwise"),
+            (L10n.renewURLEllipsis, #selector(ctxRenew), nil, "arrow.triangle.2.circlepath"),
+            nil,
             (L10n.progressDetails, #selector(ctxProgress), nil, "chart.bar.fill"),
             (L10n.propertiesEllipsis, #selector(ctxProperties), nil, "info.circle"),
-            (L10n.copyURL, #selector(ctxCopyURL), nil, "doc.on.doc"),
             nil,
             (L10n.delete, #selector(ctxDelete), "\u{8}", "trash"),
         ]
@@ -3692,6 +3758,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                 item.isEnabled = presentation.canShowProgress
                 item.title = presentation.isComplete ? L10n.resultDetails : L10n.progressDetails
                 item.ndmSymbol(presentation.isComplete ? "sparkles.rectangle.stack" : "chart.bar.fill")
+            // There is no file to put on the pasteboard until one has been delivered.
+            case #selector(ctxCopyFile):
+                item.isEnabled = presentation.canShowInFinder
+                item.title = tableView.selectedRowIndexes.count > 1
+                    ? L10n.copyFiles
+                    : L10n.copyFile
             case #selector(ctxProperties), #selector(ctxDelete), #selector(ctxCopyURL): item.isEnabled = true
             default: break
             }
@@ -3741,6 +3813,15 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     @objc private func ctxProgress() { if let id = currentContextTaskID() { onContextAction?(.progress, id) } }
     @objc private func ctxProperties() { if let id = currentContextTaskID() { onContextAction?(.properties, id) } }
     @objc private func ctxCopyURL() { if let id = currentContextTaskID() { onContextAction?(.copyURL, id) } }
+    /// Copying is the one context action that is genuinely useful on a whole
+    /// selection, so it routes through the batch path when there is one.
+    @objc private func ctxCopyFile() {
+        if tableView.selectedRowIndexes.count > 1 {
+            emitBatchAction(.copyFile)
+        } else if let id = currentContextTaskID() {
+            onContextAction?(.copyFile, id)
+        }
+    }
     @objc private func ctxDelete() { if let id = currentContextTaskID() { onContextAction?(.delete, id) } }
 }
 

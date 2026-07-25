@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// can supersede a picker/probe still waiting on the previous capture.
     private var currentBrowserMediaCancellation: BrowserMediaPreparationCancellation?
     private var browsersWindow: BrowsersWindowController?
+    private var aboutWindow: AboutWindowController?
     private var settingsWindow: SettingsWindowController?
     /// Standalone results can overlap when several app-initiated downloads
     /// finish together. Keep every controller alive until its own window
@@ -199,6 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                }) {
                 DispatchQueue.main.async { [weak self] in
                     self?.presentCompletion(for: task)
+                }
+            }
+            if QAPreviewOverrides.showAbout {
+                DispatchQueue.main.async { [weak self] in
+                    self?.showAbout()
                 }
             }
             if QAPreviewOverrides.showMediaAccess {
@@ -769,13 +775,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAbout() {
-        let alert = NSAlert()
-        alert.messageText = L10n.appName
-        alert.informativeText = L10n.aboutBody(
+        if let existing = aboutWindow {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let wc = AboutWindowController(
             dataPath: "~/Library/Application Support/dev.ndm.open",
-            bridge: BridgeConstants.endpoint
+            bridgeEndpoint: BridgeConstants.endpoint
         )
-        alert.runModal()
+        aboutWindow = wc
+        wc.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func openSettings() {
