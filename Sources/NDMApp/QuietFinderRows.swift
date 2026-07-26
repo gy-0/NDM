@@ -192,7 +192,9 @@ final class QuietFinderRowView: NSTableRowView {
 
     private func drawHoverWash(_ path: NSBezierPath) {
         guard isHovered else { return }
-        NSColor.labelColor.withAlphaComponent(0.045).setFill()
+        // Accent rather than ink: a neutral darkening reads as the row being
+        // dimmed, which is the opposite of "this is live under your pointer".
+        NDMChrome.railHover.setFill()
         path.fill()
     }
 

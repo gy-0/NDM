@@ -188,7 +188,7 @@ otool -arch arm64 -tV /Applications/Mole.app/Contents/MacOS/Mole > mole.asm
 - [x] ~~A. 庆祝阈值~~ —— **用户否决**：「我真的觉得我现在各种文件都庆祝没啥问题」。已撤销。
 - [x] **A′. 阻尼对齐**（对应三·五）。三处弹簧统一到 `NDMChrome.spring`，response 0.34 / damping 0.80。
 - [x] **B. 焦点环只给键盘**（对应 2）。`FocusRingPolicy` + `adoptFocusRingPolicy`，7 个文件采用。
-- [ ] **C. 悬停改用透明度**（对应 3）。审计现有的 hover 灰底，换成元素自身提亮。
+- [x] **C. 悬停不再用灰底**（对应 3）。全部 hover/pressed 改为 accent 色调（`NDMChrome.accentWash`），六处灰色洗块清零。
 - [ ] **D. 入场动效**（对应 7）。行/卡片有入场，而不是突然出现。
 - [ ] **E. 文案的温度**（对应 9）。空状态、完成、失败几处的措辞。
 
@@ -214,7 +214,7 @@ Mole 只是"简洁又美丽"的一个例子，不是要抄它的主题。
 - [x] 动效参数逆向（三·五节）
 - [x] A′ 阻尼对齐
 - [x] B 焦点环只给键盘
-- [ ] C 悬停改透明度
+- [x] C 悬停不再用灰底
 - [ ] D 入场动效
 - [ ] E 文案温度
 - [ ] awesome-mac 下载器功能清单（`jaywcjlove/awesome-mac` 的 Download 段落抓取失败，需换源重试）

@@ -174,7 +174,7 @@ final class GalleryCardItem: NSCollectionViewItem {
 
         if let cover {
             imageLayer.contents = cover.layerContents(forContentsScale: view.window?.backingScaleFactor ?? 2)
-            coverPlate.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.06).cgColor
+            coverPlate.layer?.backgroundColor = NDMChrome.railHover.cgColor
             coverPlate.setTypeTint(nil)
             iconView.isHidden = true
         } else {
@@ -394,7 +394,7 @@ final class CoverPlateView: NSView {
     /// neutral cover backing used under real artwork.
     func setTypeTint(_ tint: NSColor?) {
         guard let tint else {
-            layer?.backgroundColor = NSColor.black.withAlphaComponent(0.06).cgColor
+            layer?.backgroundColor = NDMChrome.railHover.cgColor
             return
         }
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

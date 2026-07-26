@@ -235,18 +235,27 @@ enum NDMChrome {
     /// separators). Must stay quieter than `track` so hover never reads as a
     /// gray card behind toolbar-style copy.
     static var railHover: NSColor {
-        dynamic(
-            light: NSColor.black.withAlphaComponent(0.035),
-            dark: NSColor.white.withAlphaComponent(0.045)
-        )
+        // Accent, not neutral. A grey wash behind a control is the "grey box" this
+        // design language rules out, and it says nothing: grey is what a disabled
+        // thing looks like. A whisper of the accent says *this responds*, and it
+        // follows the user's accent theme for free.
+        accentWash(light: 0.07, dark: 0.10)
     }
 
-    /// Pressed step for rail text actions — still below resting `track`.
+    /// A barely-there accent tint, for hover and pressed states.
+    ///
+    /// One helper rather than scattered `accent.withAlphaComponent(...)` so the
+    /// whole app's feedback moves together when these are tuned.
+    static func accentWash(light: CGFloat, dark: CGFloat) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return accent.withAlphaComponent(isDark ? dark : light)
+        }
+    }
+
+    /// Pressed step for rail text actions — one notch deeper than hover.
     static var railPressed: NSColor {
-        dynamic(
-            light: NSColor.black.withAlphaComponent(0.055),
-            dark: NSColor.white.withAlphaComponent(0.07)
-        )
+        accentWash(light: 0.13, dark: 0.17)
     }
 
     /// Soft accent wash for the primary rail action (Open / Pause / …).

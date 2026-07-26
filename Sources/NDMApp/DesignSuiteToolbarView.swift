@@ -566,7 +566,7 @@ private final class PaneToggleButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        layer?.backgroundColor = NDMChrome.railHover.cgColor
         contentTintColor = .labelColor
     }
 

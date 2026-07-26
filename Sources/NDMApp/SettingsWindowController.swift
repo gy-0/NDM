@@ -1662,7 +1662,7 @@ private final class SettingsNavigationButton: NSButton, AccentChromeRefreshing {
             if isSelected {
                 bg = NDMChrome.rowActive
             } else if isHovering {
-                bg = NSColor.labelColor.withAlphaComponent(0.05)
+                bg = NDMChrome.railHover
             } else {
                 bg = .clear
             }
