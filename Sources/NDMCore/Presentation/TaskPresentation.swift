@@ -102,6 +102,16 @@ public enum TaskPrimaryAction: String, Sendable, Equatable {
 
 /// Pure presentation for one download row / inspector snapshot.
 public struct TaskRowPresentation: Equatable, Sendable {
+    /// Short, local, and relative-aware: "今天 03:00" reads better than a full
+    /// timestamp for something that is about to happen.
+    private static let scheduleFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
+
     public var taskID: Int64
     public var filename: String
     public var host: String
@@ -144,6 +154,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
     public var canShowInFinder: Bool
     public var canShowProgress: Bool
     public var isComplete: Bool
+    /// Waiting on a clock rather than on a free slot — see `DownloadSchedule`.
+    public var isScheduled: Bool
+    /// Localized "Starts <when>" for a scheduled task, else nil.
+    public var scheduleNote: String?
     public var primaryAction: TaskPrimaryAction
     public var segmentStates: [SegmentState]
     /// Design Suite badge, e.g. "HLS → MP4". Nil when not applicable.
@@ -188,6 +202,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         canShowInFinder: Bool,
         canShowProgress: Bool,
         isComplete: Bool,
+        isScheduled: Bool = false,
+        scheduleNote: String? = nil,
         primaryAction: TaskPrimaryAction,
         segmentStates: [SegmentState],
         mediaBadge: String? = nil,
@@ -224,6 +240,8 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.canShowInFinder = canShowInFinder
         self.canShowProgress = canShowProgress
         self.isComplete = isComplete
+        self.isScheduled = isScheduled
+        self.scheduleNote = scheduleNote
         self.primaryAction = primaryAction
         self.segmentStates = segmentStates
         self.mediaBadge = mediaBadge
@@ -415,6 +433,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
             canShowInFinder: canShowInFinder,
             canShowProgress: canShowProgress,
             isComplete: task.status == .complete,
+            isScheduled: DownloadSchedule.isScheduled(task, now: Date()),
+            scheduleNote: DownloadSchedule.isScheduled(task, now: Date())
+                ? task.startAt.map { L10n.scheduledFor(Self.scheduleFormatter.string(from: $0)) }
+                : nil,
             primaryAction: primary,
             // Carry live segments only while downloading — the Now Downloading
             // hero renders them as a parallel-connection strip. Idle rows keep

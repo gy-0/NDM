@@ -73,6 +73,56 @@ public actor DownloadManager {
         onSettingsChanged = handler
     }
 
+    // MARK: - Scheduled starts
+
+    /// Fires due appointments. Driven by a timer the app owns, so the actor stays
+    /// free of its own run loop.
+    ///
+    /// Deliberately thin: `DownloadSchedule` decides *what* is due (and is tested
+    /// for it), this just does it. Clearing `startAt` before starting matters — a
+    /// task that failed and returns to `.waiting` must not fire the same
+    /// appointment again on the next tick.
+    @discardableResult
+    public func startDueScheduledTasks(now: Date = Date()) async -> [Int64] {
+        guard let tasks = try? store.allDownloads() else { return [] }
+        var started: [Int64] = []
+        for task in DownloadSchedule.due(in: tasks, now: now) {
+            var cleared = task
+            cleared.startAt = nil
+            try? store.update(cleared)
+            do {
+                try await start(taskID: task.id)
+                started.append(task.id)
+            } catch {
+                // Leave it visible as an error rather than silently rescheduling:
+                // a download that cannot start at 3am will not start at 3:01 either.
+                continue
+            }
+        }
+        return started
+    }
+
+    /// When the next appointment falls due, so the caller can size its timer
+    /// instead of waking every second.
+    public func nextScheduledWakeUp(now: Date = Date()) -> Date? {
+        guard let tasks = try? store.allDownloads() else { return nil }
+        return DownloadSchedule.nextWakeUp(in: tasks, now: now)
+    }
+
+    /// Park a task until `date`, or clear its appointment when nil.
+    public func schedule(taskID: Int64, at date: Date?) async throws {
+        guard var task = try store.allDownloads().first(where: { $0.id == taskID }) else { return }
+        if let date {
+            await pause(taskID: taskID)
+            task = try store.allDownloads().first(where: { $0.id == taskID }) ?? task
+            task.status = .waiting
+            task.startAt = DownloadSchedule.normalized(date, now: Date())
+        } else {
+            task.startAt = nil
+        }
+        try store.update(task)
+    }
+
     public func listTasks() throws -> [DownloadTask] {
         try store.allDownloads()
     }

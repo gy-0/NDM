@@ -107,4 +107,67 @@ final class DownloadStoreTests: XCTestCase {
         XCTAssertEqual(statusByID[failed.id], .error)
         XCTAssertEqual(try store.recoverInterruptedTasks(), 0)
     }
+
+    /// `startAt` is what makes a scheduled download survive a relaunch. A column
+    /// that silently fails to round-trip would mean the app forgets every
+    /// appointment on quit, which is the one thing scheduling must not do.
+    func testScheduledStartSurvivesARoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-sched-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let when = Date(timeIntervalSince1970: 1_800_003_600)
+        let store = try DownloadStore(directory: dir)
+        var task = DownloadTask(url: "https://example.test/a.bin", filename: "a.bin")
+        task.status = .waiting
+        task.startAt = when
+        let saved = try store.insert(task)
+
+        let reopened = try DownloadStore(directory: dir)
+        let loaded = try XCTUnwrap(reopened.allDownloads().first { $0.id == saved.id })
+        XCTAssertEqual(loaded.startAt?.timeIntervalSince1970, when.timeIntervalSince1970)
+        XCTAssertEqual(loaded.status, .waiting)
+
+        // And clearing it must clear it, not leave yesterday's appointment behind.
+        var cleared = loaded
+        cleared.startAt = nil
+        try reopened.update(cleared)
+        let after = try XCTUnwrap(try reopened.allDownloads().first { $0.id == saved.id })
+        XCTAssertNil(after.startAt)
+    }
+
+    /// Scheduling for 3am assumes the app may be restarted before then. The
+    /// interrupted-task sweep turns every `.waiting` row into `.incomplete`, which
+    /// without an exemption silently cancels every appointment on launch — the one
+    /// failure that would make the whole feature useless.
+    func testRelaunchDoesNotCancelScheduledDownloads() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-sched-recover-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = try DownloadStore(directory: dir)
+        var scheduled = DownloadTask(url: "https://example.test/s.bin", filename: "s.bin")
+        scheduled.status = .waiting
+        scheduled.startAt = Date().addingTimeInterval(3600)
+        let savedScheduled = try store.insert(scheduled)
+
+        var queued = DownloadTask(url: "https://example.test/q.bin", filename: "q.bin")
+        queued.status = .waiting
+        let savedQueued = try store.insert(queued)
+
+        _ = try store.recoverInterruptedTasks()
+        let rows = try store.allDownloads()
+
+        let after = try XCTUnwrap(rows.first { $0.id == savedScheduled.id })
+        XCTAssertEqual(after.status, .waiting, "a clock appointment must survive relaunch")
+        XCTAssertNotNil(after.startAt)
+
+        let queuedAfter = try XCTUnwrap(rows.first { $0.id == savedQueued.id })
+        XCTAssertEqual(
+            queuedAfter.status, .incomplete,
+            "a task merely waiting for a slot is still an interrupted download"
+        )
+    }
 }

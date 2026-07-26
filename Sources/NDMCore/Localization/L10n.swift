@@ -88,6 +88,19 @@ public enum L10n: Sendable {
     public static var share: String { t("Share", "分享") }
     public static var moreActions: String { t("More Actions", "更多操作") }
     public static var copyURL: String { t("Copy URL", "复制链接") }
+    public static var scheduleEllipsis: String { t("Schedule…", "定时下载…") }
+    public static var cancelSchedule: String { t("Cancel Schedule", "取消定时") }
+    public static var scheduleTitle: String { t("Start this download later", "稍后开始这项下载") }
+    public static var scheduleBody: String {
+        t(
+            "It will wait until the time you choose, then start on its own.",
+            "它会一直等到你指定的时间，然后自动开始。"
+        )
+    }
+    public static var scheduleConfirm: String { t("Schedule", "设定") }
+    public static func scheduledFor(_ when: String) -> String {
+        t("Starts \(when)", "将于 \(when) 开始")
+    }
     /// Puts the finished file itself on the pasteboard, so ⌘V in Finder copies it.
     public static var copyFile: String { t("Copy File", "复制文件") }
     public static var copyFiles: String { t("Copy Files", "复制文件") }

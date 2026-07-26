@@ -79,6 +79,11 @@ public final class DownloadStore: @unchecked Sendable {
         if !hasColumn("deliverynote", in: "downloads") {
             try exec("ALTER TABLE downloads ADD COLUMN deliverynote TEXT;")
         }
+        // Scheduled start. A `.waiting` row with a non-null `startat` is waiting on
+        // a clock rather than on a free slot.
+        if !hasColumn("startat", in: "downloads") {
+            try exec("ALTER TABLE downloads ADD COLUMN startat NUMERIC;")
+        }
     }
 
     public func allDownloads() throws -> [DownloadTask] {
@@ -89,7 +94,7 @@ public final class DownloadStore: @unchecked Sendable {
             id, url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath, deliverynote
+            errortext, urla, postdata, folderpath, deliverynote, startat
         FROM downloads
         ORDER BY
             MAX(
@@ -124,8 +129,8 @@ public final class DownloadStore: @unchecked Sendable {
             url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath, deliverynote
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            errortext, urla, postdata, folderpath, deliverynote, startat
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -149,7 +154,7 @@ public final class DownloadStore: @unchecked Sendable {
             url=?, method=?, filename=?, ltype=?, filesize=?, category=?, status=?,
             bandwidthlimit=?, connections=?, lasttry=?, firsttry=?, completedat=?,
             useragent=?, resumable=?, pageurl=?, pagetitle=?, hittitle=?, mimetype=?,
-            errortext=?, urla=?, postdata=?, folderpath=?, deliverynote=?
+            errortext=?, urla=?, postdata=?, folderpath=?, deliverynote=?, startat=?
         WHERE id=?;
         """
         var stmt: OpaquePointer?
@@ -158,7 +163,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bind(task, to: stmt, includingID: false)
-        sqlite3_bind_int64(stmt, 24, task.id)
+        sqlite3_bind_int64(stmt, 25, task.id)
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.stepFailed }
         try replaceHeadersUnlocked(id: task.id, headers: task.headers)
     }
@@ -182,12 +187,17 @@ public final class DownloadStore: @unchecked Sendable {
     public func recoverInterruptedTasks() throws -> Int {
         lock.lock()
         defer { lock.unlock() }
+        // A row waiting on a *clock* is not an interrupted download, and the whole
+        // point of scheduling for 3am is that the app may well be restarted before
+        // then. Without the `startat` exclusion this sweep silently cancels every
+        // appointment on launch.
         let sql = """
         UPDATE downloads
         SET status='incomplete'
         WHERE lower(coalesce(status, ''))='downloading'
            OR (
                 lower(coalesce(status, ''))='waiting'
+                AND startat IS NULL
                 AND NOT (
                     lower(coalesce(ltype, ''))='ytdlp'
                     AND length(trim(coalesce(pageurl, ''))) > 0
@@ -334,6 +344,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         text(22, task.folderPath)
         text(23, task.deliveryNote)
+        if let d = task.startAt { sqlite3_bind_double(stmt, 24, d.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 24) }
         _ = includingID
     }
 
@@ -363,6 +374,7 @@ public final class DownloadStore: @unchecked Sendable {
             lastTry: colDate(10),
             firstTry: colDate(11),
             completedAt: colDate(12),
+            startAt: colDate(24),
             userAgent: colText(13),
             resumable: sqlite3_column_int(stmt, 14) != 0,
             pageURL: colText(15),

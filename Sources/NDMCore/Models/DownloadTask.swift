@@ -15,6 +15,12 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
     public var lastTry: Date?
     public var firstTry: Date?
     public var completedAt: Date?
+    /// When a `.waiting` task should start on its own.
+    ///
+    /// Nil means "waiting for a slot" — the existing queue behaviour. Non-nil means
+    /// "waiting for a clock", which is a different kind of waiting and the only new
+    /// state this feature introduces.
+    public var startAt: Date?
     public var userAgent: String?
     public var resumable: Bool
     public var pageURL: String?
@@ -44,6 +50,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         lastTry: Date? = nil,
         firstTry: Date? = nil,
         completedAt: Date? = nil,
+        startAt: Date? = nil,
         userAgent: String? = nil,
         resumable: Bool = false,
         pageURL: String? = nil,
@@ -70,6 +77,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         self.lastTry = lastTry
         self.firstTry = firstTry
         self.completedAt = completedAt
+        self.startAt = startAt
         self.userAgent = userAgent
         self.resumable = resumable
         self.pageURL = pageURL

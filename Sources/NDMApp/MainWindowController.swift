@@ -27,6 +27,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     /// Live multi-selection, mirrored from the list so ⌘C copies all of it rather
     /// than just the anchor row.
     private var multiSelectedTaskIDs: [Int64] = []
+    private var scheduledStartTimer: Timer?
     /// Establish a useful launch focus once, without re-selecting after the
     /// user deliberately clears selection during later one-second refreshes.
     private var hasEstablishedInitialSelection = false
@@ -616,6 +617,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         }
         if !hasEstablishedInitialSelection, !displayedRows.isEmpty {
             hasEstablishedInitialSelection = true
+            // Appointments that came due while the app was closed fire now rather
+            // than being silently forgotten — the machine being off is the normal
+            // case for an overnight schedule.
+            Task { [weak self] in
+                guard let self else { return }
+                let started = await self.manager.startDueScheduledTasks()
+                if !started.isEmpty { await self.reload() }
+                self.rescheduleScheduledStartTimer()
+            }
             let qaPreferredTaskID = QAPreviewOverrides.selectedFilenameContains.flatMap { needle in
                 displayedRows.first {
                     $0.filename.localizedCaseInsensitiveContains(needle)
@@ -862,6 +872,75 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             showAlert(message: L10n.copyFailed, detail: L10n.copyFailedDetail)
         }
         return succeeded
+    }
+
+    /// Wake exactly when the next appointment falls due, and not before.
+    ///
+    /// A one-second poll would work and would also be 3,600 wake-ups to start a
+    /// download an hour from now. `nextScheduledWakeUp` gives the one moment worth
+    /// waiting for; the timer is rebuilt whenever the set of appointments changes.
+    /// Capped so a date years out still re-checks periodically — clocks change,
+    /// machines sleep, and a timer scheduled for 2029 will not survive either.
+    private func rescheduleScheduledStartTimer() {
+        scheduledStartTimer?.invalidate()
+        scheduledStartTimer = nil
+        Task { [weak self] in
+            guard let self else { return }
+            guard let next = await self.manager.nextScheduledWakeUp() else { return }
+            let delay = min(max(next.timeIntervalSinceNow, 1), 15 * 60)
+            let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let started = await self.manager.startDueScheduledTasks()
+                    if !started.isEmpty { await self.reload() }
+                    self.rescheduleScheduledStartTimer()
+                }
+            }
+            // Fire while menus are open too; a scheduled start should not wait for
+            // the user to dismiss a context menu.
+            RunLoop.main.add(timer, forMode: .common)
+            self.scheduledStartTimer = timer
+        }
+    }
+
+    /// Park a download until a chosen time, or release one already parked.
+    ///
+    /// Toggling rather than two menu items: a task is either waiting on a clock or
+    /// it is not, and the menu already relabels itself to say which.
+    private func toggleSchedule(for taskID: Int64) {
+        let row = displayedRows.first(where: { $0.taskID == taskID })
+        if row?.isScheduled == true {
+            Task {
+                try? await manager.schedule(taskID: taskID, at: nil)
+                await reload()
+            }
+            return
+        }
+        let picker = NSDatePicker(frame: NSRect(x: 0, y: 0, width: 320, height: 26))
+        picker.datePickerStyle = .textFieldAndStepper
+        picker.datePickerElements = [.yearMonthDay, .hourMinute]
+        picker.dateValue = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
+        picker.minDate = Date()
+        NDMDialog.present(
+            title: L10n.scheduleTitle,
+            body: L10n.scheduleBody,
+            subject: row.map { .file(name: $0.filename, cover: CoverArtCache.shared.image(for: taskID)) }
+                ?? .info,
+            buttons: [
+                NDMDialog.Button(L10n.scheduleConfirm),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            accessory: picker,
+            host: window
+        ) { [weak self] result in
+            guard let self, result.buttonIndex == 0 else { return }
+            let when = picker.dateValue
+            Task {
+                try? await self.manager.schedule(taskID: taskID, at: when)
+                await self.reload()
+                self.rescheduleScheduledStartTimer()
+            }
+        }
     }
 
     /// Everything the user currently has selected, single or multiple.
@@ -1671,6 +1750,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             _ = copyURL(for: taskID, reportFailure: true)
         case .copyFile:
             copyFiles(for: [taskID])
+        case .schedule:
+            toggleSchedule(for: taskID)
         case .delete:
             deleteTask(taskID)
         }
@@ -2218,7 +2299,7 @@ private final class SidebarFilterCellView: NSTableCellView, AccentChromeRefreshi
 // MARK: - Task list
 
 enum TaskListContextAction {
-    case quickLook, open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, copyFile, delete
+    case quickLook, open, reveal, share, start, pause, retry, renew, progress, properties, copyURL, copyFile, schedule, delete
 }
 
 /// Floating bar that surfaces once more than one row is selected — plain
@@ -3857,6 +3938,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             (L10n.pause, #selector(ctxPause), nil, "pause.fill"),
             (L10n.retry, #selector(ctxRetry), nil, "arrow.clockwise"),
             (L10n.renewURLEllipsis, #selector(ctxRenew), nil, "arrow.triangle.2.circlepath"),
+            (L10n.scheduleEllipsis, #selector(ctxSchedule), nil, "clock"),
             nil,
             (L10n.progressDetails, #selector(ctxProgress), nil, "chart.bar.fill"),
             (L10n.propertiesEllipsis, #selector(ctxProperties), nil, "info.circle"),
@@ -3902,6 +3984,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
                 item.isEnabled = presentation.canStart && !presentation.canRetry
                 item.title = presentation.isQueued ? L10n.start : L10n.resume
             case #selector(ctxPause): item.isEnabled = presentation.canPause
+            case #selector(ctxSchedule):
+                item.isEnabled = !presentation.isComplete
+                item.title = presentation.isScheduled ? L10n.cancelSchedule : L10n.scheduleEllipsis
             case #selector(ctxProgress):
                 item.isEnabled = presentation.canShowProgress
                 item.title = presentation.isComplete ? L10n.resultDetails : L10n.progressDetails
@@ -3960,6 +4045,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     @objc private func ctxPause() { if let id = currentContextTaskID() { onContextAction?(.pause, id) } }
     @objc private func ctxProgress() { if let id = currentContextTaskID() { onContextAction?(.progress, id) } }
     @objc private func ctxProperties() { if let id = currentContextTaskID() { onContextAction?(.properties, id) } }
+    @objc private func ctxSchedule() { if let id = currentContextTaskID() { onContextAction?(.schedule, id) } }
     @objc private func ctxCopyURL() { if let id = currentContextTaskID() { onContextAction?(.copyURL, id) } }
     /// Copying is the one context action that is genuinely useful on a whole
     /// selection, so it routes through the batch path when there is one.
@@ -4262,6 +4348,13 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
                 .foregroundColor: NSColor.tertiaryLabelColor,
             ]))
             subtitleLabel.attributedStringValue = check
+        } else if let note = row.scheduleNote {
+            // A parked download's own status ("未完成 · 上周二") says nothing about
+            // the only thing the user wants to know, which is when it will start.
+            // Accent-tinted because this row is going to act on its own.
+            subtitleLabel.font = .systemFont(ofSize: 11.5 * scale, weight: .medium)
+            subtitleLabel.stringValue = note
+            subtitleLabel.textColor = NDMChrome.accent
         } else {
             subtitleLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .regular)
             let addsDate = !row.isDownloading && !row.isQueued && !row.activityDateText.isEmpty
