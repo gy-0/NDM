@@ -4665,7 +4665,7 @@ private final class InspectorViewController: NSViewController {
 #endif
 
     override func loadView() {
-        view = ChromeBox(fill: NDMChrome.contentSurface)
+        view = ChromeBox(fill: NDMChrome.railSurface)
         view.wantsLayer = true
         view.layer?.masksToBounds = true
 

@@ -66,8 +66,13 @@ enum NDMChrome {
     /// Obsidian Cinema: the dark ramp is deep space blue-black, not system gray —
     /// covers and accent light are the bright objects on this canvas.
     static var sidebarFill: NSColor {
+        // The rails recede so the list can be the subject. Light mode used to make
+        // all three panes the same #FAFBFD — "one seamless paper canvas" — which
+        // reads as a single flat sheet with no figure and no ground. Sampling the
+        // window found four identical values top to bottom. Dark mode always had
+        // this ramp (#0A0C11 rail vs #12161E content); light mode simply lost it.
         dynamic(
-            light: srgb(0.982, 0.985, 0.992), // #FAFBFD — one seamless paper canvas
+            light: srgb(0.949, 0.957, 0.973), // #F2F4F8 — recessed rail
             dark: srgb(0.039, 0.047, 0.067)   // #0A0C11
         )
     }
@@ -78,15 +83,17 @@ enum NDMChrome {
     /// Obsidian canvas keeps its behind-window glass.
     static var sidebarPaperOverlay: NSColor {
         dynamic(
-            light: srgb(0.982, 0.985, 0.992),
+            light: srgb(0.949, 0.957, 0.973),
             dark: .clear
         )
     }
 
     /// Titlebar and tool strip are subtly brighter than the navigation rail.
+    /// Between the rail and the content: the tool strip belongs to the frame, but
+    /// sits nearer the surface than the navigation does.
     static var toolbarSurface: NSColor {
         dynamic(
-            light: srgb(0.977, 0.982, 0.992), // #F9FAFD
+            light: srgb(0.969, 0.976, 0.988), // #F7F9FC
             dark: srgb(0.059, 0.071, 0.098)   // #0F1219
         )
     }
@@ -94,9 +101,17 @@ enum NDMChrome {
     static var windowFill: NSColor { toolbarSurface }
 
     /// List / inspector only — slightly lifted so the main column reads as content.
+    /// The rail fill, for the inspector as well as the sidebar. Both are chrome
+    /// *about* the content rather than the content itself, so the window reads as a
+    /// bright sheet held in a recessed frame rather than as one undifferentiated
+    /// plane.
+    static var railSurface: NSColor { sidebarFill }
+
+    /// The subject. Brightest thing in the window, so the eye lands on the list
+    /// rather than on the chrome around it.
     static var contentSurface: NSColor {
         dynamic(
-            light: srgb(0.982, 0.985, 0.992), // #FAFBFD
+            light: srgb(1.0, 1.0, 1.0),       // #FFFFFF
             dark: srgb(0.071, 0.086, 0.118)   // #12161E
         )
     }
