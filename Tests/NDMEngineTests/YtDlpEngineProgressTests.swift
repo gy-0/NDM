@@ -156,6 +156,25 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertEqual(report?.status, "downloading")
     }
 
+    func testDecimalHLSProgressEstimateDoesNotBecomeInstantCompletion() async {
+        let report = try! XCTUnwrap(YtDlpTool.parseProgressLine(
+            "NDM|903|NA|1257879.0|940.05|NA|hls-5346|downloading"
+        ))
+        XCTAssertEqual(report.totalBytes, 1_257_879)
+
+        let engine = YtDlpEngine(
+            taskID: 10,
+            estimatedBytes: 2_792_307_870,
+            estimatedComponentBytes: [2_792_307_870]
+        )
+        await engine.apply(report: report)
+
+        let progress = await engine.currentProgress()
+        XCTAssertEqual(progress.completedBytes, 903)
+        XCTAssertEqual(progress.totalBytes, 1_257_879)
+        XCTAssertLessThan(progress.fractionCompleted, 0.01)
+    }
+
     func testPostprocessProgressLinesExposeProductPhases() {
         let merger = YtDlpTool.parseProgressLine("NDM_POST|FFmpegMerger|started")
         XCTAssertEqual(merger?.phase, .merging)

@@ -1167,7 +1167,11 @@ public enum YtDlpTool {
             guard parts.count >= 6 else { return nil }
             let downloaded = Int64(parts[1]) ?? 0
             let totalRaw = Int64(parts[2]) ?? 0
-            let estimate = Int64(parts[3]) ?? 0
+            // HLS extractors such as X commonly emit a decimal estimate (for
+            // example `1257879.0`).  Treat it as a byte count rather than
+            // dropping it: without a total, the first downloaded bytes become
+            // the whole component and the journey jumps straight to 96%.
+            let estimate = Int64(Double(parts[3]) ?? 0)
             let total = totalRaw > 0 ? totalRaw : estimate
             let speed = Double(parts[4]) ?? 0
             let eta: Double?

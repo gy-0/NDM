@@ -3169,17 +3169,22 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    /// A finished download leaves the Hero strip and reappears in the table
-    /// (usually as row 0). Return that task when we should pin it at the top
-    /// instead of restoring the pre-reload scroll anchor.
+    /// A completed or paused download leaves the Hero strip and reappears in
+    /// the table (usually as row 0). Return that task when we should pin it
+    /// into view instead of restoring the pre-reload scroll anchor.
     private func heroLandingRevealTaskID(
         landedFromHero: Set<Int64>,
         rows: [TaskRowPresentation],
         selectedTaskID: Int64?,
         wasViewingTop: Bool
     ) -> Int64? {
-        let landedCompleted = rows.filter { landedFromHero.contains($0.taskID) && $0.isComplete }
-        guard !landedCompleted.isEmpty else { return nil }
+        // A paused row exposes Start / Resume (`canStart`), while an incomplete
+        // or failed row uses Retry / Renew. That makes this the precise paused
+        // state without adding presentation-only task status plumbing.
+        let landedVisible = rows.filter {
+            landedFromHero.contains($0.taskID) && ($0.isComplete || $0.canStart)
+        }
+        guard !landedVisible.isEmpty else { return nil }
 
         // The task the user was already watching just finished — always reveal.
         if let selectedTaskID,
@@ -3191,7 +3196,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         // Watching the Hero / top of the list: bring the new first row into view.
         // Deep in history: leave the scroll anchor alone.
         guard wasViewingTop else { return nil }
-        return landedCompleted.first?.taskID
+        return landedVisible.first?.taskID
     }
 
     /// Snapshot the finishing Hero before `updateHero` reassigns the strip.
