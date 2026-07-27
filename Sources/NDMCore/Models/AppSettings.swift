@@ -115,6 +115,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// transcript is the artifact that makes a download searchable and re-readable,
     /// and it costs kilobytes.
     public var transcriptionWritesTextFile: Bool?
+    /// User-configured actions for a finished download. Optional so settings
+    /// written by older builds continue to decode without migration work.
+    public var quickActions: [QuickAction]?
 
     public var smartConnectionsEnabled: Bool { smartConnections ?? true }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
@@ -122,6 +125,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var mediaQualityPreference: MediaQualityPreference { mediaQuality ?? .highest }
     public var transcriptionScopePreference: TranscriptionScope { transcriptionScope ?? .off }
     public var transcriptionWritesTextFileEnabled: Bool { transcriptionWritesTextFile ?? true }
+    public var completionQuickActions: [QuickAction] { quickActions ?? [] }
 
     /// Whether a finished download should be transcribed without being asked.
     ///
@@ -162,7 +166,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         mediaQuality: MediaQualityPreference? = nil,
         transcriptionScope: TranscriptionScope? = nil,
         transcriptionLanguage: String? = nil,
-        transcriptionWritesTextFile: Bool? = nil
+        transcriptionWritesTextFile: Bool? = nil,
+        quickActions: [QuickAction]? = nil
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -189,6 +194,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.transcriptionScope = transcriptionScope
         self.transcriptionLanguage = transcriptionLanguage
         self.transcriptionWritesTextFile = transcriptionWritesTextFile
+        self.quickActions = quickActions
     }
 }
 

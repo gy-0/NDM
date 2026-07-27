@@ -10,7 +10,7 @@ LICENSES="$APP/Contents/Resources/Licenses"
 YTDLP_BIN="${YTDLP_BIN:-$ROOT/Vendor/Tools/yt-dlp}"
 FFMPEG_BIN="${FFMPEG_BIN:-$ROOT/Vendor/Tools/ffmpeg}"
 DENO_BIN="${DENO_BIN:-$ROOT/Vendor/Tools/deno}"
-SOURCE_LICENSES="$ROOT/Vendor/Tools/Licenses"
+SOURCE_LICENSES="${SOURCE_LICENSES:-$ROOT/Vendor/Tools/Licenses}"
 YTDLP_PLUGIN_SOURCE="$ROOT/Vendor/Plugins/yt-dlp"
 
 required_licenses=(

@@ -167,6 +167,11 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_SETTINGS"] == "1"
     }
 
+    /// Deterministic completion actions for Settings/completion visual checks.
+    static var showQuickActions: Bool {
+        isEnabled && environment["NDM_QA_QUICK_ACTIONS"] == "1"
+    }
+
     static var settingsSection: String? {
         guard isEnabled,
               let value = environment["NDM_QA_SETTINGS_SECTION"],
@@ -246,6 +251,7 @@ enum QAPreviewOverrides {
     static let showOnboarding = false
     static let showMediaAccess = false
     static let showSettings = false
+    static let showQuickActions = false
     static let settingsSection: String? = nil
     static let showNewDownload = false
     static let showProgress = false
@@ -268,6 +274,22 @@ enum QAPreviewOverrides {
         settings.clipboardWatch = true
         settings.onboardingCompleted = !showOnboarding
         if showCompletion { settings.showCompletionDialog = true }
+        if showQuickActions {
+            settings.quickActions = [
+                QuickAction(
+                    title: L10n.t("Open in Preview", "用预览打开"),
+                    kind: .openWithApp(bundleID: "com.apple.Preview"),
+                    symbol: "arrow.up.forward.app",
+                    promoted: true
+                ),
+                QuickAction(
+                    title: L10n.t("Archive Download", "归档下载"),
+                    kind: .shortcut(named: "Archive Download"),
+                    symbol: "wand.and.stars",
+                    promoted: true
+                ),
+            ]
+        }
     }
 
     /// Populate only an empty, isolated QA database with realistic file rows.

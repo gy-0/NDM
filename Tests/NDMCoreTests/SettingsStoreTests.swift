@@ -23,6 +23,23 @@ final class SettingsStoreTests: XCTestCase {
         s.accentTheme = .custom
         s.customAccentHex = "#2C7A6B"
         s.languageMode = .simplifiedChinese
+        s.quickActions = [
+            QuickAction(
+                title: "Open in Preview",
+                kind: .openWithApp(bundleID: "com.apple.Preview"),
+                symbol: "arrow.up.forward.app",
+                promoted: true
+            ),
+            QuickAction(
+                title: "Archive Download",
+                kind: .shortcut(named: "Archive Download")
+            ),
+            QuickAction(
+                title: "Mail",
+                kind: .shareService(named: "Mail"),
+                symbol: "square.and.arrow.up"
+            ),
+        ]
         SettingsStore.save(s, defaults: defaults)
         let loaded = SettingsStore.load(defaults: defaults)
         XCTAssertEqual(loaded.maxConnections, 16)
@@ -32,6 +49,14 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.accentTheme, .custom)
         XCTAssertEqual(loaded.customAccentHex, "#2C7A6B")
         XCTAssertEqual(loaded.languageMode, .simplifiedChinese)
+        XCTAssertEqual(loaded.completionQuickActions, s.quickActions)
+    }
+
+    func testOlderSettingsDefaultToNoCompletionQuickActions() throws {
+        let data = try JSONEncoder().encode(AppSettings())
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertTrue(decoded.completionQuickActions.isEmpty)
     }
 
     func testLegacyNeatBridgePortMigratesToNDMDedicatedPort() throws {

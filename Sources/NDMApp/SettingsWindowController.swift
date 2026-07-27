@@ -90,6 +90,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let bwField = NSTextField(string: "0")
     private let smartConnSwitch = SettingsAccentSwitch()
     private let mediaQualityPopup = SettingsPopupButton()
+    private let quickActionsListStack = NSStackView()
+    private var draftQuickActions: [QuickAction]
+    private var quickActionsWidthConstraints: [NSLayoutConstraint] = []
 
     // Browser
     private let panelSwitch = SettingsAccentSwitch()
@@ -136,6 +139,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     ) {
         self.manager = manager
         self.settings = settings
+        self.draftQuickActions = settings.completionQuickActions
         self.siteCompatibilityUpdater = siteCompatibilityUpdater
 
         let window = NSWindow(
@@ -156,6 +160,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         buildUI()
         loadFields()
         showSection(Self.section(named: initialSectionName) ?? .general)
+        if QAPreviewOverrides.showQuickActions {
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollToQuickActionsForQA()
+            }
+        }
         refreshCompatibilityStatus()
         window.center()
 
@@ -528,6 +537,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
+    private func scrollToQuickActionsForQA() {
+        guard currentSection == .downloads,
+              let pane = scrollView.documentView else { return }
+        pane.layoutSubtreeIfNeeded()
+        let maximumY = max(0, pane.bounds.height - scrollView.contentView.bounds.height)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: maximumY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     private func moveSelection(from section: Section, offset: Int) {
         let sections = Section.allCases
         guard let index = sections.firstIndex(of: section) else { return }
@@ -660,7 +678,303 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 ),
             ]
         )
-        return paneStack([destinationCard, performanceCard, videoCard])
+        return paneStack([destinationCard, performanceCard, videoCard, makeCompletionActionsCard()])
+    }
+
+    private func makeCompletionActionsCard() -> NSView {
+        quickActionsListStack.orientation = .vertical
+        quickActionsListStack.alignment = .leading
+        quickActionsListStack.spacing = 0
+
+        let addButton = NSButton(
+            title: L10n.t("Add Action…", "添加动作…"),
+            target: self,
+            action: #selector(showAddQuickActionMenu(_:))
+        )
+        addButton.image = NDMChrome.symbol("plus", pointSize: 11, weight: .semibold)
+        addButton.imagePosition = .imageLeading
+        addButton.controlSize = .large
+        NDMChrome.styleGhostButton(addButton)
+
+        let addRow = NSStackView(views: [NSView(), addButton])
+        addRow.orientation = .horizontal
+        addRow.alignment = .centerY
+
+        let container = NSStackView(views: [quickActionsListStack, addRow])
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 12
+        NSLayoutConstraint.deactivate(quickActionsWidthConstraints)
+        quickActionsWidthConstraints = [
+            addRow.widthAnchor.constraint(equalTo: container.widthAnchor),
+            quickActionsListStack.widthAnchor.constraint(equalTo: container.widthAnchor),
+        ]
+        NSLayoutConstraint.activate(quickActionsWidthConstraints)
+
+        let card = makeCard(
+            title: L10n.t("Completion Actions", "完成动作"),
+            subtitle: L10n.t(
+                "Open finished files in an app, share them, or run a Shortcut. Pin up to two actions beside the standard buttons.",
+                "用 App 打开成品、系统分享，或运行快捷指令。最多可将两个动作固定在常用按钮旁。"
+            ),
+            symbolName: "bolt.badge.automatic",
+            rows: [container]
+        )
+        reloadQuickActionsList()
+        return card
+    }
+
+    private func reloadQuickActionsList() {
+        quickActionsListStack.arrangedSubviews.forEach {
+            quickActionsListStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        guard !draftQuickActions.isEmpty else {
+            let empty = NSTextField(labelWithString: L10n.t("No custom actions yet.", "还没有自定义动作。"))
+            empty.font = .systemFont(ofSize: 12.5)
+            empty.textColor = .tertiaryLabelColor
+            quickActionsListStack.addArrangedSubview(empty)
+            return
+        }
+        for (index, action) in draftQuickActions.enumerated() {
+            let row = quickActionRow(action, index: index, total: draftQuickActions.count)
+            quickActionsListStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: quickActionsListStack.widthAnchor).isActive = true
+        }
+    }
+
+    private func quickActionRow(_ action: QuickAction, index: Int, total: Int) -> NSView {
+        let iconView = NSImageView(image: QuickActionRunner.icon(for: action, pointSize: 22))
+        iconView.imageScaling = .scaleProportionallyDown
+
+        let titleLabel = NSTextField(labelWithString: action.title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        let kindLabel = NSTextField(labelWithString: quickActionKindLabel(action.kind))
+        kindLabel.font = .systemFont(ofSize: 11)
+        kindLabel.textColor = .secondaryLabelColor
+        let labels = NSStackView(views: [titleLabel, kindLabel])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 1
+        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let promote = NSButton(
+            checkboxWithTitle: L10n.t("Pin", "固定"),
+            target: self,
+            action: #selector(toggleQuickActionPromoted(_:))
+        )
+        promote.state = action.promoted ? .on : .off
+        promote.identifier = NSUserInterfaceItemIdentifier(action.id.uuidString)
+        promote.toolTip = L10n.t(
+            "Show beside the standard completion buttons",
+            "显示在下载完成页的常用按钮旁"
+        )
+
+        let up = quickActionGlyphButton(
+            "chevron.up",
+            action: #selector(moveQuickActionUp(_:)),
+            id: action.id,
+            enabled: index > 0
+        )
+        let down = quickActionGlyphButton(
+            "chevron.down",
+            action: #selector(moveQuickActionDown(_:)),
+            id: action.id,
+            enabled: index < total - 1
+        )
+        let remove = quickActionGlyphButton(
+            "trash",
+            action: #selector(removeQuickAction(_:)),
+            id: action.id,
+            enabled: true
+        )
+        remove.contentTintColor = .systemRed
+
+        let row = NSStackView(views: [iconView, labels, NSView(), promote, up, down, remove])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 24),
+            iconView.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        return row
+    }
+
+    private func quickActionGlyphButton(
+        _ symbol: String,
+        action: Selector,
+        id: UUID,
+        enabled: Bool
+    ) -> NSButton {
+        let button = NSButton(title: "", target: self, action: action)
+        button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .semibold)
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.isEnabled = enabled
+        button.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
+        button.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        return button
+    }
+
+    private func quickActionKindLabel(_ kind: QuickAction.Kind) -> String {
+        switch kind {
+        case .openWithApp: return L10n.t("Open with app", "用 App 打开")
+        case .shareService: return L10n.t("System share", "系统分享")
+        case .shortcut: return L10n.t("Shortcut", "快捷指令")
+        }
+    }
+
+    @objc private func showAddQuickActionMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        let openWith = NSMenuItem(
+            title: L10n.t("Open with App…", "用 App 打开…"),
+            action: #selector(addOpenWithQuickAction),
+            keyEquivalent: ""
+        )
+        openWith.target = self
+        openWith.ndmSymbol("app.badge")
+        menu.addItem(openWith)
+
+        let share = NSMenuItem(title: L10n.t("System Share", "系统分享"), action: nil, keyEquivalent: "")
+        share.ndmSymbol("square.and.arrow.up")
+        share.submenu = shareServicesMenu()
+        menu.addItem(share)
+
+        let shortcut = NSMenuItem(
+            title: L10n.t("Shortcut…", "快捷指令…"),
+            action: #selector(addShortcutQuickAction),
+            keyEquivalent: ""
+        )
+        shortcut.target = self
+        shortcut.ndmSymbol("wand.and.stars")
+        menu.addItem(shortcut)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 3), in: sender)
+    }
+
+    private func shareServicesMenu() -> NSMenu {
+        let menu = NSMenu()
+        let services = QuickActionRunner.availableShareServices()
+        guard !services.isEmpty else {
+            let item = NSMenuItem(
+                title: L10n.t("No share services available", "没有可用的分享服务"),
+                action: nil,
+                keyEquivalent: ""
+            )
+            item.isEnabled = false
+            menu.addItem(item)
+            return menu
+        }
+        for service in services {
+            let item = NSMenuItem(
+                title: service.title,
+                action: #selector(addShareServiceQuickAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.image = service.image
+            item.representedObject = service.title
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func addOpenWithQuickAction() {
+        let panel = NSOpenPanel()
+        panel.message = L10n.t(
+            "Choose an app for finished downloads",
+            "选择用来打开下载成品的 App"
+        )
+        panel.prompt = L10n.t("Add", "添加")
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK,
+              let appURL = panel.url,
+              let action = QuickActionRunner.openWithAction(forAppAt: appURL) else { return }
+        appendQuickAction(action)
+    }
+
+    @objc private func addShareServiceQuickAction(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        appendQuickAction(QuickAction(
+            title: name,
+            kind: .shareService(named: name),
+            symbol: "square.and.arrow.up"
+        ))
+    }
+
+    @objc private func addShortcutQuickAction() {
+        let field = NSTextField(string: "")
+        field.placeholderString = L10n.t("Shortcut name", "快捷指令名称")
+        field.controlSize = .large
+        field.bezelStyle = .roundedBezel
+        NDMDialog.present(
+            title: L10n.t("Run a Shortcut", "运行快捷指令"),
+            body: L10n.t(
+                "Enter its exact name from the Shortcuts app.",
+                "输入它在「快捷指令」App 中的准确名称。"
+            ),
+            buttons: [
+                NDMDialog.Button(L10n.t("Add", "添加")),
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+            ],
+            accessory: field,
+            host: window
+        ) { [weak self, weak field] result in
+            guard result.buttonIndex == 0, let self, let field else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            self.appendQuickAction(QuickAction(
+                title: name,
+                kind: .shortcut(named: name),
+                symbol: "wand.and.stars"
+            ))
+        }
+    }
+
+    private func appendQuickAction(_ action: QuickAction) {
+        guard !draftQuickActions.contains(where: { $0.kind == action.kind }) else { return }
+        draftQuickActions.append(action)
+        reloadQuickActionsList()
+    }
+
+    @objc private func toggleQuickActionPromoted(_ sender: NSButton) {
+        guard let index = quickActionIndex(for: sender) else { return }
+        draftQuickActions[index].promoted = sender.state == .on
+        reloadQuickActionsList()
+    }
+
+    @objc private func removeQuickAction(_ sender: NSButton) {
+        guard let index = quickActionIndex(for: sender) else { return }
+        draftQuickActions.remove(at: index)
+        reloadQuickActionsList()
+    }
+
+    @objc private func moveQuickActionUp(_ sender: NSButton) {
+        moveQuickAction(sender, offset: -1)
+    }
+
+    @objc private func moveQuickActionDown(_ sender: NSButton) {
+        moveQuickAction(sender, offset: 1)
+    }
+
+    private func moveQuickAction(_ sender: NSButton, offset: Int) {
+        guard let index = quickActionIndex(for: sender) else { return }
+        let destination = index + offset
+        guard draftQuickActions.indices.contains(destination) else { return }
+        draftQuickActions.swapAt(index, destination)
+        reloadQuickActionsList()
+    }
+
+    private func quickActionIndex(for sender: NSButton) -> Int? {
+        guard let id = sender.identifier?.rawValue else { return nil }
+        return draftQuickActions.firstIndex { $0.id.uuidString == id }
     }
 
     private func makeBrowserPane() -> NSView {
@@ -1386,6 +1700,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         next.useCategoryFolders = categorySwitch.state == .on
         next.downloadAllAtOnce = allAtOnceSwitch.state == .on
         next.showCompletionDialog = completeSwitch.state == .on
+        next.quickActions = draftQuickActions
         next.clipboardWatch = clipboardSwitch.state == .on
         next.launchAtLogin = launchAtLoginSwitch.state == .on
 

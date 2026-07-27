@@ -20,6 +20,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private let audioExtraction = AudioExtractionCoordinator()
     private let audioStatusView = AudioExtractionStatusView()
     private let fileSharePresenter = FileSharePresenter()
+    private let quickActions: [QuickAction]
     private var completionExpansionAddedHeight: CGFloat = 0
     private weak var metaLabel: NSTextField?
     private weak var deckStack: NSStackView?
@@ -44,8 +45,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         self.task = task
         self.onDismiss = onDismiss
         self.completionStack = SmartFinalize.completionStack(primary: task.destinationFileURL)
+        self.quickActions = SettingsStore.load().completionQuickActions
+        let promotedCount = min(2, quickActions.filter(\.promoted).count)
+        let contentWidth: CGFloat = 452 + CGFloat(max(0, promotedCount - 1)) * 51
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 452, height: collapsedWindowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: collapsedWindowHeight),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: true
@@ -286,7 +290,6 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         more.contentTintColor = .secondaryLabelColor
         more.usesExactAlignmentRect = true
         more.setAccessibilityLabel(L10n.moreActions)
-        more.isHidden = !SmartFinalize.supportsDeliveryRecipes(input: task.destinationFileURL)
 
         let fileExists = task.destinationFileURL.map {
             FileManager.default.fileExists(atPath: $0.path)
@@ -294,13 +297,17 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         open.isEnabled = fileExists
         reveal.isEnabled = fileExists
         share.isEnabled = fileExists
-        more.isEnabled = fileExists
+        more.isEnabled = fileExists || !task.url.isEmpty
         openButton = open
         revealButton = reveal
         shareButton = share
         moreButton = more
 
-        let actions = NSStackView(views: [open, reveal, NSView(), share, more])
+        let promoted = makePromotedQuickActionButtons(fileExists: fileExists)
+        var actionViews: [NSView] = [open, reveal, NSView()]
+        actionViews.append(contentsOf: promoted)
+        actionViews.append(contentsOf: [share, more])
+        let actions = NSStackView(views: actionViews)
         actions.orientation = .horizontal
         actions.spacing = 9
         actions.alignment = .centerY
@@ -315,6 +322,12 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             share.heightAnchor.constraint(equalToConstant: actionH),
             more.heightAnchor.constraint(equalToConstant: actionH),
         ])
+        for button in promoted {
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 42),
+                button.heightAnchor.constraint(equalToConstant: actionH),
+            ])
+        }
 
         // MARK: Deck assembly (everything under the hero).
         var arranged: [NSView] = [fileCard]
@@ -380,6 +393,27 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         button.layer?.borderWidth = 1
         button.layer?.borderColor = NDMChrome.hairline.cgColor
         return button
+    }
+
+    private func makePromotedQuickActionButtons(fileExists: Bool) -> [InspectorActionButton] {
+        guard let file = task.destinationFileURL else { return [] }
+        return quickActions
+            .filter(\.promoted)
+            .prefix(2)
+            .map { action in
+                let button = outlinedButton(title: "")
+                button.identifier = NSUserInterfaceItemIdentifier(action.id.uuidString)
+                button.image = QuickActionRunner.icon(for: action)
+                button.imagePosition = .imageOnly
+                button.contentTintColor = .secondaryLabelColor
+                button.usesExactAlignmentRect = true
+                button.toolTip = action.title
+                button.setAccessibilityLabel(action.title)
+                button.target = self
+                button.action = #selector(runQuickAction(_:))
+                button.isEnabled = fileExists && QuickActionRunner.isAvailable(action, for: file)
+                return button
+            }
     }
 
     private func resizeToFitContent(animate: Bool) {
@@ -535,7 +569,6 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             openButton?.isEnabled = false
             revealButton?.isEnabled = false
             shareButton?.isEnabled = false
-            moreButton?.isEnabled = false
             showActionFailure(
                 message: L10n.fileNotFound,
                 detail: task.destinationFileURL?.path ?? task.filename
@@ -551,10 +584,70 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func showMoreActions(_ sender: NSButton) {
         let menu = NSMenu()
+
+        if let file = task.destinationFileURL,
+           FileManager.default.fileExists(atPath: file.path) {
+            for action in quickActions {
+                let item = NSMenuItem(
+                    title: action.title,
+                    action: #selector(runQuickActionMenuItem(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = action.id.uuidString
+                item.image = QuickActionRunner.icon(for: action, pointSize: 16)
+                item.isEnabled = QuickActionRunner.isAvailable(action, for: file)
+                menu.addItem(item)
+            }
+            if !quickActions.isEmpty {
+                menu.addItem(.separator())
+            }
+
+            let applications = NSWorkspace.shared.urlsForApplications(toOpen: file)
+                .filter { $0.standardizedFileURL != Bundle.main.bundleURL.standardizedFileURL }
+            if !applications.isEmpty {
+                let openWith = NSMenuItem(
+                    title: L10n.t("Open With", "打开方式"),
+                    action: nil,
+                    keyEquivalent: ""
+                )
+                openWith.ndmSymbol("arrow.up.forward.app")
+                let submenu = NSMenu()
+                for appURL in applications.prefix(8) {
+                    let name = FileManager.default.displayName(atPath: appURL.path)
+                        .replacingOccurrences(of: ".app", with: "")
+                    let item = NSMenuItem(
+                        title: name,
+                        action: #selector(openWithApplication(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.target = self
+                    item.representedObject = appURL
+                    let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+                    icon.size = NSSize(width: 16, height: 16)
+                    item.image = icon
+                    submenu.addItem(item)
+                }
+                openWith.submenu = submenu
+                menu.addItem(openWith)
+            }
+        }
+
+        let copyLink = NSMenuItem(
+            title: L10n.copyURL,
+            action: #selector(copyLinkClicked),
+            keyEquivalent: ""
+        )
+        copyLink.target = self
+        copyLink.ndmSymbol("doc.on.doc")
+        copyLink.isEnabled = !task.url.isEmpty
+        menu.addItem(copyLink)
+
         switch audioExtraction.state {
         case .unavailable:
-            return
+            break
         case .ready, .failed:
+            menu.addItem(.separator())
             let extract = NSMenuItem(
                 title: L10n.extractAudio,
                 action: #selector(extractAudioClicked),
@@ -564,11 +657,13 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             extract.target = self
             menu.addItem(extract)
         case .running:
+            menu.addItem(.separator())
             let running = NSMenuItem(title: L10n.extractingAudio, action: nil, keyEquivalent: "")
             running.image = NDMChrome.symbol("waveform", pointSize: 13, weight: .medium)
             running.isEnabled = false
             menu.addItem(running)
         case .succeeded:
+            menu.addItem(.separator())
             let reveal = NSMenuItem(
                 title: L10n.showAudioInFinder,
                 action: #selector(revealExtractedAudio),
@@ -588,6 +683,43 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             menu.addItem(again)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 3), in: sender)
+    }
+
+    @objc private func runQuickAction(_ sender: NSButton) {
+        runQuickAction(id: sender.identifier?.rawValue)
+    }
+
+    @objc private func runQuickActionMenuItem(_ sender: NSMenuItem) {
+        runQuickAction(id: sender.representedObject as? String)
+    }
+
+    private func runQuickAction(id: String?) {
+        guard let id,
+              let action = quickActions.first(where: { $0.id.uuidString == id }),
+              let file = destinationFileForAction() else { return }
+        guard QuickActionRunner.run(action, file: file) else {
+            showActionFailure(
+                message: L10n.t("Couldn’t run this action", "无法运行此动作"),
+                detail: action.title
+            )
+            return
+        }
+    }
+
+    @objc private func openWithApplication(_ sender: NSMenuItem) {
+        guard let appURL = sender.representedObject as? URL,
+              let file = destinationFileForAction() else { return }
+        NSWorkspace.shared.open(
+            [file],
+            withApplicationAt: appURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        )
+    }
+
+    @objc private func copyLinkClicked() {
+        guard !task.url.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(task.url, forType: .string)
     }
 
     @objc private func extractAudioClicked() {

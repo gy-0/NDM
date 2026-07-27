@@ -66,8 +66,12 @@ enum QAWindowRenderer {
     @discardableResult
     static func renderMainWindow(to path: String) -> Bool {
         let candidates = NSApp.windows.filter { $0.isVisible && $0.contentView != nil }
-        // Largest visible window: sheets and popovers are smaller by construction.
-        guard let window = candidates.max(by: { $0.frame.width < $1.frame.width }),
+        // Completion and settings QA sometimes needs the key auxiliary window;
+        // default visual runs keep choosing the largest stable surface.
+        let window = ProcessInfo.processInfo.environment["NDM_QA_RENDER_KEY_WINDOW"] == "1"
+            ? NSApp.keyWindow
+            : candidates.max(by: { $0.frame.width < $1.frame.width })
+        guard let window,
               let content = window.contentView else {
             FileHandle.standardError.write(Data("QA render: no window\n".utf8))
             return false
@@ -83,8 +87,11 @@ enum QAWindowRenderer {
             FileHandle.standardError.write(Data("QA render: empty bounds\n".utf8))
             return false
         }
-        guard let rep = renderLayerTree(of: view, bounds: bounds)
-                ?? renderDrawRect(of: view, bounds: bounds) else {
+        let forceDrawRect = ProcessInfo.processInfo.environment["NDM_QA_RENDER_DRAW_RECT"] == "1"
+        let rep = forceDrawRect
+            ? renderDrawRect(of: view, bounds: bounds)
+            : renderLayerTree(of: view, bounds: bounds) ?? renderDrawRect(of: view, bounds: bounds)
+        guard let rep else {
             FileHandle.standardError.write(Data("QA render: no bitmap\n".utf8))
             return false
         }
