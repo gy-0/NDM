@@ -196,12 +196,12 @@ public enum L10n: Sendable {
     public static var selectDownloadHint: String { t("Select a download to see actions.", "选择一项下载以查看操作。") }
 
     public static var emptyNoDownloads: String {
-        t("One link is all it takes", "从一个链接开始")
+        t("IDM-class speed. Mac-native design.", "IDM 级速度，原生 Mac 体验")
     }
     public static var emptyDropHint: String {
         t(
-            "Press ⌘N or drop a link — I'll take it from there.",
-            "按 ⌘N，或把链接拖进来——剩下的交给我。"
+            "Press ⌘N or drop a link to start a download.",
+            "按 ⌘N 或把链接拖到这里即可开始下载。"
         )
     }
     public static var emptyTrySearch: String {
@@ -1127,7 +1127,7 @@ public enum L10n: Sendable {
 
     public static var downloadComplete: String { t("Download Complete", "下载完成") }
     public static var ready: String { t("Ready", "已就绪") }
-    public static var readyToPlay: String { t("Ready to play", "下载好了") }
+    public static var readyToPlay: String { t("Download complete", "下载完成") }
     public static var play: String { t("Play", "播放") }
 
     // Completion details — normal finishing stays silent; only exceptions
@@ -1472,9 +1472,7 @@ public enum L10n: Sendable {
         )
     }
     public static var failedToStart: String { t("Failed to start NDM", "无法启动 NDM") }
-    public static var downloadFailed: String {
-        t("This download didn't finish", "这次没下完")
-    }
+    public static var downloadFailed: String { t("Download failed", "下载失败") }
     public static func bridgePortInUse(_ port: UInt16) -> String {
         t("Browser bridge port \(port) is in use", "浏览器桥接端口 \(port) 已被占用")
     }

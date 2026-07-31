@@ -37,9 +37,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private var languageObserver: NSObjectProtocol?
     private var coverObserver: NSObjectProtocol?
 
-    /// A short payoff banner keeps the finished file and its primary action in
-    /// the first visual scan while preserving the artwork handoff.
-    private let heroHeight: CGFloat = 104
+    /// Cinema layout: a full-bleed dark hero carries the finished file's own
+    /// artwork with the "Download Complete" headline and an accent underline
+    /// laid over it; a clean light deck below holds the file identity, the
+    /// optional sidecar disclosure, and one confident action row.
+    private let heroHeight: CGFloat = 208
 
     init(task: DownloadTask, onDismiss: @escaping () -> Void = {}) {
         self.task = task
@@ -213,7 +215,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
         // MARK: Hero band — dark, edge to edge, thumbnail as backdrop.
         let hero = CompletionCinemaHero(
-            title: completionHeadline,
+            title: L10n.downloadComplete,
             filename: task.filename
         )
         hero.translatesAutoresizingMaskIntoConstraints = false
@@ -516,7 +518,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private func relocalize() {
         let isMedia = task.category == .video || task.category == .audio
         window?.title = L10n.downloadComplete
-        hero?.setTitle(completionHeadline)
+        hero?.setTitle(L10n.downloadComplete)
         openButton?.title = isMedia ? L10n.play : L10n.open
         revealButton?.title = L10n.showInFinder
         shareButton?.setAccessibilityLabel(L10n.share)
@@ -525,14 +527,6 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         updateMetaLabel()
         completionStackView.relocalize()
         resizeToFitContent(animate: false)
-    }
-
-    /// Media completion can sound human and outcome-focused because playback
-    /// is the primary next step; other file types keep the neutral status.
-    private var completionHeadline: String {
-        task.category == .video || task.category == .audio
-            ? L10n.readyToPlay
-            : L10n.downloadComplete
     }
 
     /// Rebuild the "size · type · duration" line from its parts. The size is
