@@ -83,6 +83,7 @@ final class TranscriptNarratorTests: XCTestCase {
 
     /// An impossible deadline must yield an empty narration, not a hang and not a throw.
     func testAnImpossibleTimeoutDegradesQuietly() async throws {
+        try LiveModelGate.skipUnlessEnabled("Testing the model timeout")
         guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
         guard TranscriptNarrator.isAvailable else { throw XCTSkip("no language model here") }
         let narration = await TranscriptNarrator().narrate(
@@ -105,6 +106,7 @@ final class TranscriptNarratorTests: XCTestCase {
     /// Asserts shape, not wording: the model's exact words are not stable, and a test
     /// that demanded them would fail on a perfectly good output.
     func testARealNarrationIsShortAndComplete() async throws {
+        try LiveModelGate.skipUnlessEnabled("Narrating with the on-device model")
         guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
         guard TranscriptNarrator.isAvailable else { throw XCTSkip("no language model here") }
 

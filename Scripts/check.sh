@@ -110,6 +110,7 @@ fi
 print
 print -r -- "Not run here (they reach the network, so they cannot gate a merge):"
 print -r -- "  NDM_LIVE_NETWORK_TESTS=1 swift test --filter YtDlpToolIntegrationTests"
+print -r -- "  NDM_LIVE_MODEL_TESTS=1 swift test --filter TranscriptNarratorTests"
 print -r -- "  swift run NDMProbe                      # delivery success rate"
 print -r -- "  swift run NDMSoak --duration 28800      # the real 8 hour soak"
 
