@@ -92,6 +92,8 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(L10n.quickLook, "快速查看")
         XCTAssertEqual(L10n.moreActions, "更多操作")
         XCTAssertEqual(L10n.readyToPlay, "下载好了")
+        XCTAssertEqual(L10n.emptyNoDownloads, "从一个链接开始")
+        XCTAssertEqual(L10n.downloadFailed, "这次没下完")
         XCTAssertFalse(L10n.finalizeKeptTS.lowercased().contains("ffmpeg"))
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))
         XCTAssertEqual(L10n.ytdlpEntireCollection(12), "整个合集 · 12 项")
