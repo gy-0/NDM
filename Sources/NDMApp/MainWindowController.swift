@@ -31,6 +31,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     /// Establish a useful launch focus once, without re-selecting after the
     /// user deliberately clears selection during later one-second refreshes.
     private var hasEstablishedInitialSelection = false
+    private var hasAppliedQAMultiSelection = false
+    private var inspectorVisibilityPreference: InspectorVisibilityPreference = .automatic
+    private var inspectorWasAutoCollapsedForCompactWidth = false
 
     private let splitController = NSSplitViewController()
     private let sidebarController = SidebarViewController()
@@ -124,6 +127,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         window.toolbar = nil
         wireCallbacks()
         wireContentToolbar()
+        installResponsiveInspectorBehavior()
         NotificationCenter.default.addObserver(
             forName: L10n.didChangeNotification,
             object: nil,
@@ -274,8 +278,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             item.animator().isCollapsed.toggle()
         }
         contentToolbar.onToggleInspector = { [weak self] in
-            guard let item = self?.splitController.splitViewItems.last else { return }
-            item.animator().isCollapsed.toggle()
+            guard let self,
+                  let item = self.splitController.splitViewItems.last else { return }
+            let willCollapse = !item.isCollapsed
+            self.inspectorVisibilityPreference = willCollapse ? .userCollapsed : .userExpanded
+            self.inspectorWasAutoCollapsedForCompactWidth = false
+            item.animator().isCollapsed = willCollapse
         }
         contentToolbar.onClipboardOffer = { [weak self] in
             self?.openClipboardOffer()
@@ -360,6 +368,49 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         // Bumped so a previously-narrowed sidebar divider (saved before the
         // launch window was made larger) doesn't reappear crushed.
         splitController.splitView.autosaveName = "NDM.MainSplit.v9"
+    }
+
+    private func installResponsiveInspectorBehavior() {
+        inspectorWasAutoCollapsedForCompactWidth = startsCompact
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyResponsiveInspector(animated: true)
+            }
+        }
+        applyResponsiveInspector(animated: false)
+    }
+
+    private func applyResponsiveInspector(animated: Bool) {
+        guard let window,
+              let inspectorItem = splitController.splitViewItems.last else { return }
+        let decision = InspectorResponsivePolicy.resolve(
+            windowWidth: Double(window.frame.width),
+            preference: inspectorVisibilityPreference,
+            isInspectorCollapsed: inspectorItem.isCollapsed,
+            hasSelection: selectedTaskID != nil,
+            wasAutoCollapsed: inspectorWasAutoCollapsedForCompactWidth
+        )
+        inspectorWasAutoCollapsedForCompactWidth = decision.isAutoCollapsed
+
+        let collapse: Bool?
+        switch decision.action {
+        case .none:
+            collapse = nil
+        case .collapse:
+            collapse = true
+        case .expand:
+            collapse = false
+        }
+        guard let collapse else { return }
+        if animated, window.isVisible {
+            inspectorItem.animator().isCollapsed = collapse
+        } else {
+            inspectorItem.isCollapsed = collapse
+        }
     }
 
     /// Pane widths, for the toggle probe's log line.
@@ -522,27 +573,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
 
         // Contextual command group: what you can do to the selected task
         // appears next to New. Empty selection keeps the toolbar clean.
-        var context: [(ToolbarContextAction, String, String)] = []
-        if let row {
-            if actions.canPause {
-                context.append((.pause, L10n.pause, "pause.fill"))
-            }
-            if actions.canStart {
-                context.append((.resume, row.isFailed ? L10n.retry : L10n.resume,
-                                row.isFailed ? "arrow.clockwise" : "play.fill"))
-            }
-            if actions.canRetry, !actions.canStart {
-                context.append((.retry, L10n.retry, "arrow.clockwise"))
-            }
-            // Toolbar stays quiet unless the failure specifically needs a fresh URL.
-            if actions.canRenew, row.needsLinkRenew {
-                context.append((.renew, L10n.renewURL, "link"))
-            }
-            if actions.canOpen {
-                context.append((.open, L10n.open, "arrow.up.forward.app.fill"))
-            }
-            if actions.canShowInFinder {
-                context.append((.reveal, L10n.showInFinder, "folder.fill"))
+        let promoted = TaskPromotedAction.make(
+            from: row,
+            hasMultipleSelection: multiSelectedTaskIDs.count > 1
+        )
+        let context: [(ToolbarContextAction, String, String)] = promoted.map { action in
+            switch action {
+            case .pause: return (.pause, L10n.pause, "pause.fill")
+            case .resume: return (.resume, L10n.resume, "play.fill")
+            case .retry: return (.retry, L10n.retry, "arrow.clockwise")
+            case .renew: return (.renew, L10n.renewURL, "link")
+            case .openSourcePage: return (.openSourcePage, L10n.openSourcePage, "arrow.up.right.square")
+            case .open: return (.open, L10n.open, "arrow.up.forward.app.fill")
+            case .reveal: return (.reveal, L10n.showInFinder, "folder.fill")
             }
         }
         contentToolbar.setContextActions(context)
@@ -555,6 +598,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         case .resume: startSelected()
         case .retry: startTask(id)
         case .renew: renewURL(for: id)
+        case .openSourcePage: renewURL(for: id)
         case .open: openTaskFile(id)
         case .reveal: revealTaskFile(id)
         case .delete: deleteTask(id)
@@ -719,6 +763,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             // Media filters open as a poster wall; general files stay a list.
             preferGallery: selectedFilter == .video || selectedFilter == .image
         )
+        if !hasAppliedQAMultiSelection,
+           let count = QAPreviewOverrides.multiSelectionCount {
+            hasAppliedQAMultiSelection = true
+            DispatchQueue.main.async { [weak self] in
+                self?.listController.selectFirstRowsForQA(count: count)
+            }
+        }
         updateInspector()
         updateToolbarEnablement()
         let snapshot = statusBarSnapshot()
@@ -750,7 +801,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return L10n.emptyTrySearch
         }
-        return L10n.emptyTryFilter
+        // The selected filter is already visible in the sidebar and header.
+        // Repeating navigation advice here does not help the empty state.
+        return ""
     }
 
     /// Snapshot for the menu-bar status item.
@@ -990,20 +1043,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private func updateInspector() {
         inspectorController.update(row: selectedRow())
         syncQuickLookWithSelectionIfVisible()
-        // Expand once on the first selection, then never auto-collapse.
-        // Auto-collapsing on deselect reflowed the whole content column on
-        // every click — in the gallery that reshuffled the poster grid
-        // mid-click (4 columns → 3 and back) so the second click landed on a
-        // card that had already moved. A stable column with a quiet
-        // placeholder when nothing is selected beats a layout that jumps.
-        if let inspectorItem = splitController.splitViewItems.last,
-           selectedTaskID != nil, inspectorItem.isCollapsed {
-            if window?.isVisible == true {
-                inspectorItem.animator().isCollapsed = false
-            } else {
-                inspectorItem.isCollapsed = false
-            }
-        }
+        // Selection may restore a pane that was hidden only to protect a compact
+        // task list. A user-collapsed pane is never reopened on their behalf.
+        applyResponsiveInspector(animated: window?.isVisible == true)
     }
 
     private func refreshLiveProgress() async {
@@ -1082,7 +1124,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 startURL(
                     submission.urlString,
                     preflight: submission.preflight,
-                    readyChoice: submission.readyChoice
+                    readyChoice: submission.readyChoice,
+                    destinationDirectoryOverride: submission.destinationDirectoryOverride
                 )
             case .showExisting(let taskID):
                 focusExistingTask(taskID)
@@ -1230,7 +1273,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
     private func startURL(
         _ urlString: String,
         preflight: MediaPreflightResult? = nil,
-        readyChoice: NewDownloadWindowController.ReadyChoice? = nil
+        readyChoice: NewDownloadWindowController.ReadyChoice? = nil,
+        destinationDirectoryOverride: URL? = nil
     ) {
         let parent = window
         let cancellation = MediaPreparationCancellation()
@@ -1364,7 +1408,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                         url: effectiveURL,
                         probe: probe,
                         picked: readyChoice.format,
-                        options: readyChoice.options
+                        options: readyChoice.options,
+                        destinationDirectory: destinationDirectoryOverride
                     )
                     return
                 }
@@ -1374,7 +1419,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                     probe: probe,
                     collection: preparedResult?.collection,
                     cookieSource: cookieSource,
-                    destinationDirectory: currentSettings.downloadDirectory,
+                    destinationDirectory: destinationDirectoryOverride
+                        ?? currentSettings.downloadDirectory,
                     parentWindow: parent
                 ) {
                 case .cancel:
@@ -1392,7 +1438,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                                 collectionTitle: collection.title.isEmpty ? nil : collection.title,
                                 estimatedSampleBytes: picked.estimatedBytes(for: options.container),
                                 estimatedSampleComponentBytes: picked.estimatedComponentBytes(for: options.container),
-                                sampleDurationSeconds: probe.durationSeconds
+                                sampleDurationSeconds: probe.durationSeconds,
+                                destinationDirectory: destinationDirectoryOverride
                             )
                             for (task, item) in zip(tasks, collection.items) {
                                 if let thumbnail = item.thumbnailURL {
@@ -1415,7 +1462,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                             url: effectiveURL,
                             probe: probe,
                             picked: picked,
-                            options: options
+                            options: options,
+                            destinationDirectory: destinationDirectoryOverride
                         )
                         return
                     } catch {
@@ -1427,9 +1475,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             working?.dismiss()
             guard !cancellation.isCancelled else { return }
             do {
-                let task = try await manager.addURL(urlToAdd, ltype: ltype)
+                let task = try await manager.addURL(
+                    urlToAdd,
+                    ltype: ltype,
+                    destinationDirectory: destinationDirectoryOverride
+                )
                 selectedTaskID = task.id
-                try await manager.start(taskID: task.id)
+                try await manager.start(
+                    taskID: task.id,
+                    destinationDirectory: destinationDirectoryOverride
+                )
                 await reload()
                 focusStartedDownload(task.id)
             } catch {
@@ -1464,7 +1519,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
         url: String,
         probe: YtDlpProbe,
         picked: YtDlpFormat,
-        options: YtDlpDownloadOptions
+        options: YtDlpDownloadOptions,
+        destinationDirectory: URL?
     ) async {
         do {
             let task = try await manager.startYtDlp(
@@ -1474,7 +1530,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 pageTitle: probe.title.isEmpty ? nil : probe.title,
                 estimatedBytes: picked.estimatedBytes(for: options.container),
                 estimatedComponentBytes: picked.estimatedComponentBytes(for: options.container),
-                preferredFilename: probe.title.isEmpty ? nil : probe.title
+                preferredFilename: probe.title.isEmpty ? nil : probe.title,
+                destinationDirectory: destinationDirectory
             )
             if let thumb = probe.thumbnailURL {
                 CoverArtCache.shared.prefetchRemote(
@@ -1715,6 +1772,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             showProgress(for: taskID)
         case .start:
             startTask(taskID)
+        case .recover:
+            performRecovery(for: taskID, row: row)
+        case .none:
+            break
+        }
+    }
+
+    private func performRecovery(for taskID: Int64, row: TaskRowPresentation) {
+        switch row.recoveryAction {
+        case .openSourcePage, .renewURL:
+            renewURL(for: taskID)
+        case .retry:
+            startTask(taskID)
         case .none:
             break
         }
@@ -1839,7 +1909,7 @@ private enum SidebarRow: Equatable {
 private final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     var onSelectFilter: ((SidebarFilter) -> Void)?
 
-    private let tableView = NSTableView()
+    private let tableView = FocusReportingTableView()
     private let scrollView = NSScrollView()
     private var counts: [SidebarFilter: Int] = [:]
     private var selected: SidebarFilter = .all
@@ -1884,6 +1954,9 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         tableView.selectionHighlightStyle = .none
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.onFocusChange = { [weak self] listHasKeyboardFocus in
+            self?.syncSelectionAppearance(listHasKeyboardFocus: listHasKeyboardFocus)
+        }
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("filter"))
         tableView.addTableColumn(col)
         scrollView.documentView = tableView
@@ -1986,7 +2059,9 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         let view = QuietFinderRowView()
         if case .filter(let filter) = rows[row] {
             view.usesAccentFill = true
-            view.forcedSelected = (filter == selected)
+            let isSelected = filter == selected
+            view.forcedSelected = isSelected
+            view.isKeyboardFocused = isSelected && self.tableView.hasActiveKeyboardFocus
         } else {
             view.usesAccentFill = false
             view.forcedSelected = false
@@ -2038,21 +2113,25 @@ private final class SidebarViewController: NSViewController, NSTableViewDataSour
         syncSelectionAppearance()
     }
 
-    private func syncSelectionAppearance() {
+    private func syncSelectionAppearance(listHasKeyboardFocus reportedFocus: Bool? = nil) {
         // Walk every row, not just visibleRect: NSTableView keeps prepared row
         // views slightly outside the viewport, and one of those can be the
         // previously selected row — skipping it leaves a stale accent pill
         // that scrolls back in later.
+        let listHasKeyboardFocus = reportedFocus ?? tableView.hasActiveKeyboardFocus
         for row in 0..<rows.count {
             if let rowView = tableView.rowView(
                 atRow: row,
                 makeIfNecessary: false
             ) as? QuietFinderRowView {
                 if case .filter(let filter) = rows[row] {
+                    let isSelected = filter == selected
                     rowView.usesAccentFill = true
-                    rowView.forcedSelected = (filter == selected)
+                    rowView.forcedSelected = isSelected
+                    rowView.isKeyboardFocused = isSelected && listHasKeyboardFocus
                 } else {
                     rowView.forcedSelected = false
+                    rowView.isKeyboardFocused = false
                 }
                 rowView.needsDisplay = true
             }
@@ -2377,7 +2456,67 @@ private final class BatchActionBarView: NSView {
     @objc private func tapDelete() { onDelete?() }
 }
 
-private final class TaskListTableView: NSTableView {
+/// Reports whether this table — rather than merely one of its selected rows —
+/// owns the active keyboard destination. Sidebar and content list share this
+/// mechanism so focus never changes columns invisibly.
+private class FocusReportingTableView: NSTableView {
+    var onFocusChange: ((Bool) -> Void)?
+    private var windowFocusObservers: [NSObjectProtocol] = []
+
+    var hasActiveKeyboardFocus: Bool {
+        window?.isKeyWindow == true && window?.firstResponder === self
+    }
+
+    override func viewDidMoveToWindow() {
+        for observer in windowFocusObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windowFocusObservers.removeAll()
+        super.viewDidMoveToWindow()
+
+        if let window {
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+                windowFocusObservers.append(
+                    NotificationCenter.default.addObserver(
+                        forName: name,
+                        object: window,
+                        queue: .main
+                    ) { [weak self] _ in
+                        self?.publishFocusChange()
+                    }
+                )
+            }
+        }
+        publishFocusChange()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { publishFocusChange() }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        // AppKit invokes this while `window.firstResponder` can still point at
+        // the table. Publish the transition itself; rereading the window here
+        // would leave a stale keyboard-focus outline behind.
+        if accepted { onFocusChange?(false) }
+        return accepted
+    }
+
+    private func publishFocusChange() {
+        onFocusChange?(hasActiveKeyboardFocus)
+    }
+
+    deinit {
+        for observer in windowFocusObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+}
+
+private final class TaskListTableView: FocusReportingTableView {
     var onQuickLook: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
@@ -2471,6 +2610,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             guard let self, let taskID = self.selectedTaskID else { return false }
             self.onContextAction?(.quickLook, taskID)
             return true
+        }
+        tableView.onFocusChange = { [weak self] listHasKeyboardFocus in
+            self?.syncSelectionAppearance(listHasKeyboardFocus: listHasKeyboardFocus)
         }
         tableView.menu = makeContextMenu()
         galleryView.menu = tableView.menu
@@ -2955,6 +3097,7 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         self.selectedTaskID = selectedTaskID
         emptyLabel.stringValue = emptyTitle
         emptySubtitleLabel.stringValue = emptySubtitle
+        emptySubtitleLabel.isHidden = emptySubtitle.isEmpty
         emptyActionsRow?.isHidden = !emptyShowsActions
         let wasEmpty = !emptyStack.isHidden
         let isEmpty = rows.isEmpty && heroIDs.isEmpty
@@ -3563,6 +3706,17 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         tableView.scrollRowToVisible(index)
     }
 
+#if DEBUG
+    func selectFirstRowsForQA(count: Int) {
+        let upperBound = min(max(0, count), rows.count)
+        guard upperBound > 1 else { return }
+        tableView.selectRowIndexes(
+            IndexSet(integersIn: 0..<upperBound),
+            byExtendingSelection: false
+        )
+    }
+#endif
+
     func selectAdjacentRow(offset: Int) -> Bool {
         // Heroes sit above the table — arrow keys walk them first, then the list.
         if !heroOrderedIDs.isEmpty {
@@ -3651,18 +3805,23 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         }
     }
 
-    private func syncSelectionAppearance() {
+    private func syncSelectionAppearance(listHasKeyboardFocus reportedFocus: Bool? = nil) {
         let visibleRows = tableView.rows(in: tableView.visibleRect)
         guard visibleRows.location != NSNotFound else { return }
+        let listHasKeyboardFocus = reportedFocus ?? tableView.hasActiveKeyboardFocus
         for row in visibleRows.location..<NSMaxRange(visibleRows) {
             guard row < rows.count,
                   let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? QuietFinderRowView else {
                 continue
             }
             let on = tableView.selectedRowIndexes.contains(row)
-            guard rowView.forcedSelected != on else { continue }
-            rowView.forcedSelected = on
-            rowView.needsDisplay = true
+            if rowView.forcedSelected != on {
+                rowView.forcedSelected = on
+            }
+            let showsKeyboardFocus = on && listHasKeyboardFocus
+            if rowView.isKeyboardFocused != showsKeyboardFocus {
+                rowView.isKeyboardFocused = showsKeyboardFocus
+            }
         }
     }
 
@@ -3762,7 +3921,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         view.usesAccentFill = false
         if row < rows.count {
             let item = rows[row]
-            view.forcedSelected = tableView.selectedRowIndexes.contains(row)
+            let selected = tableView.selectedRowIndexes.contains(row)
+            view.forcedSelected = selected
+            view.isKeyboardFocused = selected && self.tableView.hasActiveKeyboardFocus
             applyArtwork(to: view, item: item)
         }
         return view
@@ -3982,11 +4143,17 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             case #selector(ctxShare): item.isEnabled = presentation.canOpen
             case #selector(ctxRetry):
                 item.isEnabled = presentation.canRetry
+                    && (presentation.isFailed || presentation.isComplete)
                 item.title = L10n.retry
-            case #selector(ctxRenew): item.isEnabled = presentation.canRenew
+            case #selector(ctxRenew):
+                item.isEnabled = presentation.canRenew
+                let opensPage = presentation.recoveryAction == .openSourcePage
+                item.title = opensPage ? L10n.openSourcePage : L10n.renewURLEllipsis
+                item.ndmSymbol(opensPage ? "arrow.up.right.square" : "arrow.triangle.2.circlepath")
             case #selector(ctxStart):
-                // Start/Resume for paused & waiting; Retry covers error + incomplete.
-                item.isEnabled = presentation.canStart && !presentation.canRetry
+                // Interrupted work continues from its partial result. Retry is
+                // reserved for actual failures (or completed re-downloads).
+                item.isEnabled = presentation.canStart && !presentation.isFailed
                 item.title = presentation.isQueued ? L10n.start : L10n.resume
             case #selector(ctxPause): item.isEnabled = presentation.canPause
             case #selector(ctxSchedule):
@@ -4162,6 +4329,15 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
     private var progressTop: NSLayoutConstraint?
     private var titleTop: NSLayoutConstraint?
     private var badgeHeight: NSLayoutConstraint?
+    private var titleToMetric: NSLayoutConstraint?
+    private var subtitleToMetric: NSLayoutConstraint?
+    private var badgeToMetric: NSLayoutConstraint?
+    private var titleToEdge: NSLayoutConstraint?
+    private var subtitleToEdge: NSLayoutConstraint?
+    private var badgeToEdge: NSLayoutConstraint?
+    private var subtitleToHover: NSLayoutConstraint?
+    private var showsTrailingMetric = true
+    private var contentScale: CGFloat = InterfaceScale.default
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4212,22 +4388,57 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
         let badgeHeight = badgeLabel.heightAnchor.constraint(equalToConstant: 16)
         let barTop = progressBar.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 6)
         let barHeight = progressBar.heightAnchor.constraint(equalToConstant: 4)
+        let titleToMetric = titleLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingLabel.leadingAnchor,
+            constant: -10
+        )
+        let subtitleToMetric = subtitleLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingLabel.leadingAnchor,
+            constant: -10
+        )
+        let badgeToMetric = badgeLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingLabel.leadingAnchor,
+            constant: -8
+        )
+        let titleToEdge = titleLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingAnchor,
+            constant: -12
+        )
+        let subtitleToEdge = subtitleLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingAnchor,
+            constant: -12
+        )
+        let badgeToEdge = badgeLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: trailingAnchor,
+            constant: -12
+        )
+        let subtitleToHover = subtitleLabel.trailingAnchor.constraint(
+            lessThanOrEqualTo: hoverStack.leadingAnchor,
+            constant: -6
+        )
         self.titleTop = titleTop
         self.badgeHeight = badgeHeight
         progressTop = barTop
         progressHeight = barHeight
+        self.titleToMetric = titleToMetric
+        self.subtitleToMetric = subtitleToMetric
+        self.badgeToMetric = badgeToMetric
+        self.titleToEdge = titleToEdge
+        self.subtitleToEdge = subtitleToEdge
+        self.badgeToEdge = badgeToEdge
+        self.subtitleToHover = subtitleToHover
         NSLayoutConstraint.activate([
             glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             titleTop,
             titleLabel.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -10),
+            titleToMetric,
 
             badgeLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 6),
             badgeLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             badgeHeight,
-            badgeLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -8),
+            badgeToMetric,
 
             trailingLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             trailingLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -4237,7 +4448,7 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
 
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingLabel.leadingAnchor, constant: -10),
+            subtitleToMetric,
 
             barTop,
             progressBar.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
@@ -4245,6 +4456,11 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
             progressBar.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -10),
             barHeight,
         ])
+    }
+
+    override func layout() {
+        updateResponsiveTrailingMetric()
+        super.layout()
     }
 
     @objc private func hoverPrimaryTapped() {
@@ -4266,27 +4482,44 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
         updateHoverVisibility()
     }
 
-    /// Crossfades the trailing size/speed text against the hover action
-    /// icons.
+    /// Hand passive metadata to the action rail instead of drawing both in the
+    /// same pixels. The subtitle first reserves a real slot for the controls;
+    /// the actions then fade in while the trailing metric fades away.
     private func updateHoverVisibility() {
         let hasActions = hoverPrimaryAction != nil || hoverShowsReveal
-        let shouldShow = isRowHovering && hasActions
+        let presentation = TaskRowHoverPresentation.resolve(
+            isHovered: isRowHovering,
+            hasActions: hasActions,
+            metricAvailable: showsTrailingMetric
+        )
+        let shouldShow = presentation.showsActions
         guard shouldShow != isHoverStackVisible else { return }
         isHoverStackVisible = shouldShow
         if shouldShow {
             hoverStack.isHidden = false
+            trailingLabel.setAccessibilityHidden(true)
+            syncSubtitleTrailingConstraint()
+            needsLayout = true
+            layoutSubtreeIfNeeded()
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.12
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 self.hoverStack.animator().alphaValue = 1
+                self.trailingLabel.animator().alphaValue = 0
             }
         } else {
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.12
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 self.hoverStack.animator().alphaValue = 0
+                self.trailingLabel.animator().alphaValue = presentation.showsTrailingMetric ? 1 : 0
             }, completionHandler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, !self.isHoverStackVisible else { return }
                     self.hoverStack.isHidden = true
+                    self.trailingLabel.setAccessibilityHidden(!self.showsTrailingMetric)
+                    self.syncSubtitleTrailingConstraint()
+                    self.needsLayout = true
                 }
             })
         }
@@ -4308,6 +4541,7 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
             trailingLabel.alphaValue = 1
         }
         currentRow = row
+        contentScale = scale
 
         let liveScale = row.isDownloading ? scale * 1.22 : scale
         glyph.setContentScale(liveScale)
@@ -4324,6 +4558,7 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
         let cover = CoverArtCache.shared.image(for: row.taskID)
         glyph.apply(filename: row.filename, cover: cover)
         titleLabel.stringValue = row.filename
+        titleLabel.toolTip = row.filename
         titleLabel.textColor = .labelColor
         trailingLabel.textColor = .labelColor
         trailingLabel.isHidden = false
@@ -4417,6 +4652,47 @@ private final class TaskRowCellView: NSTableCellView, AccentChromeRefreshing {
             trailingLabel.stringValue = row.sizeText
             trailingLabel.font = .monospacedDigitSystemFont(ofSize: 12 * scale, weight: .semibold)
             trailingLabel.textColor = .secondaryLabelColor
+        }
+        updateResponsiveTrailingMetric()
+    }
+
+    /// At compact widths the static file size is already available in the
+    /// inspector. Yield its pixels to the filename; never hide live speed or
+    /// progress, which is the row's most time-sensitive information.
+    private func updateResponsiveTrailingMetric() {
+        guard let row = currentRow else { return }
+        let shouldShow = TaskRowTrailingMetricPolicy.showsTrailingMetric(
+            rowWidth: Double(bounds.width),
+            interfaceScale: Double(contentScale),
+            isDownloading: row.isDownloading
+        )
+        if shouldShow != showsTrailingMetric {
+            showsTrailingMetric = shouldShow
+            titleToMetric?.isActive = shouldShow
+            badgeToMetric?.isActive = shouldShow
+            titleToEdge?.isActive = !shouldShow
+            badgeToEdge?.isActive = !shouldShow
+        }
+        trailingLabel.isHidden = !shouldShow
+        trailingLabel.alphaValue = shouldShow && !isHoverStackVisible ? 1 : 0
+        trailingLabel.setAccessibilityHidden(!shouldShow || isHoverStackVisible)
+        syncSubtitleTrailingConstraint()
+    }
+
+    private func syncSubtitleTrailingConstraint() {
+        // Keep reserving the slot until a fade-out has completed and the stack
+        // is actually hidden; otherwise the date expands underneath a fading
+        // action and recreates the very collision this handoff prevents.
+        let reservesHoverSpace = !hoverStack.isHidden
+        subtitleToMetric?.isActive = false
+        subtitleToEdge?.isActive = false
+        subtitleToHover?.isActive = false
+        if reservesHoverSpace {
+            subtitleToHover?.isActive = true
+        } else if showsTrailingMetric {
+            subtitleToMetric?.isActive = true
+        } else {
+            subtitleToEdge?.isActive = true
         }
     }
 
@@ -4697,11 +4973,21 @@ private final class InspectorViewController: NSViewController {
 
         filenameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         filenameLabel.alignment = .left
-        filenameLabel.maximumNumberOfLines = 1
+        // A filename is the selected download's identity, not supporting copy.
+        // Give it two lines before falling back to middle truncation: this keeps
+        // both the meaningful prefix and the extension without shrinking type.
+        filenameLabel.maximumNumberOfLines = 2
         filenameLabel.lineBreakMode = .byTruncatingMiddle
-        filenameLabel.usesSingleLineMode = true
-        filenameLabel.cell?.wraps = false
+        filenameLabel.usesSingleLineMode = false
+        filenameLabel.cell?.wraps = true
+        filenameLabel.cell?.isScrollable = false
+        filenameLabel.cell?.truncatesLastVisibleLine = true
+        // The displayed value contains invisible line-break controls; keep the
+        // original filename in the tooltip and accessibility value instead of
+        // letting a selection copy those controls into the clipboard.
+        filenameLabel.isSelectable = false
         filenameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        filenameLabel.setContentCompressionResistancePriority(.required, for: .vertical)
         filenameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filenameLabel.toolTip = nil
 
@@ -5296,8 +5582,18 @@ private final class InspectorViewController: NSViewController {
 
         refreshHeaderPreview()
 
-        filenameLabel.stringValue = row.filename
+        filenameLabel.stringValue = FilenameDisplayText.wrapping(row.filename)
         filenameLabel.toolTip = row.filename
+        // VoiceOver receives the untouched source string rather than the
+        // invisible break controls used only for visual layout.
+        filenameLabel.setAccessibilityLabel(L10n.t(
+            "Filename: \(row.filename)",
+            "文件名：\(row.filename)"
+        ))
+        filenameLabel.setAccessibilityHelp(L10n.t(
+            "The complete filename is shown without omitted characters.",
+            "完整文件名，不省略字符。"
+        ))
         // Design Suite: "host · Downloading" under the title — not a giant glance.
         if row.host.isEmpty {
             statusLabel.stringValue = row.statusTitle
@@ -5310,7 +5606,9 @@ private final class InspectorViewController: NSViewController {
 
         if let diag = row.diagnostic {
             diagTitleLabel.stringValue = diag.title
-            diagMessageLabel.stringValue = diag.message
+            diagMessageLabel.stringValue = diag.message(
+                hasSavedData: row.completedByteCount > 0
+            )
             diagRawLabel.stringValue = diag.rawLabel
             diagRawLabel.isHidden = diag.rawLabel.isEmpty
             diagBox.isHidden = false
@@ -5402,12 +5700,33 @@ private final class InspectorViewController: NSViewController {
             secondaryButton.isEnabled = row.canShowInFinder
             progressButtonShowsConnectionDetails = false
             primaryFiresRenew = false
-        } else if row.canRetry {
+        } else if row.canPause {
+            decorate(primaryButton, title: L10n.pause, symbol: "pause.fill", chrome: .primary)
+            primaryButton.isEnabled = true
+            decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
+            secondaryButton.isEnabled = row.canShowProgress
+            progressButtonShowsConnectionDetails = true
+            primaryFiresRenew = false
+        } else if row.canStart && !row.isFailed {
+            decorate(primaryButton, title: L10n.resume, symbol: "play.fill", chrome: .primary)
+            primaryButton.isEnabled = true
+            decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
+            secondaryButton.isEnabled = row.canShowProgress
+            progressButtonShowsConnectionDetails = false
+            primaryFiresRenew = false
+        } else if row.isFailed {
             // Only promote "Update Link" when the diagnostic says the URL is stale.
             // Generic failures keep Retry primary; renew stays in … / context menus.
-            primaryFiresRenew = row.needsLinkRenew && row.canRenew
+            primaryFiresRenew = row.recoveryAction == .openSourcePage
+                || row.recoveryAction == .renewURL
             if primaryFiresRenew {
-                decorate(primaryButton, title: L10n.renewURL, symbol: "arrow.triangle.2.circlepath", chrome: .primary)
+                let opensPage = row.recoveryAction == .openSourcePage
+                decorate(
+                    primaryButton,
+                    title: opensPage ? L10n.openSourcePage : L10n.renewURL,
+                    symbol: opensPage ? "arrow.up.right.square" : "arrow.triangle.2.circlepath",
+                    chrome: .primary
+                )
                 primaryButton.isEnabled = true
                 decorate(secondaryButton, title: L10n.retry, symbol: "arrow.clockwise", chrome: .soft)
                 secondaryButton.isEnabled = true
@@ -5418,13 +5737,6 @@ private final class InspectorViewController: NSViewController {
                 secondaryButton.isEnabled = row.canShowProgress
             }
             progressButtonShowsConnectionDetails = true
-        } else if row.canPause {
-            decorate(primaryButton, title: L10n.pause, symbol: "pause.fill", chrome: .primary)
-            primaryButton.isEnabled = true
-            decorate(secondaryButton, title: L10n.detailsEllipsis, symbol: "info.circle", chrome: .soft)
-            secondaryButton.isEnabled = row.canShowProgress
-            progressButtonShowsConnectionDetails = true
-            primaryFiresRenew = false
         } else {
             decorate(primaryButton, title: L10n.start, symbol: "play.fill", chrome: .primary)
             primaryButton.isEnabled = row.canStart
@@ -5472,10 +5784,12 @@ private final class InspectorViewController: NSViewController {
         guard let row = currentRow else { return }
         if row.canOpen {
             onAction?(.open)
-        } else if row.canRetry {
-            onAction?(primaryFiresRenew ? .renew : .retry)
         } else if row.canPause {
             onAction?(.pause)
+        } else if row.canStart && !row.isFailed {
+            onAction?(.start)
+        } else if row.isFailed {
+            onAction?(primaryFiresRenew ? .renew : .retry)
         } else {
             onAction?(.start)
         }
@@ -5541,7 +5855,13 @@ private final class InspectorViewController: NSViewController {
         }
         if let row = currentRow, row.canRenew, !row.isComplete {
             // Secondary home for renew when it is not the primary CTA.
-            addMoreItem(menu, title: L10n.renewURLEllipsis, selector: #selector(moreRenew), symbol: "link")
+            let opensPage = row.recoveryAction == .openSourcePage
+            addMoreItem(
+                menu,
+                title: opensPage ? L10n.openSourcePage : L10n.renewURLEllipsis,
+                selector: #selector(moreRenew),
+                symbol: opensPage ? "arrow.up.right.square" : "arrow.triangle.2.circlepath"
+            )
         }
         addMoreItem(menu, title: L10n.propertiesEllipsis, selector: #selector(moreProperties), symbol: "info.circle")
         menu.addItem(.separator())

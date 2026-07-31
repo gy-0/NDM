@@ -20,6 +20,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         let urlString: String
         let preflight: MediaPreflightResult?
         let readyChoice: ReadyChoice?
+        let destinationDirectoryOverride: URL?
     }
 
     enum Result {
@@ -30,7 +31,8 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
 
     private var onFinish: ((Result) -> Void)?
     private let existingTasks: [DownloadTask]
-    private let destinationDirectory: URL
+    private let defaultDestinationDirectory: URL
+    private var destinationDirectoryOverride: URL?
     private let urlField = NSTextField(string: "")
     private let urlShell = LinkInputShell()
     private let clearButton = NSButton()
@@ -42,12 +44,15 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     private let downloadButton = NewDownloadActionButton(title: L10n.linkLensContinue, style: .primary)
     private let viewExistingButton = NewDownloadActionButton(title: L10n.linkLensViewExisting, style: .secondary)
     private let optionsButton = NewDownloadActionButton(title: L10n.linkLensOptions, style: .secondary)
+    private let destinationButton = NewDownloadActionButton(title: "", style: .secondary)
     private let identityView = LinkLensView()
     private var preflightTask: Task<Void, Never>?
     private var preparedResult: MediaPreflightResult?
     private var matchedTask: DownloadTask?
     private var readyChoice: ReadyChoice?
     private var didNormalizeShareInput = false
+    private var hasVisiblePreview = false
+    private var layoutReady = false
     private var didFinish = false
 
     private static var active: NewDownloadWindowController?
@@ -63,11 +68,18 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     ) {
         self.onFinish = onFinish
         self.existingTasks = existingTasks
-        self.destinationDirectory = destinationDirectory
+        self.defaultDestinationDirectory = destinationDirectory
         self.mediaQuality = mediaQuality
         let hasInitialPreview = initialURL.flatMap(ClipboardLinks.resolution) != nil
+        let initialHeight = hasInitialPreview
+            ? NewDownloadSheetLayout.contentHeight(
+                hasPreview: true,
+                showsStatus: true,
+                showsHint: false
+            )
+            : NewDownloadSheetLayout.compactHeight
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 610, height: hasInitialPreview ? 420 : 214),
+            contentRect: NSRect(x: 0, y: 0, width: 610, height: CGFloat(initialHeight)),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -121,6 +133,13 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
                 if let field = sheet.contentView?.viewWithTag(1001) as? NSTextField {
                     sheet.makeFirstResponder(field)
                 }
+                if QAPreviewOverrides.showNewDownloadDestinationPicker {
+                    // Let the parent sheet finish attaching before asking
+                    // AppKit to present the folder chooser above it.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        wc.chooseDestinationClicked()
+                    }
+                }
             }
         }
     }
@@ -151,7 +170,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         header.spacing = 11
 
         urlField.tag = 1001
-        urlField.placeholderString = "https://"
+        urlField.placeholderString = L10n.newDownloadInputPlaceholder
         urlField.font = .systemFont(ofSize: 13.5, weight: .medium)
         urlField.focusRingType = .none
         urlField.delegate = self
@@ -161,6 +180,8 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         urlField.isSelectable = true
         urlField.usesSingleLineMode = true
         urlField.lineBreakMode = .byTruncatingMiddle
+        urlField.setAccessibilityLabel(L10n.newDownloadInputAccessibilityLabel)
+        urlField.setAccessibilityHelp(L10n.pasteURLHint)
         urlField.translatesAutoresizingMaskIntoConstraints = false
 
         let linkIcon = NSImageView()
@@ -271,25 +292,17 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         refreshDownloadEnabled()
         refreshClearButton()
 
-        let destinationIcon = NSImageView()
-        destinationIcon.image = NDMChrome.symbol("folder.fill", pointSize: 11.5, weight: .medium)
-        destinationIcon.contentTintColor = .secondaryLabelColor
-        destinationIcon.imageScaling = .scaleProportionallyDown
-        let destinationLabel = NSTextField(labelWithString: L10n.t(
-            "Saves to \(destinationDirectory.lastPathComponent)",
-            "保存到 \(destinationDirectory.lastPathComponent)"
-        ))
-        destinationLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
-        destinationLabel.textColor = .secondaryLabelColor
-        destinationLabel.lineBreakMode = .byTruncatingMiddle
-        destinationLabel.toolTip = destinationDirectory.path
-        let destination = NSStackView(views: [destinationIcon, destinationLabel])
-        destination.orientation = .horizontal
-        destination.alignment = .centerY
-        destination.spacing = 6
-        destination.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        destinationButton.image = NDMChrome.symbol("folder.fill", pointSize: 11.5, weight: .medium)
+        destinationButton.imagePosition = .imageLeading
+        destinationButton.imageHugsTitle = true
+        destinationButton.target = self
+        destinationButton.action = #selector(chooseDestinationClicked)
+        destinationButton.setAccessibilityHelp(L10n.changeDownloadDestination)
+        destinationButton.lineBreakMode = .byTruncatingMiddle
+        destinationButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        refreshDestinationButton()
 
-        let actions = NSStackView(views: [destination, NSView(), cancel, viewExistingButton, optionsButton, downloadButton])
+        let actions = NSStackView(views: [destinationButton, NSView(), cancel, viewExistingButton, optionsButton, downloadButton])
         actions.orientation = .horizontal
         actions.spacing = 9
         actions.alignment = .centerY
@@ -319,18 +332,23 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             statusRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             hintRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            destinationButton.heightAnchor.constraint(equalToConstant: 36),
+            destinationButton.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
             cancel.heightAnchor.constraint(equalToConstant: 36),
             viewExistingButton.heightAnchor.constraint(equalToConstant: 36),
             optionsButton.heightAnchor.constraint(equalToConstant: 36),
             downloadButton.heightAnchor.constraint(equalToConstant: 36),
             downloadButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
         ])
+        layoutReady = true
         refreshLinkIdentity()
     }
 
     private func refreshDownloadEnabled() {
         let raw = urlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        downloadButton.isEnabled = ClipboardLinks.resolution(raw) != nil
+        let resolution = ClipboardLinks.resolution(raw)
+        downloadButton.isEnabled = resolution != nil
+        refreshPrimaryAction(for: resolution?.urlString)
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -395,25 +413,44 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         statusLabel.textColor = color
         statusIcon.image = NDMChrome.symbol(symbolName, pointSize: 11.5, weight: .semibold)
         statusIcon.contentTintColor = color
+        updateSheetHeight()
     }
 
     private func hideStatus() {
         statusRow.isHidden = true
+        updateSheetHeight()
     }
 
     private func setHint(_ text: String?) {
         hintLabel.stringValue = text ?? ""
         hintRow.isHidden = text == nil
+        updateSheetHeight()
     }
 
     private func setPreviewVisible(_ visible: Bool) {
-        let targetHeight: CGFloat = visible ? 420 : 214
-        guard let window, abs(window.contentLayoutRect.height - targetHeight) > 1 else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.3
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            ctx.allowsImplicitAnimation = true
-            window.animator().setContentSize(NSSize(width: 610, height: targetHeight))
+        hasVisiblePreview = visible
+        updateSheetHeight()
+    }
+
+    private func updateSheetHeight() {
+        guard layoutReady, let window else { return }
+        let targetHeight = CGFloat(NewDownloadSheetLayout.contentHeight(
+            hasPreview: hasVisiblePreview,
+            showsStatus: !statusRow.isHidden,
+            showsHint: !hintRow.isHidden
+        ))
+        guard abs(window.contentLayoutRect.height - targetHeight) > 1 else { return }
+
+        let targetSize = NSSize(width: 610, height: targetHeight)
+        guard window.isVisible else {
+            window.setContentSize(targetSize)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            window.animator().setContentSize(targetSize)
         }
     }
 
@@ -499,7 +536,8 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         finish(.download(Submission(
             urlString: resolution.urlString,
             preflight: preparedResult,
-            readyChoice: matchedTask == nil ? readyChoice : nil
+            readyChoice: matchedTask == nil ? readyChoice : nil,
+            destinationDirectoryOverride: destinationDirectoryOverride
         )))
     }
 
@@ -509,8 +547,57 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         finish(.download(Submission(
             urlString: resolution.urlString,
             preflight: preparedResult,
-            readyChoice: nil
+            readyChoice: nil,
+            destinationDirectoryOverride: destinationDirectoryOverride
         )))
+    }
+
+    @objc private func chooseDestinationClicked() {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.title = L10n.chooseDownloadFolder
+        panel.message = L10n.changeDownloadDestination
+        panel.prompt = L10n.t("Choose", "选择")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = effectiveDestinationDirectory
+        let handleResponse: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let folder = panel.url else { return }
+            self?.destinationDirectoryOverride = folder.standardizedFileURL
+            self?.refreshDestinationButton()
+        }
+        // A second sheet is queued behind New Download instead of appearing.
+        // The standard modal folder panel runs its own AppKit event loop, stays
+        // interactive above either presentation mode, and returns straight to
+        // the intact link preview when dismissed.
+        let panelFrame = panel.frame
+        let centeredOrigin = NSPoint(
+            x: window.frame.midX - panelFrame.width / 2,
+            y: window.frame.midY - panelFrame.height / 2
+        )
+        // `runModal()` initially recenters on the primary display. Move the
+        // panel once its modal event loop has created the visible window so it
+        // stays with New Download on multi-display setups.
+        DispatchQueue.main.async {
+            panel.setFrameOrigin(centeredOrigin)
+        }
+        let response = panel.runModal()
+        handleResponse(response)
+    }
+
+    private var effectiveDestinationDirectory: URL {
+        destinationDirectoryOverride ?? defaultDestinationDirectory
+    }
+
+    private func refreshDestinationButton() {
+        let folder = effectiveDestinationDirectory
+        let shownName = folder.lastPathComponent.isEmpty ? folder.path : folder.lastPathComponent
+        destinationButton.title = L10n.downloadDestination(shownName)
+        destinationButton.toolTip = "\(L10n.changeDownloadDestination)\n\(folder.path)"
+        destinationButton.setAccessibilityLabel(L10n.downloadDestination(shownName))
+        destinationButton.invalidateIntrinsicContentSize()
     }
 
     @objc private func viewExistingClicked() {
@@ -549,23 +636,51 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         let hasMatch = matchedTask != nil
         viewExistingButton.isHidden = !hasMatch
         optionsButton.isHidden = hasMatch || readyChoice == nil
-        if hasMatch {
-            downloadButton.title = L10n.linkLensDownloadAgain
-            downloadButton.toolTip = nil
-        } else if let readyChoice {
-            downloadButton.title = L10n.linkLensDownloadReadyChoice(
-                readyChoice.format.label,
-                container: readyChoice.containerLabel
-            )
-            downloadButton.toolTip = L10n.linkLensReadyChoiceTooltip
-        } else {
-            downloadButton.title = L10n.linkLensContinue
-            downloadButton.toolTip = nil
-        }
-        downloadButton.invalidateIntrinsicContentSize()
+        let currentURL = ClipboardLinks.resolution(
+            urlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        )?.urlString
+        refreshPrimaryAction(for: currentURL)
         if let matchedTask {
             showDuplicateStatus(matchedTask)
         }
+    }
+
+    private func refreshPrimaryAction(for urlString: String?) {
+        let requiresQualityChoice = urlString.map {
+            MediaLinkClassifier.looksLikeMediaPage($0)
+                || $0.lowercased().contains(".m3u8")
+        } ?? false
+        let action = NewDownloadPrimaryActionPolicy.action(
+            hasDownloadableLink: urlString != nil,
+            requiresQualityChoice: requiresQualityChoice,
+            hasDuplicate: matchedTask != nil,
+            preparedQuality: readyChoice?.format.label,
+            preparedContainer: readyChoice?.containerLabel
+        )
+        switch action {
+        case .unavailable:
+            // Keep the eventual action visible while disabled so the empty
+            // state still teaches users what this sheet does.
+            downloadButton.title = L10n.linkLensDownloadFile
+            downloadButton.toolTip = nil
+        case .downloadFile:
+            downloadButton.title = L10n.linkLensDownloadFile
+            downloadButton.toolTip = nil
+        case .chooseQuality:
+            downloadButton.title = L10n.linkLensOptions
+            downloadButton.toolTip = nil
+        case .downloadPrepared(let quality, let container):
+            downloadButton.title = L10n.linkLensDownloadReadyChoice(
+                quality,
+                container: container
+            )
+            downloadButton.toolTip = L10n.linkLensReadyChoiceTooltip
+        case .downloadAgain:
+            downloadButton.title = L10n.linkLensDownloadAgain
+            downloadButton.toolTip = nil
+        }
+        downloadButton.setAccessibilityLabel(downloadButton.title)
+        downloadButton.invalidateIntrinsicContentSize()
     }
 
     private func makeReadyChoice(for result: MediaPreflightResult) -> ReadyChoice? {
@@ -588,7 +703,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         )
         let confidence = StorageConfidence(
             budget: budget,
-            availableBytes: VolumeCapacity.availableBytes(at: destinationDirectory)
+            availableBytes: VolumeCapacity.availableBytes(at: effectiveDestinationDirectory)
         )
         // Tight and unknown states still deserve the full Space Confidence row.
         guard confidence.level == .comfortable else { return nil }

@@ -1,4 +1,5 @@
 import AppKit
+import NDMCore
 
 /// Cover readability overlay for Quiet Finder rows.
 enum QuietFinderRowScrimStyle {
@@ -54,7 +55,27 @@ final class QuietFinderRowView: NSTableRowView {
         }
     }
 
-    private var paintsSelected: Bool { forcedSelected ?? isSelected }
+    private var selectionRequested: Bool { forcedSelected ?? isSelected }
+
+    private var interactionState: TaskRowInteractionState {
+        TaskRowInteractionState.resolve(
+            isSelected: selectionRequested,
+            isHovered: isHovered,
+            listHasKeyboardFocus: isKeyboardFocused
+        )
+    }
+
+    private var paintsSelected: Bool {
+        interactionState == .selected || interactionState == .keyboardFocused
+    }
+
+    /// True only when this selected row belongs to the active first-responder
+    /// table. Sidebar rows never opt in, so their quieter selection stays intact.
+    var isKeyboardFocused = false {
+        didSet {
+            if oldValue != isKeyboardFocused { needsDisplay = true }
+        }
+    }
 
     override var isSelected: Bool {
         didSet {
@@ -138,6 +159,7 @@ final class QuietFinderRowView: NSTableRowView {
                 NDMChrome.accent.withAlphaComponent(0.18).setStroke()
                 path.lineWidth = 1
                 path.stroke()
+                drawKeyboardFocusOutline(inside: path)
             } else {
                 drawHoverWash(path)
             }
@@ -153,6 +175,7 @@ final class QuietFinderRowView: NSTableRowView {
             if paintsSelected {
                 NDMChrome.rowActive.setFill()
                 path.fill()
+                drawKeyboardFocusOutline(inside: path)
             } else {
                 drawHoverWash(path)
             }
@@ -172,6 +195,7 @@ final class QuietFinderRowView: NSTableRowView {
                 NDMChrome.rowActive.setFill()
             }
             path.fill()
+            drawKeyboardFocusOutline(inside: path)
         } else {
             NSColor.clear.setFill()
             dirtyRect.fill()
@@ -191,11 +215,25 @@ final class QuietFinderRowView: NSTableRowView {
     }
 
     private func drawHoverWash(_ path: NSBezierPath) {
-        guard isHovered else { return }
+        guard interactionState == .hovered else { return }
         // Accent rather than ink: a neutral darkening reads as the row being
         // dimmed, which is the opposite of "this is live under your pointer".
         NDMChrome.railHover.setFill()
         path.fill()
+    }
+
+    private func drawKeyboardFocusOutline(inside path: NSBezierPath) {
+        guard interactionState == .keyboardFocused else { return }
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let focusRect = path.bounds.insetBy(dx: 0.9, dy: 0.9)
+        let focusPath = NSBezierPath(
+            roundedRect: focusRect,
+            xRadius: 9.1,
+            yRadius: 9.1
+        )
+        NDMChrome.accent.withAlphaComponent(isDark ? 0.72 : 0.58).setStroke()
+        focusPath.lineWidth = 1.5
+        focusPath.stroke()
     }
 
     override func drawSelection(in dirtyRect: NSRect) {

@@ -121,9 +121,14 @@ final class DownloadDiagnosticTests: XCTestCase {
         )
         let row = TaskRowPresentation.make(task: task, progress: nil)
         XCTAssertEqual(row.diagnostic, .linkExpired(status: 403))
-        XCTAssertEqual(row.errorText, DownloadDiagnostic.linkExpired(status: 403).rowSummary)
-        XCTAssertEqual(row.statusDetail, DownloadDiagnostic.linkExpired(status: 403).rowSummary)
+        XCTAssertEqual(
+            row.errorText,
+            DownloadDiagnostic.linkExpired(status: 403).rowSummary(hasSavedData: false)
+        )
+        XCTAssertEqual(row.statusDetail, row.errorText)
         XCTAssertEqual(row.diagnostic?.primaryAction, .renew)
+        XCTAssertEqual(row.primaryAction, .recover)
+        XCTAssertEqual(row.recoveryAction, .renewURL)
         XCTAssertTrue(row.canRenew)
         XCTAssertTrue(row.needsLinkRenew)
     }
@@ -167,6 +172,9 @@ final class DownloadDiagnosticTests: XCTestCase {
         task.errorText = DownloadDiagnostic.diskFull.storageString
         XCTAssertNil(task.browserRescueURL)
 
+        task.errorText = DownloadDiagnostic.httpError(status: 418).storageString
+        XCTAssertNotNil(task.browserRescueURL)
+
         task.errorText = DownloadDiagnostic.linkExpired(status: 403).storageString
         task.linkType = "ytdlp"
         XCTAssertNil(task.browserRescueURL)
@@ -174,6 +182,27 @@ final class DownloadDiagnosticTests: XCTestCase {
         task.linkType = "normal"
         task.status = .complete
         XCTAssertNil(task.browserRescueURL)
+    }
+
+    func testRecoveryActionNamesTheGestureTheUserWillActuallyPerform() {
+        var task = DownloadTask(
+            url: "https://cdn.example.com/file.zip?expired",
+            status: .error,
+            pageURL: "https://example.com/download/42",
+            errorText: DownloadDiagnostic.linkExpired(status: 403).storageString
+        )
+        XCTAssertEqual(TaskRecoveryAction.make(from: task), .openSourcePage)
+        XCTAssertFalse(
+            DownloadDiagnostic.linkExpired(status: 403)
+                .message(hasSavedData: false)
+                .contains("分段")
+        )
+
+        task.pageURL = nil
+        XCTAssertEqual(TaskRecoveryAction.make(from: task), .renewURL)
+
+        task.errorText = DownloadDiagnostic.timeout.storageString
+        XCTAssertEqual(TaskRecoveryAction.make(from: task), .retry)
     }
 
     func testPresentationPassesThroughLegacyError() {

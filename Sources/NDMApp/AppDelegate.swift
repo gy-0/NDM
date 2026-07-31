@@ -761,9 +761,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentOnboarding() {
         let wc = OnboardingWindowController()
-        wc.onInstallExtension = { [weak self] in
-            self?.showBrowsers()
-        }
         wc.onTryLink = { [weak self] text in
             guard let self else { return }
             self.mainWindow?.showWindow(nil)

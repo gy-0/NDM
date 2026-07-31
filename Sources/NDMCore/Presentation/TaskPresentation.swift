@@ -97,6 +97,7 @@ public enum TaskPrimaryAction: String, Sendable, Equatable {
     case open
     case showProgress
     case start
+    case recover
     case none
 }
 
@@ -144,6 +145,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
     /// Parsed human diagnostic when the stored error is structured (`#diag:`);
     /// nil for legacy plain-text errors and non-error states.
     public var diagnostic: DownloadDiagnostic?
+    public var recoveryAction: TaskRecoveryAction
     /// "Why is it this fast" — smart connection tuning note while downloading.
     public var tuningNote: String?
     public var canStart: Bool
@@ -193,6 +195,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         localFileURL: URL? = nil,
         errorText: String?,
         diagnostic: DownloadDiagnostic? = nil,
+        recoveryAction: TaskRecoveryAction = .none,
         tuningNote: String? = nil,
         canStart: Bool,
         canPause: Bool,
@@ -231,6 +234,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
         self.localFileURL = localFileURL
         self.errorText = errorText
         self.diagnostic = diagnostic
+        self.recoveryAction = recoveryAction
         self.tuningNote = tuningNote
         self.canStart = canStart
         self.canPause = canPause
@@ -294,7 +298,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
             let stored = progress?.errorDescription ?? task.errorText
             diagnostic = DownloadDiagnostic.fromStoredErrorText(stored)
             // Rows show the human summary; legacy plain-text errors pass through.
-            errorText = diagnostic?.rowSummary ?? stored
+            errorText = diagnostic?.rowSummary(hasSavedData: completedBytes > 0) ?? stored
         } else {
             errorText = nil
             diagnostic = nil
@@ -325,8 +329,10 @@ public struct TaskRowPresentation: Equatable, Sendable {
             primary = canOpen ? .open : .none
         case .downloading, .waiting:
             primary = .showProgress
-        case .paused, .incomplete, .error:
+        case .paused, .incomplete:
             primary = .start
+        case .error:
+            primary = .recover
         }
 
         let ext = (task.filename as NSString).pathExtension.lowercased()
@@ -348,6 +354,15 @@ public struct TaskRowPresentation: Equatable, Sendable {
             }
         } else if task.status == .waiting {
             statusDetail = L10n.queuedWillStart
+        } else if task.status == .paused || task.status == .incomplete {
+            // The eyebrow already names the state. Use the second line for
+            // continuity information instead of repeating it verbatim.
+            statusDetail = totalBytes > 0 || completedBytes > 0
+                ? TaskPresentationFormatting.sizePair(
+                    completed: completedBytes,
+                    total: totalBytes
+                )
+                : L10n.readyToResume
         } else if task.status == .downloading {
             var parts: [String] = []
             if progress?.phase == .preparing {
@@ -424,6 +439,7 @@ public struct TaskRowPresentation: Equatable, Sendable {
             localFileURL: task.destinationFileURL,
             errorText: errorText,
             diagnostic: diagnostic,
+            recoveryAction: TaskRecoveryAction.make(from: task),
             tuningNote: task.status == .downloading ? progress?.tuning?.inspectorNote : nil,
             canStart: canStart,
             canPause: canPause,
@@ -528,7 +544,9 @@ public enum TaskPresentationFormatting {
 
     public static func statusTitle(_ status: DownloadStatus) -> String {
         switch status {
-        case .incomplete: return L10n.incomplete
+        // "Incomplete" is storage terminology. The useful promise is that
+        // interrupted work is recoverable and ready to continue.
+        case .incomplete: return L10n.toResume
         case .complete: return L10n.completed
         case .paused: return L10n.paused
         case .downloading: return L10n.downloading
@@ -565,6 +583,10 @@ public enum TaskPresentationFormatting {
     }
 
     public static func byteCount(_ bytes: Int64) -> String {
+        // ByteCountFormatter otherwise chooses "0 bytes" and follows the
+        // process locale rather than NDM's in-app language. Zero is a progress
+        // baseline, so keep it compact and language-neutral everywhere.
+        if bytes <= 0 { return "0 KB" }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         formatter.allowedUnits = .useAll
@@ -573,7 +595,7 @@ public enum TaskPresentationFormatting {
         // "0 KB", never the spelled-out "Zero KB" in list rows.
         formatter.allowsNonnumericFormatting = false
         // ByteCountFormatter picks unit labels from the process locale; keep numeric style consistent.
-        return formatter.string(fromByteCount: max(0, bytes))
+        return formatter.string(fromByteCount: bytes)
     }
 
     public static func sizePair(completed: Int64, total: Int64) -> String {
@@ -677,5 +699,53 @@ public struct TaskSelectionActions: Equatable, Sendable {
             canOpen: row.canOpen,
             canShowInFinder: row.canShowInFinder
         )
+    }
+}
+
+/// The small set of commands worth promoting beside New in the main toolbar.
+/// Destructive or uncommon commands stay in the row menu / inspector; batch
+/// selection owns its own action bar and therefore promotes nothing here.
+public enum TaskPromotedAction: Equatable, Sendable {
+    case pause
+    case resume
+    case retry
+    case renew
+    case openSourcePage
+    case open
+    case reveal
+
+    public static func make(
+        from row: TaskRowPresentation?,
+        hasMultipleSelection: Bool = false
+    ) -> [TaskPromotedAction] {
+        guard !hasMultipleSelection, let row else { return [] }
+
+        if row.canOpen {
+            return row.canShowInFinder ? [.open, .reveal] : [.open]
+        }
+        if row.canPause {
+            return [.pause]
+        }
+        if row.isFailed {
+            if row.recoveryAction == .openSourcePage {
+                // A known-expired URL needs a fresh browser authorization.
+                // Keep plain Retry available in secondary menus, but do not
+                // promote a likely-to-fail loop beside the correct recovery.
+                return [.openSourcePage]
+            }
+            if row.recoveryAction == .renewURL, row.canRenew {
+                return [.renew]
+            }
+            return row.canRetry ? [.retry] : []
+        }
+        if row.canStart {
+            return [.resume]
+        }
+        // A completed record whose local result disappeared cannot be opened;
+        // re-downloading is the only useful primary recovery action.
+        if row.canRetry {
+            return [.retry]
+        }
+        return []
     }
 }

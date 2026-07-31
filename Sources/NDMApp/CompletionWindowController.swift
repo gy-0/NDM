@@ -6,10 +6,9 @@ import NDMEngine
 /// Non-modal completion panel — shown standalone or used as the destination
 /// of the progress window's shared-element handoff.
 ///
-/// Cinema layout: a full-bleed dark hero carries the finished file's own
-/// artwork with the "Download Complete" headline and an accent underline laid
-/// over it; a clean light deck below holds the file identity, the optional
-/// sidecar disclosure, and one confident action row.
+/// Result-first layout: a compact artwork banner marks the state change, then
+/// the finished file, useful follow-up actions, and optional sidecars arrive in
+/// reading order without making the user hunt below a decorative hero.
 @MainActor
 final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private let task: DownloadTask
@@ -38,16 +37,18 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private var languageObserver: NSObjectProtocol?
     private var coverObserver: NSObjectProtocol?
 
-    /// The hero holds a fixed cinematic band; only the deck below it grows.
-    private let heroHeight: CGFloat = 208
+    /// A short payoff banner keeps the finished file and its primary action in
+    /// the first visual scan while preserving the artwork handoff.
+    private let heroHeight: CGFloat = 104
 
     init(task: DownloadTask, onDismiss: @escaping () -> Void = {}) {
         self.task = task
         self.onDismiss = onDismiss
         self.completionStack = SmartFinalize.completionStack(primary: task.destinationFileURL)
-        self.quickActions = SettingsStore.load().completionQuickActions
-        let promotedCount = min(2, quickActions.filter(\.promoted).count)
-        let contentWidth: CGFloat = 452 + CGFloat(max(0, promotedCount - 1)) * 51
+        var effectiveSettings = SettingsStore.load()
+        QAPreviewOverrides.apply(to: &effectiveSettings)
+        self.quickActions = effectiveSettings.completionQuickActions
+        let contentWidth: CGFloat = 452
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: collapsedWindowHeight),
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -212,7 +213,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
         // MARK: Hero band — dark, edge to edge, thumbnail as backdrop.
         let hero = CompletionCinemaHero(
-            title: L10n.downloadComplete,
+            title: completionHeadline,
             filename: task.filename
         )
         hero.translatesAutoresizingMaskIntoConstraints = false
@@ -305,7 +306,6 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
         let promoted = makePromotedQuickActionButtons(fileExists: fileExists)
         var actionViews: [NSView] = [open, reveal, NSView()]
-        actionViews.append(contentsOf: promoted)
         actionViews.append(contentsOf: [share, more])
         let actions = NSStackView(views: actionViews)
         actions.orientation = .horizontal
@@ -322,33 +322,57 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             share.heightAnchor.constraint(equalToConstant: actionH),
             more.heightAnchor.constraint(equalToConstant: actionH),
         ])
-        for button in promoted {
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 42),
-                button.heightAnchor.constraint(equalToConstant: actionH),
-            ])
-        }
+        let promotedRow: NSStackView? = promoted.isEmpty ? nil : {
+            let row = NSStackView(views: promoted.map { $0 as NSView } + [NSView()])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 9
+            for button in promoted {
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(greaterThanOrEqualToConstant: 104),
+                    button.widthAnchor.constraint(lessThanOrEqualToConstant: 180),
+                    button.heightAnchor.constraint(equalToConstant: actionH),
+                ])
+            }
+            return row
+        }()
 
         // MARK: Deck assembly (everything under the hero).
-        var arranged: [NSView] = [fileCard]
-
         completionStackView.apply(completionStack)
         let hasSidecars = !(completionStack?.sidecars.isEmpty ?? true)
-        if hasSidecars {
-            arranged.append(makeHairline())
-            arranged.append(completionStackView)
+        let deliveryNoticeView = notice.map(makeDeliveryNotice)
+        var arranged: [NSView] = []
+        for section in CompletionPayoffLayout.sections(
+            hasPromotedActions: promotedRow != nil,
+            hasArtifacts: hasSidecars,
+            hasDeliveryNotice: deliveryNoticeView != nil
+        ) {
+            switch section {
+            case .fileIdentity:
+                arranged.append(fileCard)
+            case .primaryActions:
+                arranged.append(actions)
+            case .promotedActions:
+                if let promotedRow { arranged.append(promotedRow) }
+            case .artifacts:
+                arranged.append(makeHairline())
+                arranged.append(completionStackView)
+            case .deliveryNotice:
+                if let deliveryNoticeView { arranged.append(deliveryNoticeView) }
+            case .audioStatus:
+                arranged.append(audioStatusView)
+            }
         }
-        if let notice {
-            arranged.append(makeDeliveryNotice(notice))
-        }
-        arranged.append(audioStatusView)
-        arranged.append(actions)
 
         let deck = NSStackView(views: arranged)
         deck.orientation = .vertical
         deck.alignment = .leading
         deck.spacing = 14
-        deck.setCustomSpacing(16, after: fileCard)
+        deck.setCustomSpacing(12, after: fileCard)
+        deck.setCustomSpacing(promotedRow == nil ? 15 : 10, after: actions)
+        if let promotedRow {
+            deck.setCustomSpacing(15, after: promotedRow)
+        }
         deck.translatesAutoresizingMaskIntoConstraints = false
         deckStack = deck
 
@@ -360,7 +384,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             hero.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             hero.heightAnchor.constraint(equalToConstant: heroHeight),
 
-            deck.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 20),
+            deck.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 16),
             deck.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
             deck.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
             deck.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
@@ -369,6 +393,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             caption.widthAnchor.constraint(equalTo: fileCard.widthAnchor, constant: -46 - 13),
             actions.widthAnchor.constraint(equalTo: deck.widthAnchor),
         ])
+        promotedRow?.widthAnchor.constraint(equalTo: deck.widthAnchor).isActive = true
         if hasSidecars {
             completionStackView.widthAnchor.constraint(equalTo: deck.widthAnchor).isActive = true
         }
@@ -401,12 +426,13 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             .filter(\.promoted)
             .prefix(2)
             .map { action in
-                let button = outlinedButton(title: "")
+                let button = outlinedButton(title: action.title)
                 button.identifier = NSUserInterfaceItemIdentifier(action.id.uuidString)
                 button.image = QuickActionRunner.icon(for: action)
-                button.imagePosition = .imageOnly
-                button.contentTintColor = .secondaryLabelColor
-                button.usesExactAlignmentRect = true
+                button.imagePosition = .imageLeading
+                button.imageHugsTitle = true
+                button.font = .systemFont(ofSize: 12.5, weight: .medium)
+                button.contentTintColor = .labelColor
                 button.toolTip = action.title
                 button.setAccessibilityLabel(action.title)
                 button.target = self
@@ -420,8 +446,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         guard let window, let deckStack else { return }
         window.contentView?.layoutSubtreeIfNeeded()
         let deckHeight = deckStack.fittingSize.height
-        // Hero band + deck (top gap 20 + deck + bottom gap 20).
-        let contentHeight = heroHeight + 20 + deckHeight + 20
+        // Compact banner + deck (top gap 16 + deck + bottom gap 20).
+        let contentHeight = heroHeight + 16 + deckHeight + 20
         let desiredFrameHeight = window.frameRect(
             forContentRect: NSRect(x: 0, y: 0, width: window.contentLayoutRect.width, height: contentHeight)
         ).height
@@ -490,7 +516,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private func relocalize() {
         let isMedia = task.category == .video || task.category == .audio
         window?.title = L10n.downloadComplete
-        hero?.setTitle(L10n.downloadComplete)
+        hero?.setTitle(completionHeadline)
         openButton?.title = isMedia ? L10n.play : L10n.open
         revealButton?.title = L10n.showInFinder
         shareButton?.setAccessibilityLabel(L10n.share)
@@ -499,6 +525,14 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         updateMetaLabel()
         completionStackView.relocalize()
         resizeToFitContent(animate: false)
+    }
+
+    /// Media completion can sound human and outcome-focused because playback
+    /// is the primary next step; other file types keep the neutral status.
+    private var completionHeadline: String {
+        task.category == .video || task.category == .audio
+            ? L10n.readyToPlay
+            : L10n.downloadComplete
     }
 
     /// Rebuild the "size · type · duration" line from its parts. The size is
@@ -747,9 +781,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
 // MARK: - Cinema hero
 
-/// A full-bleed dark band: the finished file's own artwork fills it (aspect
-/// fill, clipped). Title legibility comes only from a text shadow — no dark
-/// overlay / scrim — with an accent underline and a translucent close puck.
+/// A compact full-bleed artwork banner. It makes completion feel distinct
+/// without delaying the result card that carries the information people need.
 @MainActor
 final class CompletionCinemaHero: NSView {
     var onClose: (() -> Void)?
@@ -771,7 +804,7 @@ final class CompletionCinemaHero: NSView {
         titleLabel.attributedStringValue = NSAttributedString(
             string: title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 34, weight: .bold),
+                .font: NSFont.systemFont(ofSize: 24, weight: .bold),
                 .foregroundColor: NSColor.white,
                 .shadow: shadow,
             ]
@@ -825,21 +858,21 @@ final class CompletionCinemaHero: NSView {
             backdrop.topAnchor.constraint(equalTo: topAnchor),
             backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            restGlyph.centerXAnchor.constraint(equalTo: centerXAnchor),
+            restGlyph.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -64),
             restGlyph.centerYAnchor.constraint(equalTo: centerYAnchor),
-            restGlyph.widthAnchor.constraint(equalToConstant: 60),
-            restGlyph.heightAnchor.constraint(equalToConstant: 60),
+            restGlyph.widthAnchor.constraint(equalToConstant: 42),
+            restGlyph.heightAnchor.constraint(equalToConstant: 42),
 
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 26),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 22),
 
             underline.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor, constant: 2),
-            underline.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
-            underline.widthAnchor.constraint(equalToConstant: 52),
-            underline.heightAnchor.constraint(equalToConstant: 4),
+            underline.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 7),
+            underline.widthAnchor.constraint(equalToConstant: 36),
+            underline.heightAnchor.constraint(equalToConstant: 3),
 
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             closeButton.widthAnchor.constraint(equalToConstant: 30),
             closeButton.heightAnchor.constraint(equalToConstant: 30),
         ])

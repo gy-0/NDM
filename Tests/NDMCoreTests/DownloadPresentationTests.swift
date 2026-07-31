@@ -166,6 +166,41 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertTrue(row.statusDetail.contains(L10n.connectionsCount(8)))
     }
 
+    func testPausedAndInterruptedRowsDescribeContinuityWithoutRepeatingState() {
+        XCTAssertEqual(TaskPresentationFormatting.byteCount(0), "0 KB")
+
+        let pausedTask = DownloadTask(
+            url: "https://cdn.example.com/archive.zip",
+            filename: "archive.zip",
+            fileSize: 1_000,
+            status: .paused
+        )
+        let pausedProgress = DownloadProgress(
+            taskID: 1,
+            totalBytes: 1_000,
+            completedBytes: 250,
+            status: .paused
+        )
+        let paused = TaskRowPresentation.make(task: pausedTask, progress: pausedProgress)
+        XCTAssertEqual(paused.statusTitle, "Paused")
+        XCTAssertNotEqual(paused.statusDetail, paused.statusTitle)
+        // ByteCountFormatter follows the process locale independently from the
+        // app's explicit language override ("bytes" / "字节"). Pin the useful
+        // counters without making the test depend on the runner's locale.
+        XCTAssertTrue(paused.statusDetail.contains("250"))
+        XCTAssertTrue(paused.statusDetail.contains("1 KB"))
+
+        let interruptedTask = DownloadTask(
+            url: "https://cdn.example.com/archive.zip",
+            filename: "archive.zip",
+            status: .incomplete
+        )
+        let interrupted = TaskRowPresentation.make(task: interruptedTask, progress: nil)
+        XCTAssertEqual(interrupted.statusTitle, "To Resume")
+        XCTAssertEqual(interrupted.statusDetail, "Ready to resume")
+        XCTAssertTrue(interrupted.canStart)
+    }
+
     func testLiveConnectionCountPrefersEngineReportOverConfiguredCeiling() {
         defer { L10n.apply(.system) }
         L10n.apply(.english)
@@ -301,5 +336,73 @@ final class DownloadPresentationTests: XCTestCase {
         XCTAssertFalse(actions.canPause)
         XCTAssertTrue(actions.canDelete)
         XCTAssertEqual(TaskSelectionActions.make(from: nil), .none)
+    }
+
+    func testPromotedActionsPreferContinuationOverRetryForIncompleteTask() {
+        let incomplete = TaskRowPresentation.make(
+            task: DownloadTask(url: "https://a/x", status: .incomplete),
+            progress: nil
+        )
+
+        XCTAssertEqual(TaskPromotedAction.make(from: incomplete), [.resume])
+    }
+
+    func testPromotedActionsKeepCompletedToolbarResultFirst() {
+        let completed = TaskRowPresentation.make(
+            task: DownloadTask(
+                url: "https://a/x",
+                filename: "x.bin",
+                status: .complete,
+                folderPath: "/tmp"
+            ),
+            progress: nil
+        )
+
+        XCTAssertTrue(completed.canRetry, "retry remains available in secondary menus")
+        XCTAssertEqual(TaskPromotedAction.make(from: completed), [.open, .reveal])
+    }
+
+    func testPromotedActionsDeferToBatchBarForMultipleSelection() {
+        let paused = TaskRowPresentation.make(
+            task: DownloadTask(url: "https://a/x", status: .paused),
+            progress: nil
+        )
+
+        XCTAssertEqual(
+            TaskPromotedAction.make(from: paused, hasMultipleSelection: true),
+            []
+        )
+    }
+
+    func testPromotedActionsNameBrowserRecoveryInsteadOfPretendingToUpdateAutomatically() {
+        let failed = TaskRowPresentation.make(
+            task: DownloadTask(
+                url: "https://cdn.example.com/expired/video.mp4",
+                status: .error,
+                pageURL: "https://example.com/watch/video",
+                errorText: DownloadDiagnostic.linkExpired(status: 403).storageString
+            ),
+            progress: nil
+        )
+
+        XCTAssertEqual(failed.primaryAction, .recover)
+        XCTAssertEqual(failed.recoveryAction, .openSourcePage)
+        XCTAssertTrue(failed.canRetry, "retry remains available in secondary menus")
+        XCTAssertEqual(TaskPromotedAction.make(from: failed), [.openSourcePage])
+    }
+
+    func testPromotedActionsDoNotOfferDoomedRetryBesideManualLinkRenewal() {
+        let failed = TaskRowPresentation.make(
+            task: DownloadTask(
+                url: "https://cdn.example.com/expired/video.mp4",
+                status: .error,
+                errorText: DownloadDiagnostic.linkExpired(status: 403).storageString
+            ),
+            progress: nil
+        )
+
+        XCTAssertEqual(failed.recoveryAction, .renewURL)
+        XCTAssertTrue(failed.canRetry, "retry remains available in secondary menus")
+        XCTAssertEqual(TaskPromotedAction.make(from: failed), [.renew])
     }
 }

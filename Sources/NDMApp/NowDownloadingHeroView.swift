@@ -547,7 +547,19 @@ final class NowDownloadingHeroView: NSView {
         taskChanged: Bool
     ) {
         guard row.isDownloading else {
-            setTargetSpeed(0, jump: false)
+            stopRolling()
+            if row.canStart && !row.isFailed && !row.isQueued {
+                // Once paused, rate is no longer the useful headline. Preserve
+                // continuity by showing what is already on disk; "0.0 KB/s"
+                // made a healthy paused task look broken.
+                speedLabel.stringValue = TaskPresentationFormatting.byteCount(
+                    row.completedByteCount
+                )
+                unitLabel.stringValue = L10n.downloaded
+            } else {
+                speedLabel.stringValue = L10n.emDash
+                unitLabel.stringValue = ""
+            }
             return
         }
 

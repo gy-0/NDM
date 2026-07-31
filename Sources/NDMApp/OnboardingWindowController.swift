@@ -1,30 +1,36 @@
 import AppKit
 import NDMCore
 
-/// First-run promise: understand what the user gives us, produce a usable file,
-/// and keep the optional browser enhancement out of the critical path.
+/// First-run activation lives in the product itself: paste a link, see what
+/// NDM understood, and continue into the same New Download flow used every day.
 @MainActor
-final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
+final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     static var exampleShareText: String { L10n.onboardingExampleShareText }
 
-    var onInstallExtension: (() -> Void)?
     var onTryLink: ((String?) -> Void)?
     var onFinished: (() -> Void)?
 
-    private var step = 0
-    private let contentBox = NSView()
-    private var dots: [ChromeBox] = []
+    private let inputField = NSTextField(string: "")
+    private let inputShell = OnboardingLinkInputShell()
+    private let clearButton = NSButton()
+    private let primaryButton = NSButton(title: L10n.onboardingPasteAndContinue, target: nil, action: nil)
+    private let validationLabel = NSTextField(labelWithString: "")
+    private let previewRow = OnboardingPreviewRow()
     private var finishedReported = false
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: true
         )
         window.title = L10n.onboardingWindowTitle
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
         NDMChrome.applySheetChrome(window)
         super.init(window: window)
         buildUI()
@@ -37,349 +43,281 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
-        contentBox.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(contentBox)
+        content.wantsLayer = true
 
-        let dotsRow = NSStackView()
-        dotsRow.orientation = .horizontal
-        dotsRow.spacing = 7
-        for _ in 0..<3 {
-            let dot = ChromeBox(cornerRadius: 3.5)
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                dot.widthAnchor.constraint(equalToConstant: 7),
-                dot.heightAnchor.constraint(equalToConstant: 7),
-            ])
-            dots.append(dot)
-            dotsRow.addArrangedSubview(dot)
-        }
-        dotsRow.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(dotsRow)
-
+        let brandMark = NSImageView()
+        brandMark.image = Self.brandMarkImage()
+        brandMark.imageScaling = .scaleProportionallyUpOrDown
+        brandMark.wantsLayer = true
+        brandMark.layer?.cornerRadius = 16
+        brandMark.layer?.masksToBounds = true
+        brandMark.setAccessibilityLabel("NDM")
+        brandMark.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            contentBox.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
-            contentBox.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            contentBox.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            contentBox.bottomAnchor.constraint(equalTo: dotsRow.topAnchor, constant: -12),
-            dotsRow.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            dotsRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
+            brandMark.widthAnchor.constraint(equalToConstant: 64),
+            brandMark.heightAnchor.constraint(equalToConstant: 64),
         ])
-        showStep(0)
-    }
 
-    private func showStep(_ index: Int) {
-        let animate = step != index && window?.isVisible == true
-        step = index
-        for (i, dot) in dots.enumerated() {
-            dot.fill = i == index
-                ? NDMChrome.accent
-                : NSColor.tertiaryLabelColor.withAlphaComponent(0.30)
-        }
+        let title = NSTextField(labelWithString: L10n.onboardingHeroTitle)
+        title.font = .systemFont(ofSize: 28, weight: .bold)
+        title.alignment = .center
+        title.maximumNumberOfLines = 1
 
-        let page: NSView
-        switch index {
-        case 0: page = makePromiseStep()
-        case 1: page = makeExampleStep()
-        default: page = makeReadyStep()
-        }
-        page.translatesAutoresizingMaskIntoConstraints = false
+        let body = NSTextField(wrappingLabelWithString: L10n.onboardingHeroBody)
+        body.font = .systemFont(ofSize: 13.5)
+        body.textColor = .secondaryLabelColor
+        body.alignment = .center
+        body.maximumNumberOfLines = 2
 
-        if animate {
-            contentBox.wantsLayer = true
-            let fade = CATransition()
-            fade.type = .fade
-            fade.duration = 0.22
-            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            contentBox.layer?.add(fade, forKey: "step")
-        }
+        buildInput()
+        buildPrimaryButton()
 
-        contentBox.subviews.forEach { $0.removeFromSuperview() }
-        contentBox.addSubview(page)
-        NSLayoutConstraint.activate([
-            page.centerXAnchor.constraint(equalTo: contentBox.centerXAnchor),
-            page.centerYAnchor.constraint(equalTo: contentBox.centerYAnchor),
-            page.widthAnchor.constraint(equalTo: contentBox.widthAnchor, constant: -104),
-        ])
-    }
-
-    // MARK: - Shared pieces
-
-    private func makeMark(symbol: String) -> NSView {
-        // Open hero glyph — a light accent symbol, no pastel tile behind it.
-        let icon = NSImageView()
-        icon.image = NDMChrome.symbol(symbol, pointSize: 34, weight: .light)
-        icon.contentTintColor = NDMChrome.accent
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.setAccessibilityElement(false)
-        let holder = NSView()
-        holder.translatesAutoresizingMaskIntoConstraints = false
-        holder.addSubview(icon)
-        NSLayoutConstraint.activate([
-            holder.widthAnchor.constraint(equalToConstant: 52),
-            holder.heightAnchor.constraint(equalToConstant: 44),
-            icon.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
-        ])
-        return holder
-    }
-
-    private func makeTitle(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 22, weight: .bold)
-        label.alignment = .center
-        label.maximumNumberOfLines = 1
-        return label
-    }
-
-    private func makeBody(_ text: String) -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 13.5)
-        label.textColor = .secondaryLabelColor
-        label.alignment = .center
-        label.maximumNumberOfLines = 2
-        return label
-    }
-
-    private func makePrimary(_ title: String, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        NDMChrome.styleMainButton(button)
-        button.keyEquivalent = "\r"
-        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 132).isActive = true
-        return button
-    }
-
-    private func makeSecondary(_ title: String, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        NDMChrome.styleGhostButton(button)
-        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        return button
-    }
-
-    private func makeActions(primary: NSButton, secondary: NSButton? = nil) -> NSStackView {
-        var views: [NSView] = [primary]
-        if let secondary { views.append(secondary) }
-        let row = NSStackView(views: views)
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 10
-        return row
-    }
-
-    private func makeCapabilityRow(symbol: String, title: String, body: String) -> NSView {
-        let icon = NSImageView()
-        icon.image = NDMChrome.symbol(symbol, pointSize: 17, weight: .medium)
-        icon.contentTintColor = NDMChrome.accent
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.setAccessibilityElement(false)
-
-        let heading = NSTextField(labelWithString: title)
-        heading.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        let detail = NSTextField(labelWithString: body)
-        detail.font = .systemFont(ofSize: 11.5)
-        detail.textColor = .secondaryLabelColor
-        detail.lineBreakMode = .byTruncatingTail
-        let labels = NSStackView(views: [heading, detail])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 2
-        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let row = NSStackView(views: [icon, labels])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 11
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 4, bottom: 9, right: 11)
-        NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 26),
-            icon.heightAnchor.constraint(equalToConstant: 26),
-        ])
-        return row
-    }
-
-    private func makeCard(rows: [NSView]) -> CardStackView {
-        let card = CardStackView(views: rows)
-        card.orientation = .vertical
-        card.alignment = .leading
-        card.spacing = 0
-        card.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
-        // Open feature list — rows breathe on the page, no gray card.
-        card.fill = nil
-        card.cardBorderColor = nil
-        card.cornerRadius = 0
-        for row in rows {
-            row.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -4).isActive = true
-        }
-        return card
-    }
-
-    // MARK: - Step 1: product promise
-
-    private func makePromiseStep() -> NSView {
-        let sources = NSTextField(labelWithString: L10n.onboardingSources)
-        sources.font = .systemFont(ofSize: 11.5, weight: .medium)
-        sources.textColor = NDMChrome.accent
-        sources.alignment = .center
-
-        let card = makeCard(rows: [
-            makeCapabilityRow(
-                symbol: "text.viewfinder",
-                title: L10n.onboardingUnderstandsTitle,
-                body: L10n.onboardingUnderstandsBody
-            ),
-            makeCapabilityRow(
-                symbol: "play.rectangle.on.rectangle",
-                title: L10n.onboardingDeliversTitle,
-                body: L10n.onboardingDeliversBody
-            ),
-        ])
-        let actions = makeActions(
-            primary: makePrimary(L10n.onboardingContinue, action: #selector(nextClicked)),
-            secondary: makeSecondary(L10n.onboardingSkip, action: #selector(finishClicked))
+        let directButton = NSButton(
+            title: L10n.onboardingSkip,
+            target: self,
+            action: #selector(finishClicked)
         )
-        let stack = NSStackView(views: [
-            makeMark(symbol: "link"),
-            makeTitle(L10n.onboardingStep1Title),
-            makeBody(L10n.onboardingStep1Body),
-            sources,
-            card,
-            actions,
+        directButton.isBordered = false
+        directButton.font = .systemFont(ofSize: 12, weight: .medium)
+        directButton.contentTintColor = .secondaryLabelColor
+        directButton.keyEquivalent = "\u{1b}"
+        directButton.setAccessibilityHelp(L10n.t(
+            "Close Welcome without starting a download",
+            "关闭欢迎页，不立即新建下载"
+        ))
+        directButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
+
+        validationLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        validationLabel.textColor = .systemRed
+        validationLabel.alignment = .center
+        validationLabel.isHidden = true
+        validationLabel.setAccessibilityRole(.staticText)
+
+        previewRow.target = self
+        previewRow.action = #selector(previewClicked)
+        previewRow.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        showExamplePreview()
+
+        let mainStack = NSStackView(views: [
+            brandMark,
+            title,
+            body,
+            inputShell,
+            validationLabel,
+            primaryButton,
+            directButton,
+            previewRow,
         ])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 11
-        stack.setCustomSpacing(16, after: stack.arrangedSubviews[0])
-        stack.setCustomSpacing(6, after: stack.arrangedSubviews[1])
-        stack.setCustomSpacing(16, after: sources)
-        stack.setCustomSpacing(18, after: card)
-        return stack
+        mainStack.orientation = .vertical
+        mainStack.alignment = .centerX
+        mainStack.spacing = 9
+        mainStack.setCustomSpacing(10, after: brandMark)
+        mainStack.setCustomSpacing(4, after: title)
+        mainStack.setCustomSpacing(18, after: body)
+        mainStack.setCustomSpacing(10, after: inputShell)
+        mainStack.setCustomSpacing(4, after: validationLabel)
+        mainStack.setCustomSpacing(4, after: primaryButton)
+        mainStack.setCustomSpacing(18, after: directButton)
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(mainStack)
+
+        let footer = NSTextField(labelWithString: L10n.onboardingTrustLine)
+        footer.font = .systemFont(ofSize: 10.5, weight: .medium)
+        footer.textColor = .secondaryLabelColor
+        footer.alignment = .center
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(footer)
+
+        NSLayoutConstraint.activate([
+            mainStack.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
+            mainStack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            mainStack.widthAnchor.constraint(equalToConstant: 430),
+            inputShell.widthAnchor.constraint(equalTo: mainStack.widthAnchor),
+            inputShell.heightAnchor.constraint(equalToConstant: 44),
+            primaryButton.widthAnchor.constraint(equalTo: mainStack.widthAnchor),
+            previewRow.widthAnchor.constraint(equalTo: mainStack.widthAnchor),
+            mainStack.bottomAnchor.constraint(lessThanOrEqualTo: footer.topAnchor, constant: -10),
+            footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
+            footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
+            footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -13),
+        ])
+
+        refreshInputState()
+        if QAPreviewOverrides.showOnboardingError {
+            DispatchQueue.main.async { [weak self] in
+                self?.primaryClicked()
+            }
+        }
     }
 
-    // MARK: - Step 2: real product entry
+    private func buildInput() {
+        inputField.placeholderString = L10n.onboardingInputPlaceholder
+        inputField.font = .systemFont(ofSize: 13.5, weight: .medium)
+        inputField.focusRingType = .none
+        inputField.delegate = self
+        inputField.isBordered = false
+        inputField.drawsBackground = false
+        inputField.isEditable = true
+        inputField.isSelectable = true
+        inputField.usesSingleLineMode = true
+        inputField.lineBreakMode = .byTruncatingMiddle
+        inputField.setAccessibilityLabel(L10n.t("Download link or share text", "下载链接或分享口令"))
+        inputField.setAccessibilityHelp(L10n.onboardingHeroBody)
+        inputField.translatesAutoresizingMaskIntoConstraints = false
 
-    private func makeExampleStep() -> NSView {
-        let shareLabel = NSTextField(wrappingLabelWithString: L10n.onboardingExampleShareText)
-        shareLabel.font = .systemFont(ofSize: 12.5)
-        shareLabel.textColor = .labelColor
-        shareLabel.maximumNumberOfLines = 2
-        shareLabel.lineBreakMode = .byTruncatingTail
+        let linkIcon = NSImageView()
+        linkIcon.image = NDMChrome.symbol("link", pointSize: 14, weight: .semibold)
+        linkIcon.contentTintColor = NDMChrome.accent
+        linkIcon.imageScaling = .scaleProportionallyDown
+        linkIcon.setAccessibilityElement(false)
+        linkIcon.translatesAutoresizingMaskIntoConstraints = false
 
-        let foundIcon = NSImageView()
-        foundIcon.image = NDMChrome.symbol("checkmark.circle.fill", pointSize: 14, weight: .semibold)
-        foundIcon.contentTintColor = NDMChrome.accent
-        foundIcon.setAccessibilityElement(false)
-        let foundTitle = NSTextField(labelWithString: L10n.onboardingExampleFound)
-        foundTitle.font = .systemFont(ofSize: 11.5, weight: .semibold)
-        let foundDetail = NSTextField(labelWithString: L10n.onboardingExampleOutcome)
-        foundDetail.font = .systemFont(ofSize: 11)
-        foundDetail.textColor = .secondaryLabelColor
-        foundDetail.lineBreakMode = .byTruncatingTail
-        let foundLabels = NSStackView(views: [foundTitle, foundDetail])
-        foundLabels.orientation = .vertical
-        foundLabels.alignment = .leading
-        foundLabels.spacing = 2
-        let foundRow = NSStackView(views: [foundIcon, foundLabels])
-        foundRow.orientation = .horizontal
-        foundRow.alignment = .centerY
-        foundRow.spacing = 9
+        clearButton.bezelStyle = .inline
+        clearButton.isBordered = false
+        clearButton.focusRingType = .none
+        clearButton.image = NDMChrome.symbol("xmark.circle.fill", pointSize: 13, weight: .medium)
+        clearButton.contentTintColor = .tertiaryLabelColor
+        clearButton.target = self
+        clearButton.action = #selector(clearClicked)
+        clearButton.toolTip = L10n.t("Clear", "清除")
+        clearButton.setAccessibilityLabel(L10n.t("Clear link", "清除链接"))
+        clearButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let card = CardStackView(views: [shareLabel, foundRow])
-        card.orientation = .vertical
-        card.alignment = .leading
-        card.spacing = 12
-        card.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
-        // Open feature list — rows breathe on the page, no gray card.
-        card.fill = nil
-        card.cardBorderColor = nil
-        card.cornerRadius = 0
-        shareLabel.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -32).isActive = true
-        foundRow.widthAnchor.constraint(equalTo: card.widthAnchor, constant: -32).isActive = true
+        inputShell.translatesAutoresizingMaskIntoConstraints = false
+        inputShell.onActivate = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.inputField)
+        }
+        inputShell.addSubview(linkIcon)
+        inputShell.addSubview(inputField)
+        inputShell.addSubview(clearButton)
+        NSLayoutConstraint.activate([
+            linkIcon.leadingAnchor.constraint(equalTo: inputShell.leadingAnchor, constant: 14),
+            linkIcon.centerYAnchor.constraint(equalTo: inputShell.centerYAnchor),
+            linkIcon.widthAnchor.constraint(equalToConstant: 17),
+            linkIcon.heightAnchor.constraint(equalToConstant: 17),
+            inputField.leadingAnchor.constraint(equalTo: linkIcon.trailingAnchor, constant: 9),
+            inputField.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -3),
+            inputField.centerYAnchor.constraint(equalTo: inputShell.centerYAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: inputShell.trailingAnchor, constant: -7),
+            clearButton.centerYAnchor.constraint(equalTo: inputShell.centerYAnchor),
+            clearButton.widthAnchor.constraint(equalToConstant: 30),
+            clearButton.heightAnchor.constraint(equalToConstant: 30),
+        ])
+    }
 
-        let ownLink = makeSecondary(L10n.onboardingUseOwnLink, action: #selector(ownLinkClicked))
-        let actions = makeActions(
-            primary: makePrimary(L10n.onboardingTryExample, action: #selector(exampleClicked)),
-            secondary: ownLink
+    private func buildPrimaryButton() {
+        primaryButton.target = self
+        primaryButton.action = #selector(primaryClicked)
+        primaryButton.keyEquivalent = "\r"
+        NDMChrome.styleMainButton(primaryButton)
+        primaryButton.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        primaryButton.setAccessibilityHelp(L10n.t(
+            "Use the typed link, or paste a downloadable link from the clipboard",
+            "使用已输入的链接，或从剪贴板粘贴可下载链接"
+        ))
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        window?.makeFirstResponder(inputField)
+        inputShell.isFocused = true
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        inputShell.isFocused = false
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        inputShell.isInvalid = false
+        validationLabel.isHidden = true
+        refreshInputState()
+    }
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        inputShell.isFocused = true
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        inputShell.isFocused = inputField.currentEditor() != nil
+    }
+
+    private func refreshInputState() {
+        let raw = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        clearButton.isHidden = raw.isEmpty
+        guard let resolution = SharedLinkResolver.resolve(raw) else {
+            primaryButton.title = L10n.onboardingPasteAndContinue
+            primaryButton.setAccessibilityLabel(primaryButton.title)
+            showExamplePreview()
+            return
+        }
+
+        primaryButton.title = L10n.onboardingContinueWithLink
+        primaryButton.setAccessibilityLabel(primaryButton.title)
+        let sourceName = resolution.source == .web
+            ? Self.displayHost(resolution.urlString)
+            : SiteBrandKit.displayName(for: resolution.source)
+        let title = resolution.wasExtractedFromText
+            ? L10n.shareTextLinkFound
+            : L10n.onboardingLinkReady(sourceName)
+        let detail = resolution.source == .web
+            ? L10n.onboardingDirectLinkOutcome
+            : L10n.onboardingRecognizedMediaOutcome
+        previewRow.configure(
+            source: resolution.source,
+            title: title,
+            detail: detail
         )
-        let later = NSButton(title: L10n.onboardingNotNow, target: self, action: #selector(nextClicked))
-        later.isBordered = false
-        later.font = .systemFont(ofSize: 12, weight: .medium)
-        later.contentTintColor = .secondaryLabelColor
-        later.heightAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
-
-        let stack = NSStackView(views: [
-            makeMark(symbol: "link.badge.plus"),
-            makeTitle(L10n.onboardingStep2Title),
-            makeBody(L10n.onboardingStep2Body),
-            card,
-            actions,
-            later,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 11
-        stack.setCustomSpacing(16, after: stack.arrangedSubviews[0])
-        stack.setCustomSpacing(6, after: stack.arrangedSubviews[1])
-        stack.setCustomSpacing(18, after: card)
-        stack.setCustomSpacing(2, after: actions)
-        return stack
     }
 
-    // MARK: - Step 3: trust and optional enhancement
-
-    private func makeReadyStep() -> NSView {
-        let card = makeCard(rows: [
-            makeCapabilityRow(
-                symbol: "checkmark.seal",
-                title: L10n.onboardingBuiltInTitle,
-                body: L10n.onboardingBuiltInBody
-            ),
-            makeCapabilityRow(
-                symbol: "lock.shield",
-                title: L10n.onboardingPrivateTitle,
-                body: L10n.onboardingPrivateBody
-            ),
-            makeCapabilityRow(
-                symbol: "puzzlepiece.extension",
-                title: L10n.onboardingBrowserOptionalTitle,
-                body: L10n.onboardingBrowserOptionalBody
-            ),
-        ])
-        let actions = makeActions(
-            primary: makePrimary(L10n.onboardingDone, action: #selector(finishClicked)),
-            secondary: makeSecondary(L10n.onboardingConnectBrowser, action: #selector(browserClicked))
+    private func showExamplePreview() {
+        previewRow.configure(
+            source: .youtube,
+            title: L10n.onboardingExampleFound,
+            detail: L10n.onboardingExampleOutcome
         )
-        let stack = NSStackView(views: [
-            makeMark(symbol: "checkmark"),
-            makeTitle(L10n.onboardingStep3Title),
-            makeBody(L10n.onboardingStep3Body),
-            card,
-            actions,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 11
-        stack.setCustomSpacing(16, after: stack.arrangedSubviews[0])
-        stack.setCustomSpacing(6, after: stack.arrangedSubviews[1])
-        stack.setCustomSpacing(18, after: card)
-        return stack
     }
 
-    // MARK: - Actions
-
-    @objc private func nextClicked() {
-        showStep(min(2, step + 1))
+    @objc private func clearClicked() {
+        inputField.stringValue = ""
+        inputShell.isInvalid = false
+        validationLabel.isHidden = true
+        refreshInputState()
+        window?.makeFirstResponder(inputField)
     }
 
-    @objc private func exampleClicked() {
-        leaveOnboarding { [onTryLink] in onTryLink?(Self.exampleShareText) }
+    @objc private func primaryClicked() {
+        let clipboard = QAPreviewOverrides.clipboardText
+            ?? NSPasteboard.general.string(forType: .string)
+            ?? NSPasteboard.general.string(forType: .URL)
+        switch OnboardingLinkActionPolicy.action(
+            fieldText: inputField.stringValue,
+            clipboardText: clipboard
+        ) {
+        case .inspect(let rawInput):
+            inputField.stringValue = rawInput
+            inputShell.isInvalid = false
+            validationLabel.isHidden = true
+            refreshInputState()
+            window?.makeFirstResponder(primaryButton)
+            NSAccessibility.post(element: previewRow, notification: .valueChanged)
+        case .open(let rawInput):
+            leaveOnboarding { [onTryLink] in onTryLink?(rawInput) }
+        case .needsInput:
+            inputShell.isInvalid = true
+            validationLabel.stringValue = L10n.onboardingNoLinkFound
+            validationLabel.isHidden = false
+            window?.makeFirstResponder(inputField)
+            NSSound.beep()
+        }
     }
 
-    @objc private func ownLinkClicked() {
-        leaveOnboarding { [onTryLink] in onTryLink?(nil) }
-    }
-
-    @objc private func browserClicked() {
-        leaveOnboarding { [onInstallExtension] in onInstallExtension?() }
+    @objc private func previewClicked() {
+        let raw = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if SharedLinkResolver.resolve(raw) != nil {
+            leaveOnboarding { [onTryLink] in onTryLink?(raw) }
+        } else {
+            leaveOnboarding { [onTryLink] in onTryLink?(Self.exampleShareText) }
+        }
     }
 
     @objc private func finishClicked() {
@@ -400,5 +338,195 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         reportFinished()
+    }
+
+    private static func brandMarkImage() -> NSImage? {
+        let url = Bundle.module.url(forResource: "ndm-onboarding-mark", withExtension: "png")
+            ?? Bundle.module.url(
+                forResource: "ndm-onboarding-mark",
+                withExtension: "png",
+                subdirectory: "Brand"
+            )
+        guard let source = url.flatMap(NSImage.init(contentsOf:)) else { return nil }
+
+        // The source includes a generous white export canvas. Crop to the real
+        // rounded app tile so dark mode never exposes that canvas as a square.
+        let output = NSImage(size: NSSize(width: 64, height: 64))
+        output.lockFocus()
+        source.draw(
+            in: NSRect(x: 0, y: 0, width: 64, height: 64),
+            from: NSRect(x: 96, y: 96, width: 320, height: 320),
+            operation: .copy,
+            fraction: 1
+        )
+        output.unlockFocus()
+        return output
+    }
+
+    private static func displayHost(_ rawURL: String) -> String {
+        guard let host = URL(string: rawURL)?.host?.lowercased() else { return L10n.t("Web link", "网页链接") }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+}
+
+@MainActor
+private final class OnboardingLinkInputShell: NSView {
+    var onActivate: (() -> Void)?
+    var isFocused = false { didSet { refreshAppearance() } }
+    var isInvalid = false { didSet { refreshAppearance() } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        refreshAppearance()
+    }
+
+    private func refreshAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.cornerRadius = 11
+            layer?.backgroundColor = (isFocused
+                ? NDMChrome.searchSurfaceFocused
+                : NDMChrome.searchSurface).cgColor
+            layer?.borderWidth = isInvalid ? 1.5 : 1
+            layer?.borderColor = {
+                if isInvalid { return NSColor.systemRed.withAlphaComponent(0.78).cgColor }
+                if isFocused { return NDMChrome.accent.withAlphaComponent(0.72).cgColor }
+                return NDMChrome.hairline.cgColor
+            }()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+    }
+}
+
+@MainActor
+private final class OnboardingPreviewRow: NSButton {
+    private let brandView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let chevronView = NSImageView()
+    private var isHovering = false
+    private var tracking: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        isBordered = false
+        bezelStyle = .inline
+        focusRingType = .none
+        setButtonType(.momentaryChange)
+        wantsLayer = true
+
+        brandView.imageScaling = .scaleProportionallyDown
+        brandView.imageAlignment = .alignLeft
+        brandView.translatesAutoresizingMaskIntoConstraints = false
+
+        titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        detailLabel.font = .systemFont(ofSize: 11.5)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingTail
+        let labels = NSStackView(views: [titleLabel, detailLabel])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 3
+        labels.translatesAutoresizingMaskIntoConstraints = false
+
+        chevronView.image = NDMChrome.symbol("chevron.right", pointSize: 11, weight: .semibold)
+        chevronView.contentTintColor = .tertiaryLabelColor
+        chevronView.setAccessibilityElement(false)
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(brandView)
+        addSubview(labels)
+        addSubview(chevronView)
+        NSLayoutConstraint.activate([
+            brandView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            brandView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            brandView.widthAnchor.constraint(equalToConstant: 86),
+            brandView.heightAnchor.constraint(equalToConstant: 24),
+            labels.leadingAnchor.constraint(equalTo: brandView.trailingAnchor, constant: 18),
+            labels.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: chevronView.leadingAnchor, constant: -10),
+            chevronView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            chevronView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevronView.widthAnchor.constraint(equalToConstant: 12),
+            chevronView.heightAnchor.constraint(equalToConstant: 18),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.cornerRadius = 12
+            layer?.backgroundColor = (isHovering
+                ? NDMChrome.track
+                : NDMChrome.dockFill).cgColor
+            layer?.borderColor = NDMChrome.hairline.cgColor
+            layer?.borderWidth = 1
+        }
+    }
+
+    func configure(
+        source: SharedLinkResolution.Source,
+        title: String,
+        detail: String
+    ) {
+        if source == .web {
+            brandView.image = NDMChrome.symbol("link", pointSize: 22, weight: .medium)
+            brandView.contentTintColor = NDMChrome.accent
+        } else {
+            brandView.image = SiteBrandKit.image(
+                for: source,
+                presentation: .wordmark,
+                appearance: effectiveAppearance
+            )
+            brandView.contentTintColor = nil
+        }
+        titleLabel.stringValue = title
+        detailLabel.stringValue = detail
+        let sourceName = source == .web ? L10n.t("Web link", "网页链接") : SiteBrandKit.displayName(for: source)
+        setAccessibilityLabel("\(sourceName) · \(title) · \(detail)")
+        setAccessibilityHelp(L10n.t(
+            "Open this link in New Download",
+            "在新建下载中打开此链接"
+        ))
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let next = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(next)
+        tracking = next
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+        needsDisplay = true
     }
 }

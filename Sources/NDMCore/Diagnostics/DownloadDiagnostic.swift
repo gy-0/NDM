@@ -12,6 +12,25 @@ public enum DiagnosticAction: String, Sendable, Equatable {
     case none
 }
 
+/// The truthful recovery gesture for one failed task. This deliberately
+/// separates opening a page from manually replacing a URL: both may eventually
+/// refresh authorization, but they ask very different things of the user.
+public enum TaskRecoveryAction: String, Sendable, Equatable {
+    case none
+    case retry
+    case renewURL
+    case openSourcePage
+
+    public static func make(from task: DownloadTask) -> TaskRecoveryAction {
+        guard task.status == .error else { return .none }
+        if task.browserRescueURL != nil { return .openSourcePage }
+        guard let diagnostic = DownloadDiagnostic.fromStoredErrorText(task.errorText) else {
+            return .retry
+        }
+        return diagnostic.primaryAction == .renew ? .renewURL : .retry
+    }
+}
+
 /// A download failure translated into language a person can act on.
 ///
 /// The engine layer classifies raw errors (`DownloadDiagnostic.classify` in
@@ -102,8 +121,21 @@ public enum DownloadDiagnostic: Equatable, Sendable {
 
     /// Why it happened + what to do next, in plain language.
     public var message: String {
+        message(hasSavedData: true)
+    }
+
+    /// Context-aware long explanation. Recovery promises are strongest when
+    /// they name what is actually on disk, not what a typical failed task might
+    /// have downloaded.
+    public func message(hasSavedData: Bool) -> String {
         switch self {
         case .linkExpired:
+            if !hasSavedData {
+                return L10n.t(
+                    "Open the source page and start the download there once. The fresh browser handoff will attach to this same task instead of creating a duplicate.",
+                    "打开来源页面并在那里再次开始下载。浏览器取得的新授权会自动接回这个任务，不会创建重复记录。"
+                )
+            }
             return L10n.t(
                 "Open the source page and start the download there once. The fresh browser handoff will attach to this same task; downloaded segments stay in place.",
                 "打开来源页面并在那里再次开始下载。浏览器取得的新授权会自动接回这个任务，已经下载的分段原样保留。"
@@ -173,11 +205,24 @@ public enum DownloadDiagnostic: Equatable, Sendable {
 
     /// Short inline summary for the task list row: headline + the next step.
     public var rowSummary: String {
+        rowSummary(hasSavedData: true)
+    }
+
+    /// The list must not promise that partial data was preserved when the task
+    /// has not actually written a byte yet. The full inspector message remains
+    /// generally true; this compact line is the glanceable factual summary.
+    public func rowSummary(hasSavedData: Bool) -> String {
         switch self {
         case .linkExpired:
+            if hasSavedData {
+                return L10n.t(
+                    "Link expired · continue from the source page, saved data is kept",
+                    "链接已过期 · 从来源页面继续，已下载内容会保留"
+                )
+            }
             return L10n.t(
-                "Link expired · continue from the source page, segments are kept",
-                "链接已过期 · 从来源页面继续，已有分段会保留"
+                "Link expired · continue this task from the source page",
+                "链接已过期 · 从来源页面继续此任务"
             )
         case .signInRequired:
             return L10n.t(
@@ -336,7 +381,7 @@ public extension DownloadTask {
             return nil
         }
         switch diagnostic {
-        case .linkExpired, .signInRequired:
+        case .linkExpired, .signInRequired, .httpError:
             break
         default:
             return nil

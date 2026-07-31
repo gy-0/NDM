@@ -84,4 +84,32 @@ final class CollectionQueueTests: XCTestCase {
             3
         )
     }
+
+    func testCollectionPersistsExactPerDownloadDestination() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-collection-destination-\(UUID().uuidString)", isDirectory: true)
+        let support = root.appendingPathComponent("support", isDirectory: true)
+        let downloads = root.appendingPathComponent("downloads", isDirectory: true)
+        let chosen = root.appendingPathComponent("Course Assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = DownloadManager(
+            store: try DownloadStore(directory: support),
+            settings: AppSettings(
+                downloadDirectory: downloads,
+                useCategoryFolders: true
+            ),
+            supportRoot: support
+        )
+        let tasks = try await manager.insertYtDlpCollection(
+            [YtDlpCollectionItem(id: "1", title: "Lesson", url: "https://example.com/1")],
+            formatID: "best",
+            collectionURL: "https://example.com/course",
+            collectionTitle: "Course",
+            destinationDirectory: chosen
+        )
+
+        XCTAssertEqual(tasks.first?.folderPath, chosen.path)
+    }
 }

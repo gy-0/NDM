@@ -197,7 +197,8 @@ public actor DownloadManager {
         pageTitle: String? = nil,
         headers: [String] = [],
         method: String = "GET",
-        ltype: String = "normal"
+        ltype: String = "normal",
+        destinationDirectory: URL? = nil
     ) async throws -> DownloadTask {
         guard let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
@@ -226,10 +227,16 @@ public actor DownloadManager {
             userAgent: settings.useCustomUserAgent ? settings.customUserAgent : nil,
             pageURL: pageURL,
             pageTitle: pageTitle,
-            folderPath: settings.downloadDirectory.path,
+            folderPath: nil,
             headers: headers
         )
         task.category = DownloadCategory.infer(filename: task.filename, mimeType: nil)
+        task.folderPath = DownloadDestinationPolicy.directory(
+            defaultDirectory: settings.downloadDirectory,
+            override: destinationDirectory,
+            category: task.category,
+            organizeByCategory: settings.useCategoryFolders
+        ).path
         task = try store.insert(task)
         return task
     }
@@ -276,7 +283,8 @@ public actor DownloadManager {
         pageTitle: String?,
         estimatedBytes: Int64?,
         estimatedComponentBytes: [Int64] = [],
-        preferredFilename: String?
+        preferredFilename: String?,
+        destinationDirectory: URL? = nil
     ) async throws -> DownloadTask {
         if !settings.downloadAllAtOnce, !runningTasks.isEmpty {
             throw ManagerError.queueBusy
@@ -285,7 +293,7 @@ public actor DownloadManager {
             sampleFinalBytes: estimatedBytes,
             sampleComponentBytes: estimatedComponentBytes,
             sampleDurationSeconds: nil
-        ))
+        ), destinationDirectory: destinationDirectory)
         let stem: String
         if let preferredFilename, !preferredFilename.isEmpty {
             stem = YtDlpTool.sanitizeFilename(preferredFilename)
@@ -297,7 +305,12 @@ public actor DownloadManager {
         let ext = options.container.fileExtension
         let filename = stem.lowercased().hasSuffix(".\(ext)") ? stem : "\(stem).\(ext)"
 
-        var dest = settings.downloadDirectory
+        let dest = DownloadDestinationPolicy.directory(
+            defaultDirectory: settings.downloadDirectory,
+            override: destinationDirectory,
+            category: .video,
+            organizeByCategory: settings.useCategoryFolders
+        )
         var task = DownloadTask(
             url: url,
             filename: filename,
@@ -315,10 +328,6 @@ public actor DownloadManager {
             postData: try? JSONEncoder().encode(options),
             folderPath: dest.path
         )
-        if settings.useCategoryFolders {
-            dest.appendPathComponent(task.category.rawValue.capitalized, isDirectory: true)
-            task.folderPath = dest.path
-        }
         task = try store.insert(task)
         let taskID = task.id
 
@@ -362,29 +371,34 @@ public actor DownloadManager {
         collectionTitle: String?,
         estimatedSampleBytes: Int64? = nil,
         estimatedSampleComponentBytes: [Int64] = [],
-        sampleDurationSeconds: Double? = nil
+        sampleDurationSeconds: Double? = nil,
+        destinationDirectory: URL? = nil
     ) async throws -> [DownloadTask] {
         try validateStorage(StorageBudget.media(
             sampleFinalBytes: estimatedSampleBytes,
             sampleComponentBytes: estimatedSampleComponentBytes,
             sampleDurationSeconds: sampleDurationSeconds,
             collectionDurations: items.map(\.durationSeconds)
-        ))
+        ), destinationDirectory: destinationDirectory)
         let inserted = try insertYtDlpCollection(
             items,
             formatID: formatID,
             options: options,
             collectionURL: collectionURL,
-            collectionTitle: collectionTitle
+            collectionTitle: collectionTitle,
+            destinationDirectory: destinationDirectory
         )
         if runningTasks.isEmpty, let first = inserted.first {
-            try await start(taskID: first.id)
+            try await start(taskID: first.id, destinationDirectory: destinationDirectory)
         }
         return inserted
     }
 
-    private func validateStorage(_ budget: StorageBudget) throws {
-        guard let available = capacityProvider(settings.downloadDirectory),
+    private func validateStorage(
+        _ budget: StorageBudget,
+        destinationDirectory: URL? = nil
+    ) throws {
+        guard let available = capacityProvider(destinationDirectory ?? settings.downloadDirectory),
               let required = budget.peakBytes else { return }
         let confidence = StorageConfidence(
             budget: budget,
@@ -405,7 +419,8 @@ public actor DownloadManager {
         formatID: String,
         options: YtDlpDownloadOptions = .init(),
         collectionURL: String,
-        collectionTitle: String?
+        collectionTitle: String?,
+        destinationDirectory: URL? = nil
     ) throws -> [DownloadTask] {
         guard !items.isEmpty else { return [] }
         let width = max(2, String(items.count).count)
@@ -417,7 +432,12 @@ public actor DownloadManager {
             let cleanTitle = YtDlpTool.sanitizeFilename(item.title)
             let stem = "\(number) - \(cleanTitle)"
             let ext = options.container.fileExtension
-            var dest = settings.downloadDirectory
+            let dest = DownloadDestinationPolicy.directory(
+                defaultDirectory: settings.downloadDirectory,
+                override: destinationDirectory,
+                category: .video,
+                organizeByCategory: settings.useCategoryFolders
+            )
             var task = DownloadTask(
                 url: item.url,
                 filename: "\(stem).\(ext)",
@@ -435,10 +455,6 @@ public actor DownloadManager {
                 postData: try? JSONEncoder().encode(options),
                 folderPath: dest.path
             )
-            if settings.useCategoryFolders {
-                dest.appendPathComponent(task.category.rawValue.capitalized, isDirectory: true)
-                task.folderPath = dest.path
-            }
             task = try store.insert(task)
             inserted.append(task)
         }
@@ -561,7 +577,10 @@ public actor DownloadManager {
     }
 
     /// Fire-and-forget start (UI / bridge). Does not wait for completion.
-    public func start(taskID: Int64) async throws {
+    public func start(
+        taskID: Int64,
+        destinationDirectory: URL? = nil
+    ) async throws {
         if runningTasks[taskID] != nil { return }
         resetPresentationSpeed(taskID: taskID)
         // One-by-one queue (original radioOneByOne): wait until no other engine is active.
@@ -574,10 +593,15 @@ public actor DownloadManager {
         }
         guard let url = URL(string: task.url) else { throw ManagerError.invalidURL }
 
-        var dest = settings.downloadDirectory
-        if settings.useCategoryFolders {
-            dest.appendPathComponent(task.category.rawValue.capitalized, isDirectory: true)
-        }
+        let persistedDestination = task.folderPath
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+        let dest = DownloadDestinationPolicy.directory(
+            defaultDirectory: settings.downloadDirectory,
+            override: destinationDirectory ?? persistedDestination,
+            category: task.category,
+            organizeByCategory: settings.useCategoryFolders
+        )
+        task.folderPath = dest.path
 
         // Per-task work dir: Application Support/.../<id>/  (original layout)
         let workDir = supportRoot.appendingPathComponent("\(taskID)", isDirectory: true)

@@ -18,6 +18,16 @@ final class SettingsInputValidationTests: XCTestCase {
         XCTAssertNil(SettingsInputValidation.bandwidthBytesPerSecond("999999999999999999999"))
     }
 
+    func testCustomBandwidthAcceptsHumanReadableMegabytesPerSecond() {
+        XCTAssertEqual(SettingsInputValidation.bandwidthMegabytesPerSecond("1"), 1_000_000)
+        XCTAssertEqual(SettingsInputValidation.bandwidthMegabytesPerSecond(" 2.5 "), 2_500_000)
+        XCTAssertEqual(SettingsInputValidation.bandwidthMegabytesPerSecond("0,75"), 750_000)
+        XCTAssertNil(SettingsInputValidation.bandwidthMegabytesPerSecond("0"))
+        XCTAssertNil(SettingsInputValidation.bandwidthMegabytesPerSecond("-1"))
+        XCTAssertNil(SettingsInputValidation.bandwidthMegabytesPerSecond("fast"))
+        XCTAssertNil(SettingsInputValidation.bandwidthMegabytesPerSecond("nan"))
+    }
+
     func testPortRejectsZeroOverflowAndNonNumbers() {
         XCTAssertEqual(SettingsInputValidation.port(" 8080 "), 8_080)
         XCTAssertEqual(SettingsInputValidation.port("65535"), 65_535)

@@ -100,7 +100,12 @@ final class SettingsStoreTests: XCTestCase {
             "下载 12 项 · 1080p · MP4"
         )
         XCTAssertEqual(L10n.linkLensViewExisting, "查看现有")
+        XCTAssertEqual(L10n.linkLensDownloadFile, "下载文件")
         XCTAssertEqual(L10n.linkLensOptions, "选择画质…")
+        XCTAssertEqual(L10n.newDownloadInputPlaceholder, "粘贴链接或整段分享口令")
+        XCTAssertEqual(L10n.newDownloadInputAccessibilityLabel, "下载链接或分享口令")
+        XCTAssertEqual(L10n.onboardingHeroTitle, "链接进来，文件出去")
+        XCTAssertEqual(L10n.onboardingPasteAndContinue, "粘贴并识别")
         XCTAssertEqual(
             L10n.clipboardOffer(source: .douyin, wasExtractedFromText: true),
             "下载抖音分享"
@@ -123,7 +128,12 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(L10n.finalizeAudioSidecar.lowercased().contains("ffmpeg"))
         XCTAssertEqual(L10n.ytdlpEntireCollection(12, isTruncated: true), "First 12 items")
         XCTAssertEqual(L10n.linkLensDownloadAgain, "Download again")
+        XCTAssertEqual(L10n.linkLensDownloadFile, "Download File")
         XCTAssertEqual(L10n.linkLensOptions, "Choose quality…")
+        XCTAssertEqual(L10n.newDownloadInputPlaceholder, "Paste a link or full share message")
+        XCTAssertEqual(L10n.newDownloadInputAccessibilityLabel, "Download link or share message")
+        XCTAssertEqual(L10n.onboardingHeroTitle, "Link in. File out.")
+        XCTAssertEqual(L10n.onboardingPasteAndContinue, "Paste & Recognize")
         XCTAssertEqual(
             L10n.clipboardOffer(source: .youtube, wasExtractedFromText: false),
             "Download YouTube link"

@@ -87,6 +87,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var connectionsPane: NSView!
     private var pollTask: Task<Void, Never>?
     private var lastStatus: DownloadStatus = .waiting
+    private var lastRecoveryAction: TaskRecoveryAction = .none
     private var lastSparklineSampleUptime: TimeInterval?
     private var completionStackApplied = false
     private var completionExpansionAddedHeight: CGFloat = 0
@@ -872,16 +873,12 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         revealActionButton.title = L10n.showInFinder
         revealButton.toolTip = L10n.showInFinder
         applyConnButton.title = L10n.apply
-        renewButton.title = L10n.renewURLEllipsis
+        applyRenewActionAppearance()
         optionsNote.stringValue = L10n.optionsNote
         completionStackView.relocalize()
         moreActionsButton.toolTip = L10n.moreActions
         moreActionsButton.setAccessibilityLabel(L10n.moreActions)
-        switch lastStatus {
-        case .error: pauseButton.title = L10n.retry
-        case .paused, .incomplete: pauseButton.title = L10n.resume
-        default: pauseButton.title = L10n.pause
-        }
+        applyTransferActionAppearance(for: lastStatus, recoveryAction: lastRecoveryAction)
     }
 
     private func makeConnectionsPane() -> NSView {
@@ -1144,6 +1141,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
                 status: .downloading
             )
             window?.title = "\(percentText) \(filename) — \(speed)"
+        } else if progress.status == .paused || progress.status == .incomplete {
+            window?.title = "\(TaskPresentationFormatting.statusTitle(progress.status)) · \(filename)"
         } else {
             window?.title = "\(percentText) \(filename)"
         }
@@ -1285,7 +1284,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             let diagnostic = DownloadDiagnostic.fromStoredErrorText(storedError)
             let reason: String
             if let diagnostic {
-                reason = "\(diagnostic.title). \(diagnostic.message)"
+                reason = "\(diagnostic.title). \(diagnostic.message(hasSavedData: progress.completedBytes > 0))"
             } else {
                 reason = storedError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                     ? storedError!
@@ -1402,6 +1401,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let fileExists = task?.destinationFileURL.map {
             FileManager.default.fileExists(atPath: $0.path)
         } ?? false
+        lastRecoveryAction = task.map(TaskRecoveryAction.make(from:)) ?? .none
+        applyRenewActionAppearance()
 
         switch status {
         case .complete:
@@ -1420,7 +1421,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             openButton.isHidden = true
             revealActionButton.isHidden = true
             moreActionsButton.isHidden = true
-            pauseButton.title = status == .error ? L10n.retry : L10n.resume
+            applyTransferActionAppearance(for: status, recoveryAction: lastRecoveryAction)
             pauseButton.isEnabled = true
             pauseButton.keyEquivalent = "\r"
             openButton.keyEquivalent = ""
@@ -1429,11 +1430,59 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             openButton.isHidden = true
             revealActionButton.isHidden = true
             moreActionsButton.isHidden = true
-            pauseButton.title = L10n.pause
+            applyTransferActionAppearance(for: status, recoveryAction: lastRecoveryAction)
             pauseButton.isEnabled = true
             pauseButton.keyEquivalent = "\r"
             openButton.keyEquivalent = ""
         }
+    }
+
+    /// Keep the action's glyph and verb inseparable. Previously the button
+    /// changed from "Pause" to "Resume" but retained pause bars, a costly
+    /// contradiction in the compact window's only primary action.
+    private func applyTransferActionAppearance(
+        for status: DownloadStatus,
+        recoveryAction: TaskRecoveryAction
+    ) {
+        let title: String
+        let symbol: String
+        switch status {
+        case .error:
+            switch recoveryAction {
+            case .openSourcePage:
+                title = L10n.openSourcePage
+                symbol = "arrow.up.right.square"
+            case .renewURL:
+                title = L10n.renewURL
+                symbol = "arrow.triangle.2.circlepath"
+            case .retry, .none:
+                title = L10n.retry
+                symbol = "arrow.clockwise"
+            }
+        case .paused, .incomplete:
+            title = L10n.resume
+            symbol = "play.fill"
+        default:
+            title = L10n.pause
+            symbol = "pause.fill"
+        }
+        pauseButton.title = title
+        pauseButton.image = NDMChrome.symbol(symbol, pointSize: 12, weight: .semibold)
+        pauseButton.toolTip = title
+        pauseButton.setAccessibilityLabel(title)
+    }
+
+    private func applyRenewActionAppearance() {
+        let opensPage = lastRecoveryAction == .openSourcePage
+        let title = opensPage ? L10n.openSourcePage : L10n.renewURLEllipsis
+        renewButton.title = title
+        renewButton.image = NDMChrome.symbol(
+            opensPage ? "arrow.up.right.square" : "arrow.triangle.2.circlepath",
+            pointSize: 12,
+            weight: .medium
+        )
+        renewButton.toolTip = title
+        renewButton.setAccessibilityLabel(title)
     }
 
     private func renderConnections(_ states: [SegmentState], downloadStatus: DownloadStatus) {
@@ -1460,6 +1509,11 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Actions
 
     @objc private func pauseClicked() {
+        if lastStatus == .error,
+           lastRecoveryAction == .openSourcePage || lastRecoveryAction == .renewURL {
+            renewClicked()
+            return
+        }
         Task {
             if lastStatus == .paused || lastStatus == .incomplete || lastStatus == .error {
                 do {

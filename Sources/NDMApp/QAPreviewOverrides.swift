@@ -108,6 +108,16 @@ enum QAPreviewOverrides {
         return value
     }
 
+    /// Selects the first N visible list rows for deterministic batch-action
+    /// screenshots. This avoids relying on synthetic Command-click timing.
+    static var multiSelectionCount: Int? {
+        guard isEnabled,
+              let raw = environment["NDM_QA_MULTI_SELECT_COUNT"],
+              let value = Int(raw),
+              value > 1 else { return nil }
+        return value
+    }
+
     static var showUpgrade: Bool {
         isEnabled && environment["NDM_QA_SHOW_UPGRADE"] == "1"
     }
@@ -159,6 +169,12 @@ enum QAPreviewOverrides {
         isEnabled && environment["NDM_QA_SHOW_ONBOARDING"] == "1"
     }
 
+    /// Exercises the welcome screen's inline recovery state through the same
+    /// primary action used by a person, paired with an invalid QA clipboard.
+    static var showOnboardingError: Bool {
+        isEnabled && environment["NDM_QA_SHOW_ONBOARDING_ERROR"] == "1"
+    }
+
     static var showMediaAccess: Bool {
         isEnabled && environment["NDM_QA_SHOW_MEDIA_ACCESS"] == "1"
     }
@@ -181,6 +197,12 @@ enum QAPreviewOverrides {
 
     static var showNewDownload: Bool {
         isEnabled && environment["NDM_QA_SHOW_NEW_DOWNLOAD"] == "1"
+    }
+
+    /// Opens the real folder chooser from the New Download sheet so the nested
+    /// AppKit interaction can be visually verified without synthetic clicks.
+    static var showNewDownloadDestinationPicker: Bool {
+        isEnabled && environment["NDM_QA_SHOW_NEW_DOWNLOAD_DESTINATION_PICKER"] == "1"
     }
 
     /// Opens the progress window for the initially selected task (pair with
@@ -241,6 +263,7 @@ enum QAPreviewOverrides {
     static let windowSize: NSSize? = nil
     static let performanceTaskCount: Int? = nil
     static let selectedFilenameContains: String? = nil
+    static let multiSelectionCount: Int? = nil
     static let showUpgrade = false
     static let showCompletion = false
     static let renderToPath: String? = nil
@@ -249,11 +272,13 @@ enum QAPreviewOverrides {
     static let probeInspectorToggle = false
     static let showAbout = false
     static let showOnboarding = false
+    static let showOnboardingError = false
     static let showMediaAccess = false
     static let showSettings = false
     static let showQuickActions = false
     static let settingsSection: String? = nil
     static let showNewDownload = false
+    static let showNewDownloadDestinationPicker = false
     static let showProgress = false
     static let dismissCompletionDuringHandoff = false
     static let initialFilter: SidebarFilter? = nil
@@ -289,6 +314,10 @@ enum QAPreviewOverrides {
                     promoted: true
                 ),
             ]
+        } else {
+            // Visual QA must not inherit the developer's real completion
+            // actions from the shared preferences domain.
+            settings.quickActions = []
         }
     }
 

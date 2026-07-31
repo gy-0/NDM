@@ -3,7 +3,7 @@ import NDMCore
 
 /// A contextual action the toolbar can surface for the current selection.
 enum ToolbarContextAction {
-    case pause, resume, retry, renew, open, reveal, delete
+    case pause, resume, retry, renew, openSourcePage, open, reveal, delete
 }
 
 /// Design Suite in-window tool strip: a primary New action, then a contextual

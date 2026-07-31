@@ -113,6 +113,7 @@ public enum L10n: Sendable {
         )
     }
     public static var openFileFailed: String { t("Couldn’t open the file", "无法打开文件") }
+    public static var openSourcePage: String { t("Open Source Page", "打开来源页") }
     public static var renewURL: String { t("Update Link", "更新链接") }
     public static var renewURLEllipsis: String { t("Update Link…", "更新链接…") }
     public static var renewAndStart: String { t("Update & Start", "更新链接并开始") }
@@ -138,6 +139,7 @@ public enum L10n: Sendable {
     public static var queued: String { t("Queued", "排队中") }
     public static var paused: String { t("Paused", "已暂停") }
     public static var toResume: String { t("To Resume", "待继续") }
+    public static var readyToResume: String { t("Ready to resume", "可以继续下载") }
     public static var completed: String { t("Completed", "已完成") }
     public static var failed: String { t("Failed", "失败") }
     public static var incomplete: String { t("Incomplete", "未完成") }
@@ -205,10 +207,6 @@ public enum L10n: Sendable {
     public static var emptyTrySearch: String {
         t("Try another search, or clear the search field.", "试试其他关键词，或清空搜索框。")
     }
-    public static var emptyTryFilter: String {
-        t("Choose another filter in the sidebar, or add a new download.", "换一个侧栏筛选，或新建下载。")
-    }
-
     public static func emptyNoMatches(_ query: String) -> String {
         let shown = truncatedForDisplay(query)
         return t("No matches for “\(shown)”", "没有匹配「\(shown)」的结果")
@@ -233,7 +231,25 @@ public enum L10n: Sendable {
     }
 
     public static var pasteURLHint: String {
-        t("Paste an HTTP, HTTPS, or FTP URL.", "粘贴 HTTP、HTTPS 或 FTP 链接。")
+        t(
+            "Paste a direct link, video page, or full share message.",
+            "可粘贴直链、视频页面，或整段分享口令。"
+        )
+    }
+    public static func downloadDestination(_ folder: String) -> String {
+        t("Save to \(folder)", "保存到 \(folder)")
+    }
+    public static var changeDownloadDestination: String {
+        t("Change location for this download", "更改本次下载位置")
+    }
+    public static var chooseDownloadFolder: String {
+        t("Choose Download Folder", "选择下载文件夹")
+    }
+    public static var newDownloadInputPlaceholder: String {
+        t("Paste a link or full share message", "粘贴链接或整段分享口令")
+    }
+    public static var newDownloadInputAccessibilityLabel: String {
+        t("Download link or share message", "下载链接或分享口令")
     }
     public static var newDownloadLede: String {
         t("Paste a file or video link.", "粘贴文件或视频链接。")
@@ -242,7 +258,10 @@ public enum L10n: Sendable {
         t("Filled from clipboard", "已从剪贴板填入")
     }
     public static var clipboardURLEmpty: String {
-        t("Clipboard has no download link — paste one below", "剪贴板里没有下载链接，请手动粘贴")
+        t(
+            "Clipboard has no recognizable download content — paste a link or share message below",
+            "剪贴板里没有可识别的下载内容，请粘贴链接或分享口令"
+        )
     }
     public static var clipboardURLEdited: String {
         t("Edit the URL, then download", "可继续编辑链接后下载")
@@ -258,6 +277,9 @@ public enum L10n: Sendable {
     }
     public static var linkLensContinue: String {
         t("Continue", "继续")
+    }
+    public static var linkLensDownloadFile: String {
+        t("Download File", "下载文件")
     }
     public static var linkLensViewExisting: String {
         t("View existing", "查看现有")
@@ -938,6 +960,45 @@ public enum L10n: Sendable {
     // MARK: - Onboarding
 
     public static var onboardingWindowTitle: String { t("Welcome", "欢迎") }
+    public static var onboardingHeroTitle: String {
+        t("Link in. File out.", "链接进来，文件出去")
+    }
+    public static var onboardingHeroBody: String {
+        t(
+            "NDM recognizes direct links, video pages, and full share messages. You stay in control of quality, format, and location.",
+            "直链、视频页面、整段分享口令都能识别；画质、格式和保存位置仍由你决定。"
+        )
+    }
+    public static var onboardingInputPlaceholder: String {
+        t("Paste a link or share message", "粘贴链接或分享口令")
+    }
+    public static var onboardingPasteAndContinue: String {
+        t("Paste & Recognize", "粘贴并识别")
+    }
+    public static var onboardingContinueWithLink: String {
+        t("Choose Download Options", "继续选择下载选项")
+    }
+    public static var onboardingTrustLine: String {
+        t(
+            "NO ACCOUNT  ·  LOCAL PROCESSING  ·  BROWSER EXTENSION OPTIONAL",
+            "无需账号  ·  本机处理  ·  浏览器扩展可选"
+        )
+    }
+    public static var onboardingNoLinkFound: String {
+        t(
+            "No downloadable link found — paste one above.",
+            "没有找到可下载链接，请粘贴到上方。"
+        )
+    }
+    public static func onboardingLinkReady(_ source: String) -> String {
+        t("\(source) link ready", "已识别 \(source) 链接")
+    }
+    public static var onboardingDirectLinkOutcome: String {
+        t(
+            "Size and resume support are checked next",
+            "下一步确认大小与断点续传"
+        )
+    }
     public static var onboardingStep1Title: String {
         t("Paste a link or share text", "粘贴链接或分享口令")
     }
@@ -981,10 +1042,13 @@ public enum L10n: Sendable {
         )
     }
     public static var onboardingExampleFound: String {
-        t("YouTube video recognized", "已识别为 YouTube 视频")
+        t("No link handy? Try a YouTube example", "手边没有链接？试试 YouTube 示例")
     }
     public static var onboardingExampleOutcome: String {
-        t("Quality, format and subtitles remain your choice", "画质、格式和字幕仍然由你选择")
+        t("Preview recognition first — nothing downloads yet", "先体验识别，不会立即下载")
+    }
+    public static var onboardingRecognizedMediaOutcome: String {
+        t("Choose quality, format, and subtitles next", "继续后选择画质、格式和字幕")
     }
     public static var onboardingTryExample: String {
         t("Try this example", "用这个示例试试")
@@ -1271,7 +1335,7 @@ public enum L10n: Sendable {
     }
     public static var whySoFastPrefix: String { t("Why so fast: ", "为什么这么快：") }
     public static var globalSpeedCaption: String {
-        t("Global speed limit (bytes/s, 0 = unlimited)", "全局限速（字节/秒，0 = 不限制）")
+        t("Global speed limit", "全局限速")
     }
     public static var organizeCategories: String {
         t("Organize into category subfolders", "按分类放入子文件夹")

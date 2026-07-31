@@ -87,12 +87,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     // Downloads
     private let dirField = NSTextField(string: "")
     private let connField = NSTextField(string: "8")
-    private let bwField = NSTextField(string: "0")
+    private let bwField = NSTextField(string: "5")
+    private let speedLimitPopup = SettingsPopupButton()
+    private let speedLimitCustomStack = NSStackView()
+    private let speedLimitControl = NSStackView()
+    private let speedLimitUnitLabel = NSTextField(labelWithString: "MB/s")
     private let smartConnSwitch = SettingsAccentSwitch()
     private let mediaQualityPopup = SettingsPopupButton()
     private let quickActionsListStack = NSStackView()
     private var draftQuickActions: [QuickAction]
     private var quickActionsWidthConstraints: [NSLayoutConstraint] = []
+
+    private static let speedLimitPresets: [Int64] = [
+        0, 1_000_000, 5_000_000, 10_000_000, 50_000_000,
+    ]
+    private static let customSpeedLimitTag = -1
 
     // Browser
     private let panelSwitch = SettingsAccentSwitch()
@@ -186,6 +195,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         saveButton.title = L10n.save
         cancelButton.title = L10n.cancel
         footerHint.stringValue = defaultFooterHint
+        reloadSpeedLimitPopupTitles()
         for (section, button) in navigationButtons {
             button.updateTitle(section.title)
         }
@@ -247,6 +257,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
 
+        reloadSpeedLimitPopupTitles()
+        speedLimitPopup.target = self
+        speedLimitPopup.action = #selector(speedLimitSelectionChanged)
+        speedLimitPopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        speedLimitUnitLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
+        speedLimitUnitLabel.textColor = .secondaryLabelColor
+        speedLimitCustomStack.orientation = .horizontal
+        speedLimitCustomStack.alignment = .centerY
+        speedLimitCustomStack.spacing = 6
+        speedLimitCustomStack.addArrangedSubview(bwField)
+        speedLimitCustomStack.addArrangedSubview(speedLimitUnitLabel)
+        speedLimitControl.orientation = .horizontal
+        speedLimitControl.alignment = .centerY
+        speedLimitControl.spacing = 8
+        speedLimitControl.addArrangedSubview(speedLimitPopup)
+        speedLimitControl.addArrangedSubview(speedLimitCustomStack)
+
         [appearancePopup, accentPopup, languagePopup, socksVersionPopup].forEach {
             $0.font = .systemFont(ofSize: 13, weight: .medium)
         }
@@ -268,6 +295,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         dirField.lineBreakMode = .byTruncatingMiddle
         connField.alignment = .right
         bwField.alignment = .right
+        bwField.widthAnchor.constraint(equalToConstant: 78).isActive = true
         proxyPortField.alignment = .right
         ftpPortField.alignment = .right
         socksPortField.alignment = .right
@@ -286,6 +314,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         dirField.setAccessibilityLabel(L10n.saveFilesTo)
         connField.setAccessibilityLabel(L10n.maxConnectionsCaption)
         bwField.setAccessibilityLabel(L10n.globalSpeedCaption)
+        speedLimitPopup.setAccessibilityLabel(L10n.globalSpeedCaption)
         uaField.setAccessibilityLabel(L10n.userAgentString)
 
         proxySwitch.target = self
@@ -320,6 +349,65 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         field.font = .systemFont(ofSize: 13)
         field.bezelStyle = .roundedBezel
         field.focusRingType = .default
+    }
+
+    private func reloadSpeedLimitPopupTitles() {
+        let selectedTag = speedLimitPopup.selectedItem?.tag
+        speedLimitPopup.removeAllItems()
+        let titles = [
+            L10n.t("Unlimited", "不限速"),
+            "1 MB/s",
+            "5 MB/s",
+            "10 MB/s",
+            "50 MB/s",
+        ]
+        for (title, value) in zip(titles, Self.speedLimitPresets) {
+            speedLimitPopup.addItem(withTitle: title)
+            speedLimitPopup.lastItem?.tag = Int(value)
+        }
+        speedLimitPopup.addItem(withTitle: L10n.t("Custom…", "自定义…"))
+        speedLimitPopup.lastItem?.tag = Self.customSpeedLimitTag
+        if let selectedTag {
+            speedLimitPopup.selectItem(withTag: selectedTag)
+        }
+        speedLimitUnitLabel.stringValue = "MB/s"
+    }
+
+    private func loadBandwidthLimit(_ bytesPerSecond: Int64) {
+        if Self.speedLimitPresets.contains(bytesPerSecond) {
+            speedLimitPopup.selectItem(withTag: Int(bytesPerSecond))
+        } else {
+            speedLimitPopup.selectItem(withTag: Self.customSpeedLimitTag)
+            let formatter = NumberFormatter()
+            formatter.locale = L10n.locale
+            formatter.numberStyle = .decimal
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 6
+            formatter.usesGroupingSeparator = false
+            bwField.stringValue = formatter.string(
+                from: NSNumber(value: Double(bytesPerSecond) / 1_000_000)
+            ) ?? String(Double(bytesPerSecond) / 1_000_000)
+        }
+        updateSpeedLimitControlVisibility()
+    }
+
+    private func selectedBandwidthLimit() -> Int64? {
+        guard let tag = speedLimitPopup.selectedItem?.tag else { return nil }
+        if tag != Self.customSpeedLimitTag { return Int64(tag) }
+        return SettingsInputValidation.bandwidthMegabytesPerSecond(bwField.stringValue)
+    }
+
+    private func updateSpeedLimitControlVisibility() {
+        speedLimitCustomStack.isHidden = speedLimitPopup.selectedItem?.tag != Self.customSpeedLimitTag
+    }
+
+    @objc private func speedLimitSelectionChanged() {
+        updateSpeedLimitControlVisibility()
+        if speedLimitPopup.selectedItem?.tag == Self.customSpeedLimitTag,
+           bwField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            bwField.stringValue = "5"
+        }
+        updateValidationState()
     }
 
     private func buildUI() {
@@ -638,7 +726,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         )
 
         connField.widthAnchor.constraint(equalToConstant: 76).isActive = true
-        bwField.widthAnchor.constraint(equalToConstant: 150).isActive = true
         let performanceCard = makeCard(
             title: L10n.t("Transfers", "传输"),
             subtitle: nil,
@@ -657,8 +744,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 ); row.toolTip = L10n.smartConnectionsDetail; return row }(),
                 settingsRow(
                     title: L10n.globalSpeedCaption,
-                    detail: L10n.t("Enter 0 for unlimited.", "输入 0 表示不限速。"),
-                    control: bwField
+                    detail: L10n.t(
+                        "Choose a common cap, or enter a custom speed in MB/s.",
+                        "选择常用档位，或用 MB/s 输入自定义速度。"
+                    ),
+                    control: speedLimitControl
                 ),
             ]
         )
@@ -771,27 +861,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             "显示在下载完成页的常用按钮旁"
         )
 
-        let up = quickActionGlyphButton(
-            "chevron.up",
-            action: #selector(moveQuickActionUp(_:)),
-            id: action.id,
-            enabled: index > 0
-        )
-        let down = quickActionGlyphButton(
-            "chevron.down",
-            action: #selector(moveQuickActionDown(_:)),
-            id: action.id,
-            enabled: index < total - 1
-        )
-        let remove = quickActionGlyphButton(
-            "trash",
-            action: #selector(removeQuickAction(_:)),
-            id: action.id,
-            enabled: true
-        )
-        remove.contentTintColor = .systemRed
+        let more = NSButton(title: "", target: self, action: #selector(showQuickActionRowMenu(_:)))
+        more.image = NDMChrome.symbol("ellipsis.circle", pointSize: 14, weight: .medium)
+        more.imagePosition = .imageOnly
+        more.isBordered = false
+        more.contentTintColor = .secondaryLabelColor
+        more.identifier = NSUserInterfaceItemIdentifier(action.id.uuidString)
+        more.toolTip = L10n.t("Manage this action", "管理此动作")
+        more.setAccessibilityLabel(L10n.t("Manage \(action.title)", "管理“\(action.title)”"))
 
-        let row = NSStackView(views: [iconView, labels, NSView(), promote, up, down, remove])
+        let row = NSStackView(views: [iconView, labels, NSView(), promote, more])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 8
@@ -799,26 +878,49 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         NSLayoutConstraint.activate([
             iconView.widthAnchor.constraint(equalToConstant: 24),
             iconView.heightAnchor.constraint(equalToConstant: 24),
+            more.widthAnchor.constraint(equalToConstant: 30),
+            more.heightAnchor.constraint(equalToConstant: 30),
         ])
         return row
     }
 
-    private func quickActionGlyphButton(
-        _ symbol: String,
-        action: Selector,
-        id: UUID,
-        enabled: Bool
-    ) -> NSButton {
-        let button = NSButton(title: "", target: self, action: action)
-        button.image = NDMChrome.symbol(symbol, pointSize: 11, weight: .semibold)
-        button.imagePosition = .imageOnly
-        button.isBordered = false
-        button.contentTintColor = .secondaryLabelColor
-        button.isEnabled = enabled
-        button.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
-        button.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        return button
+    @objc private func showQuickActionRowMenu(_ sender: NSButton) {
+        guard let index = quickActionIndex(for: sender),
+              let id = sender.identifier?.rawValue else { return }
+        let menu = NSMenu()
+        let up = NSMenuItem(
+            title: L10n.t("Move Up", "上移"),
+            action: #selector(moveQuickActionUpFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        up.target = self
+        up.image = NDMChrome.symbol("chevron.up", pointSize: 11, weight: .semibold)
+        up.representedObject = id
+        up.isEnabled = index > 0
+        menu.addItem(up)
+
+        let down = NSMenuItem(
+            title: L10n.t("Move Down", "下移"),
+            action: #selector(moveQuickActionDownFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        down.target = self
+        down.image = NDMChrome.symbol("chevron.down", pointSize: 11, weight: .semibold)
+        down.representedObject = id
+        down.isEnabled = index < draftQuickActions.count - 1
+        menu.addItem(down)
+        menu.addItem(.separator())
+
+        let remove = NSMenuItem(
+            title: L10n.t("Remove Action", "移除动作"),
+            action: #selector(removeQuickActionFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        remove.target = self
+        remove.image = NDMChrome.symbol("trash", pointSize: 11, weight: .medium)
+        remove.representedObject = id
+        menu.addItem(remove)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 3), in: sender)
     }
 
     private func quickActionKindLabel(_ kind: QuickAction.Kind) -> String {
@@ -950,21 +1052,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         reloadQuickActionsList()
     }
 
-    @objc private func removeQuickAction(_ sender: NSButton) {
+    @objc private func removeQuickActionFromMenu(_ sender: NSMenuItem) {
         guard let index = quickActionIndex(for: sender) else { return }
         draftQuickActions.remove(at: index)
         reloadQuickActionsList()
     }
 
-    @objc private func moveQuickActionUp(_ sender: NSButton) {
+    @objc private func moveQuickActionUpFromMenu(_ sender: NSMenuItem) {
         moveQuickAction(sender, offset: -1)
     }
 
-    @objc private func moveQuickActionDown(_ sender: NSButton) {
+    @objc private func moveQuickActionDownFromMenu(_ sender: NSMenuItem) {
         moveQuickAction(sender, offset: 1)
     }
 
-    private func moveQuickAction(_ sender: NSButton, offset: Int) {
+    private func moveQuickAction(_ sender: NSMenuItem, offset: Int) {
         guard let index = quickActionIndex(for: sender) else { return }
         let destination = index + offset
         guard draftQuickActions.indices.contains(destination) else { return }
@@ -974,6 +1076,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func quickActionIndex(for sender: NSButton) -> Int? {
         guard let id = sender.identifier?.rawValue else { return nil }
+        return draftQuickActions.firstIndex { $0.id.uuidString == id }
+    }
+
+    private func quickActionIndex(for sender: NSMenuItem) -> Int? {
+        guard let id = sender.representedObject as? String else { return nil }
         return draftQuickActions.firstIndex { $0.id.uuidString == id }
     }
 
@@ -1226,9 +1333,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         for card in cards {
             card.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(card)
+            let fillAvailableWidth = card.trailingAnchor.constraint(
+                equalTo: container.trailingAnchor,
+                constant: -8
+            )
+            fillAvailableWidth.priority = .defaultHigh
             NSLayoutConstraint.activate([
                 card.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
-                card.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+                fillAvailableWidth,
+                card.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
                 card.topAnchor.constraint(
                     equalTo: previous?.bottomAnchor ?? container.topAnchor,
                     constant: previous == nil ? 0 : 16
@@ -1385,7 +1498,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         if let qi = MediaQualityPreference.presetCases.firstIndex(of: settings.mediaQualityPreference) {
             mediaQualityPopup.selectItem(at: qi)
         }
-        bwField.stringValue = "\(settings.bandwidthLimitBytesPerSecond)"
+        loadBandwidthLimit(settings.bandwidthLimitBytesPerSecond)
         categorySwitch.state = settings.useCategoryFolders ? .on : .off
         allAtOnceSwitch.state = settings.downloadAllAtOnce ? .on : .off
         completeSwitch.state = settings.showCompletionDialog ? .on : .off
@@ -1581,10 +1694,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             )
         }
 
-        guard SettingsInputValidation.bandwidthBytesPerSecond(bwField.stringValue) != nil else {
+        guard selectedBandwidthLimit() != nil else {
             return ValidationIssue(
                 field: bwField,
-                message: L10n.t("Bandwidth must be 0 or a positive whole number.", "带宽必须是 0 或正整数。")
+                message: L10n.t(
+                    "Enter a custom speed greater than 0 MB/s.",
+                    "请输入大于 0 MB/s 的自定义速度。"
+                )
             )
         }
 
@@ -1695,8 +1811,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         if MediaQualityPreference.presetCases.indices.contains(qi) {
             next.mediaQuality = MediaQualityPreference.presetCases[qi]
         }
-        next.bandwidthLimitBytesPerSecond = SettingsInputValidation
-            .bandwidthBytesPerSecond(bwField.stringValue)!
+        next.bandwidthLimitBytesPerSecond = selectedBandwidthLimit()!
         next.useCategoryFolders = categorySwitch.state == .on
         next.downloadAllAtOnce = allAtOnceSwitch.state == .on
         next.showCompletionDialog = completeSwitch.state == .on
