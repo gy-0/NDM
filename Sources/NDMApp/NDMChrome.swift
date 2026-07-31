@@ -359,6 +359,36 @@ enum NDMChrome {
         window.isOpaque = true
     }
 
+    /// One-shot entrance: a quiet fade with a short upward settle, tuned to the
+    /// house curve (`easeOut`, 0.08–0.25s) so new content lands instead of
+    /// popping. Deliberately not a spring: an entrance is arrival, not a bounce,
+    /// and a spring here would read as a glitch against the Hero morph.
+    ///
+    /// Reduce Motion turns the whole thing off — motion is a preference, not a
+    /// requirement to read the interface.
+    static func playEntrance(
+        on view: NSView,
+        offset: CGFloat = 7,
+        duration: TimeInterval = 0.22
+    ) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        view.wantsLayer = true
+        guard let layer = view.layer else { return }
+        layer.opacity = 0
+        layer.transform = CATransform3DMakeTranslation(0, offset, 0)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(duration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        CATransaction.setCompletionBlock { [weak view] in
+            guard let layer = view?.layer else { return }
+            layer.opacity = 1
+            layer.transform = CATransform3DIdentity
+        }
+        layer.opacity = 1
+        layer.transform = CATransform3DIdentity
+        CATransaction.commit()
+    }
+
     /// Sheets / pickers — near-white paper (Design Suite `--surface`), not sidebar wash.
     static var sheetSurface: NSColor {
         dynamic(

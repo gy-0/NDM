@@ -2574,6 +2574,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private let emptyStack = NSStackView()
     private let batchBar = BatchActionBarView()
     private var rows: [TaskRowPresentation] = []
+    /// Task IDs whose rows/cards are arriving in this structural update. They
+    /// animate once, when the virtualized table first materializes them.
+    private var entranceTaskIDs: Set<Int64> = []
     private var selectedTaskID: Int64?
     private var suppressSelectionCallback = false
     private var contextMenuDelegate: ContextMenuDelegate?
@@ -2908,6 +2911,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         card.onActivate = { [weak self] taskID in
             self?.onActivateTaskID?(taskID)
         }
+        if entranceTaskIDs.remove(row.taskID) != nil {
+            NDMChrome.playEntrance(on: card.view, offset: 10, duration: 0.24)
+        }
         return item
     }
 
@@ -3132,6 +3138,12 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             // NSTableView is virtualized. A structural reload is sufficient;
             // explicitly notifying every row height forces AppKit to create and
             // measure all cells (several thousand in real user libraries).
+            // Rows arriving in this update get a quiet entrance when the table
+            // first materializes them; Hero landings are excluded because the
+            // morph (or its Reduce-Motion fade) already owns that arrival.
+            entranceTaskIDs = Set(nextIDs)
+                .subtracting(previousIDs)
+                .subtracting(landedFromHero)
             // Decide the *final* pin before reload. Hero→list completion inserts
             // at the top: restoring the pre-reload anchor would keep the old
             // first row under the eye (a downward jump), and a later
@@ -3920,6 +3932,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         let view = QuietFinderRowView()
         view.usesAccentFill = false
         if row < rows.count {
+            if entranceTaskIDs.remove(rows[row].taskID) != nil {
+                NDMChrome.playEntrance(on: view)
+            }
             let item = rows[row]
             let selected = tableView.selectedRowIndexes.contains(row)
             view.forcedSelected = selected
