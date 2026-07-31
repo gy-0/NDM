@@ -90,6 +90,12 @@ enum QAPreviewOverrides {
         return NSSize(width: max(400, width), height: max(300, height))
     }
 
+    /// Render the true first-run empty state: skip fixture seeding so the list
+    /// keeps its "one link is all it takes" welcome surface.
+    static var emptyState: Bool {
+        isEnabled && environment["NDM_QA_EMPTY_STATE"] == "1"
+    }
+
     static var performanceTaskCount: Int? {
         guard isEnabled,
               let raw = environment["NDM_QA_TASK_COUNT"],
@@ -261,6 +267,7 @@ enum QAPreviewOverrides {
     static let bridgePort: UInt16? = nil
     static let maxConnections: Int? = nil
     static let windowSize: NSSize? = nil
+    static let emptyState = false
     static let performanceTaskCount: Int? = nil
     static let selectedFilenameContains: String? = nil
     static let multiSelectionCount: Int? = nil
@@ -326,7 +333,7 @@ enum QAPreviewOverrides {
     /// without reading or mutating the user's real downloads.
     static func seedPreviewTasks(in store: DownloadStore) throws {
 #if DEBUG
-        guard isEnabled, try store.allDownloads().isEmpty else { return }
+        guard isEnabled, !emptyState, try store.allDownloads().isEmpty else { return }
         let folder = "/tmp/ndm-magic-qa-files"
         let folderURL = URL(fileURLWithPath: folder, isDirectory: true)
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
