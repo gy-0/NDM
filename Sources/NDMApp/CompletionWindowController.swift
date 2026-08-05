@@ -31,6 +31,13 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     private weak var noticeLabel: NSTextField?
     private var hasCelebrated = false
     private var handoffPrepared = false
+    /// One-click install (reverse spec 15): the primary action becomes
+    /// 「Install」 for installer downloads, and the button narrates the install
+    /// before handing off to the freshly installed app.
+    private var installerKind: InstallerKind = .notInstaller
+    private var installInProgress = false
+    private var installedAppURL: URL?
+    private var installTask: Task<Void, Never>?
     /// Resolved asynchronously and folded into the meta line; kept so the line
     /// can be rebuilt in place on a language switch without losing the runtime.
     private var durationText: String?
@@ -70,6 +77,9 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         completionStackView.onExpansionChanged = { [weak self] expanded in
             self?.resizeForCompletionStack(expanded: expanded)
+        }
+        completionStackView.onArtifactAction = { [weak self] in
+            self?.closeAfterAction()
         }
         buildUI()
         audioExtraction.onStateChange = { [weak self] state in
@@ -258,11 +268,20 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         fileCard.spacing = 13
 
         // MARK: Action row.
-        let open = InspectorActionButton(title: isMedia ? L10n.play : L10n.open, style: .filled)
+        installerKind = InstallerKind.detect(filename: task.filename)
+        let isInstaller = installerKind.offersInstall
+        let open = InspectorActionButton(
+            title: isMedia ? L10n.play : (isInstaller ? L10n.install : L10n.open),
+            style: .filled
+        )
         open.target = self
-        open.action = #selector(openClicked)
+        open.action = isInstaller ? #selector(installClicked) : #selector(openClicked)
         open.keyEquivalent = "\r"
-        open.image = NDMChrome.symbol(isMedia ? "play.fill" : "arrow.up.forward.app.fill", pointSize: 12, weight: .semibold)
+        open.image = NDMChrome.symbol(
+            isMedia ? "play.fill" : (isInstaller ? "shippingbox.fill" : "arrow.up.forward.app.fill"),
+            pointSize: 12,
+            weight: .semibold
+        )
         open.imagePosition = .imageLeading
         open.imageHugsTitle = true
         open.font = .systemFont(ofSize: 13.5, weight: .semibold)
@@ -519,7 +538,15 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         let isMedia = task.category == .video || task.category == .audio
         window?.title = L10n.downloadComplete
         hero?.setTitle(L10n.downloadComplete)
-        openButton?.title = isMedia ? L10n.play : L10n.open
+        if installedAppURL != nil {
+            openButton?.title = L10n.openApp
+        } else if installInProgress {
+            // The progress narration is already localized per step.
+        } else if installerKind.offersInstall {
+            openButton?.title = L10n.install
+        } else {
+            openButton?.title = isMedia ? L10n.play : L10n.open
+        }
         revealButton?.title = L10n.showInFinder
         shareButton?.setAccessibilityLabel(L10n.share)
         moreButton?.setAccessibilityLabel(L10n.moreActions)
@@ -573,20 +600,248 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func openClicked() {
+        // After a successful install the primary button hands off to the app
+        // that was just installed, not to the installer file itself.
+        if let installed = installedAppURL {
+            if NSWorkspace.shared.open(installed) {
+                closeAfterAction()
+            } else {
+                showActionFailure(message: L10n.openFileFailed, detail: installed.path)
+            }
+            return
+        }
         guard let url = destinationFileForAction() else { return }
-        if !NSWorkspace.shared.open(url) {
+        if NSWorkspace.shared.open(url) {
+            closeAfterAction()
+        } else {
             showActionFailure(message: L10n.openFileFailed, detail: url.path)
+        }
+    }
+
+    // MARK: One-click install (reverse spec 15)
+
+    @objc private func installClicked() {
+        guard let url = destinationFileForAction(),
+              InstallerKind.detect(filename: task.filename).offersInstall else { return }
+        installTask?.cancel()
+        installTask = Task { [weak self] in
+            await self?.runInstall(from: url, replaceExisting: false)
+        }
+    }
+
+    /// Drive the install; on conflict, ask once and re-drive with consent.
+    private func runInstall(from url: URL, replaceExisting: Bool) async {
+        let applications = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        installInProgress = true
+        let outcome: InstallerRunner.Outcome
+        do {
+            outcome = try await InstallerRunner.process(
+                dmgURL: url,
+                destination: applications,
+                replaceExisting: replaceExisting,
+                onStep: { [weak self] step in
+                    let text: String
+                    switch step {
+                    case .mounting: text = L10n.mountingDiskImage
+                    case .enumerating: text = L10n.installing
+                    case .copying(let app):
+                        text = L10n.installingApp((app as NSString).lastPathComponent)
+                    case .detaching: text = L10n.installing
+                    }
+                    Task { @MainActor [weak self] in
+                        self?.setInstallProgressTitle(text)
+                    }
+                },
+                askChoose: { [weak self] candidates in
+                    // Hop to the main actor unambiguously; the runner invokes
+                    // this closure off the main actor.
+                    let ask = Task { @MainActor () -> String? in
+                        guard let self else { return nil }
+                        return await self.askUserToChooseApp(candidates)
+                    }
+                    return await ask.value
+                }
+            )
+        } catch is CancellationError {
+            await MainActor.run { [weak self] in self?.resetInstallButton() }
+            return
+        } catch {
+            await MainActor.run { [weak self] in
+                self?.resetInstallButton()
+                self?.showActionFailure(
+                    message: L10n.installFailed,
+                    detail: error.localizedDescription
+                )
+            }
+            return
+        }
+
+        switch outcome {
+        case .installed(let appName, let at):
+            await MainActor.run { [weak self] in
+                self?.installSucceeded(appName: appName, installedURL: at)
+            }
+        case .needsReplaceConsent(let appName):
+            guard let window else {
+                resetInstallButton()
+                return
+            }
+            let replace = await confirmDialog(
+                title: L10n.replaceAppTitle(appName),
+                body: L10n.replaceAppBody(appName),
+                subject: .caution,
+                buttons: [
+                    NDMDialog.Button(L10n.cancel, isCancel: true),
+                    NDMDialog.Button(L10n.replace),
+                ],
+                host: window
+            ) == 1
+            if replace {
+                await runInstall(from: url, replaceExisting: true)
+            } else {
+                resetInstallButton()
+            }
+        case .noAppFound:
+            await MainActor.run { [weak self] in
+                self?.offerToMountImage(url: url)
+            }
+        }
+    }
+
+    /// The install finished: the primary button hands off to the new app.
+    private func installSucceeded(appName: String, installedURL: URL) {
+        installInProgress = false
+        installedAppURL = installedURL
+        openButton?.title = L10n.openApp
+        openButton?.image = NDMChrome.symbol(
+            "arrow.up.forward.app.fill", pointSize: 12, weight: .semibold
+        )
+        openButton?.imagePosition = .imageLeading
+        openButton?.imageHugsTitle = true
+        openButton?.isEnabled = true
+        noticeLabel?.stringValue = "\(appName) · \(L10n.installedToApplications)"
+    }
+
+    /// The button narrates the current step while the install runs.
+    private func setInstallProgressTitle(_ text: String) {
+        guard installInProgress else { return }
+        openButton?.title = text
+        openButton?.image = nil
+        openButton?.isEnabled = false
+    }
+
+    private func resetInstallButton() {
+        installInProgress = false
+        guard installedAppURL == nil,
+              let open = openButton,
+              installerKind.offersInstall else { return }
+        open.title = L10n.install
+        open.image = NDMChrome.symbol("shippingbox.fill", pointSize: 12, weight: .semibold)
+        open.imagePosition = .imageLeading
+        open.imageHugsTitle = true
+        open.isEnabled = true
+    }
+
+    /// Multiple apps in one image: let the user pick before installing.
+    @MainActor
+    private func askUserToChooseApp(_ candidates: [String]) async -> String? {
+        guard let window else { return nil }
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: candidates.map { ($0 as NSString).lastPathComponent })
+        popup.selectItem(at: 0)
+        let index = await confirmDialog(
+            title: L10n.t("Multiple apps detected", "检测到多个应用"),
+            body: L10n.t("Choose the app to install.", "选择要安装的应用。"),
+            subject: .info,
+            buttons: [
+                NDMDialog.Button(L10n.cancel, isCancel: true),
+                NDMDialog.Button(L10n.install),
+            ],
+            accessory: popup,
+            host: window
+        )
+        guard index == 1 else { return nil }
+        let selected = popup.indexOfSelectedItem
+        guard selected >= 0, selected < candidates.count else { return nil }
+        return candidates[selected]
+    }
+
+    /// No app in the image: offer to mount it instead of leaving the user
+    /// staring at a download that does nothing when opened.
+    @MainActor
+    private func offerToMountImage(url: URL) {
+        guard let window else {
+            resetInstallButton()
+            return
+        }
+        Task {
+            let mount = await confirmDialog(
+                title: L10n.noAppFoundInImage,
+                body: L10n.openImageBody,
+                subject: .info,
+                buttons: [
+                    NDMDialog.Button(L10n.cancel, isCancel: true),
+                    NDMDialog.Button(L10n.openImage),
+                ],
+                host: window
+            ) == 1
+            if mount {
+                if NSWorkspace.shared.open(url) {
+                    closeAfterAction()
+                    return
+                }
+                showActionFailure(message: L10n.openFileFailed, detail: url.path)
+            }
+            resetInstallButton()
+        }
+    }
+
+    /// One dialog, awaited — the sheet completion arrives asynchronously, so
+    /// callers read the chosen button index here instead of a local variable.
+    @MainActor
+    private func confirmDialog(
+        title: String,
+        body: String,
+        subject: NDMDialog.Subject,
+        buttons: [NDMDialog.Button],
+        accessory: NSView? = nil,
+        host: NSWindow
+    ) async -> Int {
+        await withCheckedContinuation { continuation in
+            NDMDialog.present(
+                title: title,
+                body: body,
+                subject: subject,
+                buttons: buttons,
+                accessory: accessory,
+                host: host
+            ) { result in
+                continuation.resume(returning: result.buttonIndex)
+            }
         }
     }
 
     @objc private func revealClicked() {
         guard let url = destinationFileForAction() else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+        closeAfterAction()
     }
 
     @objc private func shareClicked(_ sender: NSButton) {
         guard let url = destinationFileForAction() else { return }
-        if !fileSharePresenter.present(fileURL: url, from: sender) {
+        if !fileSharePresenter.present(
+            fileURL: url,
+            from: sender,
+            onChoose: { [weak self] service in
+                // Keep the picker alive until the user actually chooses a
+                // service. Closing on the button press would tear down its
+                // anchor before the share menu can be used.
+                guard service != nil else { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.closeAfterAction()
+                }
+            }
+        ) {
             showActionFailure(message: L10n.fileNotFound, detail: url.path)
         }
     }
@@ -608,6 +863,13 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
     private func showActionFailure(message: String, detail: String) {
         NDMDialog.present(title: message, body: detail, subject: .failure, host: window)
+    }
+
+    /// The completion panel is a handoff surface, not a destination. Once an
+    /// action has successfully taken the file somewhere useful, remove the
+    /// result window; failed actions stay visible so their error can be read.
+    private func closeAfterAction() {
+        window?.close()
     }
 
     @objc private func showMoreActions(_ sender: NSButton) {
@@ -732,6 +994,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             )
             return
         }
+        closeAfterAction()
     }
 
     @objc private func openWithApplication(_ sender: NSMenuItem) {
@@ -742,12 +1005,14 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             withApplicationAt: appURL,
             configuration: NSWorkspace.OpenConfiguration()
         )
+        closeAfterAction()
     }
 
     @objc private func copyLinkClicked() {
         guard !task.url.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(task.url, forType: .string)
+        closeAfterAction()
     }
 
     @objc private func extractAudioClicked() {
@@ -755,7 +1020,9 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func revealExtractedAudio() {
+        guard case .succeeded = audioExtraction.state else { return }
         audioExtraction.revealResult()
+        closeAfterAction()
     }
 
     @objc private func closeClicked() {
@@ -769,6 +1036,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         }
         clearCoverObserver()
         audioExtraction.cancel()
+        installTask?.cancel()
+        installTask = nil
         onDismiss()
     }
 }

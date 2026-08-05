@@ -1130,6 +1130,37 @@ public enum L10n: Sendable {
     public static var readyToPlay: String { t("Download complete", "下载完成") }
     public static var play: String { t("Play", "播放") }
 
+    // MARK: One-click install (port of Rapidmg behavior, reverse spec 15)
+
+    public static var install: String { t("Install", "安装") }
+    public static var installing: String { t("Installing…", "正在安装…") }
+    public static var mountingDiskImage: String { t("Mounting the disk image…", "正在挂载磁盘映像…") }
+    public static func installingApp(_ name: String) -> String {
+        t("Installing “\(name)”…", "正在安装「\(name)」…")
+    }
+    public static var installedToApplications: String {
+        t("Installed to the Applications folder", "已安装到应用程序文件夹")
+    }
+    public static var openApp: String { t("Open App", "打开应用") }
+    public static var noAppFoundInImage: String {
+        t("No app was found in the disk image", "磁盘映像中没有找到应用")
+    }
+    public static var openImage: String { t("Open Disk Image", "打开磁盘映像") }
+    public static var openImageBody: String {
+        t("No app was found in this disk image. Mount it to view its contents?", "这个磁盘映像里没有找到应用。要挂载它查看内容吗？")
+    }
+    public static func replaceAppTitle(_ name: String) -> String {
+        t("“\(name)” already exists. Replace it?", "「\(name)」已存在，要替换它吗？")
+    }
+    public static func replaceAppBody(_ name: String) -> String {
+        t(
+            "Replacing will overwrite the current contents of “\(name)”.",
+            "替换会覆盖「\(name)」现有的内容。"
+        )
+    }
+    public static var replace: String { t("Replace", "替换") }
+    public static var installFailed: String { t("Install Failed", "安装失败") }
+
     // Completion details — normal finishing stays silent; only exceptions
     // need an explanation in the everyday completion window.
     public static var finalizeKeptTS: String {
