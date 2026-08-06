@@ -20,7 +20,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private var completionHandoffIsActive = false
 
     private let tabControl = NSSegmentedControl(
-        labels: [L10n.tabDownload, L10n.tabOptions, L10n.tabConnections],
+        labels: [L10n.tabDownload, L10n.tabConnections],
         trackingMode: .selectOne,
         target: nil,
         action: nil
@@ -83,7 +83,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
     private var downloadPane: NSView!
     private weak var downloadStack: NSStackView?
-    private var optionsPane: NSView!
     private var connectionsPane: NSView!
     private var pollTask: Task<Void, Never>?
     private var lastStatus: DownloadStatus = .waiting
@@ -240,9 +239,8 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         tabContainer.translatesAutoresizingMaskIntoConstraints = false
         downloadPane = makeCompactDetailsPane()
-        optionsPane = makeOptionsPane()
         connectionsPane = makeConnectionsPane()
-        for pane in [downloadPane!, optionsPane!, connectionsPane!] {
+        for pane in [downloadPane!, connectionsPane!] {
             pane.translatesAutoresizingMaskIntoConstraints = false
             tabContainer.addSubview(pane)
             NSLayoutConstraint.activate([
@@ -810,7 +808,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         return card
     }
 
-    private func makeOptionsPane() -> NSView {
+    private func makeConnectionsPane() -> NSView {
         connectionsPopup.removeAllItems()
         for i in 1...32 { connectionsPopup.addItem(withTitle: "\(i)") }
 
@@ -824,7 +822,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         renewButton.imagePosition = .imageLeading
         renewButton.imageHugsTitle = true
 
-        optionsNote.font = .systemFont(ofSize: 12)
+        optionsNote.font = .systemFont(ofSize: 11)
         optionsNote.textColor = .secondaryLabelColor
 
         connectionsCaptionLabel.font = .systemFont(ofSize: 12, weight: .medium)
@@ -836,27 +834,60 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         applyConnButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 72).isActive = true
         renewButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
 
-        let stack = NSStackView(views: [connRow, renewButton, optionsNote])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 16
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        // Header: connection-count control on the left, renew on the right.
+        let headerSpacer = NSView()
+        headerSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        let header = NSStackView(views: [connRow, headerSpacer, renewButton])
+        header.orientation = .horizontal
+        header.spacing = 8
+        header.alignment = .centerY
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        connectionStack.orientation = .vertical
+        connectionStack.alignment = .leading
+        connectionStack.spacing = 0
+        connectionStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let document = FlippedDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(connectionStack)
+        connectionScrollView.documentView = document
+        connectionScrollView.hasVerticalScroller = true
+        connectionScrollView.drawsBackground = false
+        connectionScrollView.borderType = .noBorder
+        connectionScrollView.translatesAutoresizingMaskIntoConstraints = false
 
         let pane = NSView()
-        pane.addSubview(stack)
+        pane.addSubview(header)
+        pane.addSubview(optionsNote)
+        pane.addSubview(connectionScrollView)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: pane.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
-            optionsNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            header.topAnchor.constraint(equalTo: pane.topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+
+            optionsNote.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            optionsNote.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            optionsNote.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+
+            connectionStack.topAnchor.constraint(equalTo: document.topAnchor),
+            connectionStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            connectionStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            connectionStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: connectionScrollView.contentView.widthAnchor),
+
+            connectionScrollView.topAnchor.constraint(equalTo: optionsNote.bottomAnchor, constant: 10),
+            connectionScrollView.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            connectionScrollView.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            connectionScrollView.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+            connectionScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 230),
         ])
         return pane
     }
 
     private func relocalizeChrome() {
         tabControl.setLabel(L10n.tabDownload, forSegment: 0)
-        tabControl.setLabel(L10n.tabOptions, forSegment: 1)
-        tabControl.setLabel(L10n.tabConnections, forSegment: 2)
+        tabControl.setLabel(L10n.tabConnections, forSegment: 1)
         speedCaptionLabel.stringValue = L10n.speed.uppercased()
         downloadedCaptionLabel.stringValue = L10n.downloaded.uppercased()
         etaCaptionLabel.stringValue = L10n.timeLeft.uppercased()
@@ -881,50 +912,16 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         applyTransferActionAppearance(for: lastStatus, recoveryAction: lastRecoveryAction)
     }
 
-    private func makeConnectionsPane() -> NSView {
-        connectionStack.orientation = .vertical
-        connectionStack.alignment = .leading
-        connectionStack.spacing = 0
-        connectionStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let document = FlippedDocumentView()
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(connectionStack)
-        connectionScrollView.documentView = document
-        connectionScrollView.hasVerticalScroller = true
-        connectionScrollView.drawsBackground = false
-        connectionScrollView.borderType = .noBorder
-        connectionScrollView.translatesAutoresizingMaskIntoConstraints = false
-
-        let pane = NSView()
-        pane.addSubview(connectionScrollView)
-        NSLayoutConstraint.activate([
-            connectionStack.topAnchor.constraint(equalTo: document.topAnchor),
-            connectionStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            connectionStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            connectionStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            document.widthAnchor.constraint(equalTo: connectionScrollView.contentView.widthAnchor),
-
-            connectionScrollView.topAnchor.constraint(equalTo: pane.topAnchor),
-            connectionScrollView.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
-            connectionScrollView.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
-            connectionScrollView.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
-            connectionScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
-        ])
-        return pane
-    }
-
     private func styleValue(_ field: NSTextField) {
         field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         field.textColor = .labelColor
     }
 
     private func showTab(_ index: Int) {
-        let panes = [downloadPane!, optionsPane!, connectionsPane!]
+        let panes = [downloadPane!, connectionsPane!]
         let changed = panes.enumerated().contains { $0.element.isHidden == ($0.offset == index) }
         downloadPane.isHidden = index != 0
-        optionsPane.isHidden = index != 1
-        connectionsPane.isHidden = index != 2
+        connectionsPane.isHidden = index != 1
         if changed,
            window?.isVisible == true,
            !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
