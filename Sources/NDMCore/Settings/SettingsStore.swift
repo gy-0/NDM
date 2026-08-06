@@ -36,6 +36,7 @@ public enum SettingsStore {
         var transcriptionWritesTextFile: Bool?
         var quickActions: [QuickAction]?
         var installerSourceDisposition: String?
+        var installerAutoAcceptLicense: Bool?
     }
 
     public static func load() -> AppSettings {
@@ -86,6 +87,7 @@ public enum SettingsStore {
         settings.quickActions = disk.quickActions
         settings.installerSourceDisposition = disk.installerSourceDisposition
             .flatMap(InstallerSourceDisposition.init(rawValue:))
+        settings.installerAutoAcceptLicense = disk.installerAutoAcceptLicense
         return settings
     }
 
@@ -124,7 +126,8 @@ public enum SettingsStore {
             transcriptionLanguage: settings.transcriptionLanguage,
             transcriptionWritesTextFile: settings.transcriptionWritesTextFile,
             quickActions: settings.quickActions,
-            installerSourceDisposition: settings.installerSourceDisposition?.rawValue
+            installerSourceDisposition: settings.installerSourceDisposition?.rawValue,
+            installerAutoAcceptLicense: settings.installerAutoAcceptLicense
         )
         if let data = try? JSONEncoder().encode(disk) {
             defaults.set(data, forKey: key)

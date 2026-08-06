@@ -1208,6 +1208,18 @@ public enum L10n: Sendable {
     }
     public static var viewAgreement: String { t("View Agreement", "查看协议") }
     public static var accept: String { t("Accept", "接受") }
+    public static var autoAcceptLicense: String {
+        t(
+            "Always accept license agreements from now on",
+            "以后自动接受许可协议，不再询问"
+        )
+    }
+    public static var autoAcceptLicenseDetail: String {
+        t(
+            "License-protected disk images install without asking. Turn this off at any time.",
+            "带许可协议的磁盘映像将直接安装，不再询问。随时可以关掉。"
+        )
+    }
 
     // Completion details — normal finishing stays silent; only exceptions
     // need an explanation in the everyday completion window.

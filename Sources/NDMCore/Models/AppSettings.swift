@@ -123,6 +123,11 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// install. Nil until the user chooses; see `installerSourceDispositionValue`.
     public var installerSourceDisposition: InstallerSourceDisposition?
 
+    /// Whether license agreements on disk images are accepted automatically.
+    /// The user grants this explicitly (the accept dialog's checkbox or the
+    /// settings toggle); it never defaults on.
+    public var installerAutoAcceptLicense: Bool?
+
     public var smartConnectionsEnabled: Bool { smartConnections ?? true }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
     public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
@@ -132,6 +137,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var completionQuickActions: [QuickAction] { quickActions ?? [] }
     public var installerSourceDispositionValue: InstallerSourceDisposition {
         installerSourceDisposition ?? .defaultValue
+    }
+    public var installerAutoAcceptLicenseValue: Bool {
+        installerAutoAcceptLicense ?? false
     }
 
     /// Whether a finished download should be transcribed without being asked.
@@ -175,7 +183,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         transcriptionLanguage: String? = nil,
         transcriptionWritesTextFile: Bool? = nil,
         quickActions: [QuickAction]? = nil,
-        installerSourceDisposition: InstallerSourceDisposition? = nil
+        installerSourceDisposition: InstallerSourceDisposition? = nil,
+        installerAutoAcceptLicense: Bool? = nil
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -204,6 +213,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.transcriptionWritesTextFile = transcriptionWritesTextFile
         self.quickActions = quickActions
         self.installerSourceDisposition = installerSourceDisposition
+        self.installerAutoAcceptLicense = installerAutoAcceptLicense
     }
 }
 

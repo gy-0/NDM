@@ -65,11 +65,20 @@ final class SettingsStoreTests: XCTestCase {
         let loaded = SettingsStore.load(defaults: defaults)
         XCTAssertEqual(loaded.installerSourceDisposition, .trash)
         XCTAssertEqual(loaded.installerSourceDispositionValue, .trash)
+        XCTAssertEqual(loaded.installerAutoAcceptLicenseValue, false)
+
+        settings.installerAutoAcceptLicense = true
+        SettingsStore.save(settings, defaults: defaults)
+        XCTAssertEqual(
+            SettingsStore.load(defaults: defaults).installerAutoAcceptLicenseValue,
+            true
+        )
 
         // Older payloads without the key decode to the default.
         let legacy = try JSONEncoder().encode(AppSettings())
         let decoded = try JSONDecoder().decode(AppSettings.self, from: legacy)
         XCTAssertEqual(decoded.installerSourceDispositionValue, .ask)
+        XCTAssertEqual(decoded.installerAutoAcceptLicenseValue, false)
     }
 
     func testOlderSettingsDefaultToNoCompletionQuickActions() throws {

@@ -168,21 +168,24 @@ public enum DMGImageTool: Sendable {
 
     // MARK: - Parsing
 
-    /// Attach an image path with up to three attempts against transient
+    /// Attach an image path with several attempts against transient
     /// "resource temporarily unavailable" failures from the helper daemon.
+    /// Under test load the daemon can stay saturated for a couple of seconds,
+    /// so the backoff grows past that (Rapidmg's `attachHandleBusy` behavior).
     private static func attachImage(
         _ arguments: [String], timeout: TimeInterval
     ) throws -> URL {
         var lastDetail = "hdiutil attach failed"
-        for attempt in 0..<3 {
+        let backoff: [TimeInterval] = [0.8, 1.6, 3.0]
+        for attempt in 0...backoff.count {
             let result = try run(arguments, timeout: timeout)
             if result.terminationStatus == 0,
                let mountPoint = parseMountPoint(plist: result.standardOutput) {
                 return URL(fileURLWithPath: mountPoint, isDirectory: true)
             }
             lastDetail = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
-            if attempt < 2 {
-                Thread.sleep(forTimeInterval: 0.6 * Double(attempt + 1))
+            if attempt < backoff.count {
+                Thread.sleep(forTimeInterval: backoff[attempt])
             }
         }
         throw InstallerError.mountFailed(detail: lastDetail)

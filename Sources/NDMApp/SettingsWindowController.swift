@@ -95,6 +95,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let smartConnSwitch = SettingsAccentSwitch()
     private let mediaQualityPopup = SettingsPopupButton()
     private let installerDispositionPopup = SettingsPopupButton()
+    private let installerAutoAcceptSwitch = SettingsAccentSwitch()
     private let quickActionsListStack = NSStackView()
     private var draftQuickActions: [QuickAction]
     private var quickActionsWidthConstraints: [NSLayoutConstraint] = []
@@ -771,6 +772,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                     title: L10n.installerDispositionLabel,
                     detail: nil,
                     control: installerDispositionPopup
+                ),
+                toggleRow(
+                    title: L10n.autoAcceptLicense,
+                    detail: L10n.autoAcceptLicenseDetail,
+                    toggle: installerAutoAcceptSwitch
                 ),
             ]
         )
@@ -1524,6 +1530,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         ) {
             installerDispositionPopup.selectItem(at: index)
         }
+        installerAutoAcceptSwitch.state = settings.installerAutoAcceptLicenseValue ? .on : .off
         loadBandwidthLimit(settings.bandwidthLimitBytesPerSecond)
         categorySwitch.state = settings.useCategoryFolders ? .on : .off
         allAtOnceSwitch.state = settings.downloadAllAtOnce ? .on : .off
@@ -1841,6 +1848,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         if InstallerSourceDisposition.allCases.indices.contains(dispositionIndex) {
             next.installerSourceDisposition = InstallerSourceDisposition.allCases[dispositionIndex]
         }
+        next.installerAutoAcceptLicense = installerAutoAcceptSwitch.state == .on
         next.bandwidthLimitBytesPerSecond = selectedBandwidthLimit()!
         next.useCategoryFolders = categorySwitch.state == .on
         next.downloadAllAtOnce = allAtOnceSwitch.state == .on

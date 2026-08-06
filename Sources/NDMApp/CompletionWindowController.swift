@@ -644,13 +644,18 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     ) async {
         let applications = URL(fileURLWithPath: "/Applications", isDirectory: true)
         installInProgress = true
+        var settings = SettingsStore.load()
+        QAPreviewOverrides.apply(to: &settings)
+        // The user may have granted one-time auto-acceptance of license
+        // agreements; that setting skips the dialog entirely.
+        let effectiveLicenseAccepted = licenseAccepted || settings.installerAutoAcceptLicenseValue
         let outcome: InstallerRunner.Outcome
         do {
             outcome = try await InstallerRunner.process(
                 dmgURL: url,
                 destination: applications,
                 replaceExisting: replaceExisting,
-                licenseAccepted: licenseAccepted,
+                licenseAccepted: effectiveLicenseAccepted,
                 onStep: { [weak self] step in
                     let text: String
                     switch step {
@@ -720,7 +725,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             // Rapidmg-style: the image carries a license agreement, so ask
             // before touching it. 查看协议 opens Disk Image Mounter (the
             // system path that shows the actual license text); 接受 proceeds
-            // through the SLA-stripping convert path.
+            // through the SLA-stripping convert path. The checkbox grants
+            // one-time auto-acceptance for future images.
             guard let window else { return }
             let decision = await confirmDialog(
                 title: L10n.licenseAgreementTitle,
@@ -731,6 +737,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                     NDMDialog.Button(L10n.viewAgreement),
                     NDMDialog.Button(L10n.accept),
                 ],
+                option: NDMDialog.Option(title: L10n.autoAcceptLicense),
                 host: window
             )
             switch decision.buttonIndex {
@@ -738,6 +745,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                 NSWorkspace.shared.open(url)
                 resetInstallButton()
             case 2:
+                if decision.optionIsOn {
+                    var updated = SettingsStore.load()
+                    updated.installerAutoAcceptLicense = true
+                    SettingsStore.save(updated)
+                }
                 await runInstall(from: url, replaceExisting: false, licenseAccepted: true)
             default:
                 resetInstallButton()
