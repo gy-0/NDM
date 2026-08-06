@@ -11,6 +11,7 @@ YTDLP_BIN="${YTDLP_BIN:-$ROOT/Vendor/Tools/yt-dlp}"
 FFMPEG_BIN="${FFMPEG_BIN:-$ROOT/Vendor/Tools/ffmpeg}"
 DENO_BIN="${DENO_BIN:-$ROOT/Vendor/Tools/deno}"
 SOURCE_LICENSES="${SOURCE_LICENSES:-$ROOT/Vendor/Tools/Licenses}"
+APP_ICON="$ROOT/Sources/NDMApp/Resources/Brand/NDM.icns"
 YTDLP_PLUGIN_SOURCE="$ROOT/Vendor/Plugins/yt-dlp"
 
 required_licenses=(
@@ -34,6 +35,10 @@ for notice in "${required_licenses[@]}"; do
     exit 1
   fi
 done
+if [[ ! -s "$APP_ICON" ]]; then
+  print -u2 "Missing app icon: $APP_ICON"
+  exit 1
+fi
 
 cd "$ROOT"
 case "$CONFIGURATION" in
@@ -46,6 +51,7 @@ swift build -c "$CONFIGURATION" --disable-sandbox
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$TOOLS" "$LICENSES"
 cp "$ROOT/.build/$CONFIGURATION/NDM" "$APP/Contents/MacOS/NDM"
+cp "$APP_ICON" "$APP/Contents/Resources/NDM.icns"
 cp -L "$YTDLP_BIN" "$TOOLS/yt-dlp"
 cp -L "$FFMPEG_BIN" "$TOOLS/ffmpeg"
 cp -L "$DENO_BIN" "$TOOLS/deno"
@@ -67,6 +73,7 @@ plutil -insert CFBundleDisplayName -string NDM "$PLIST"
 plutil -insert CFBundleExecutable -string NDM "$PLIST"
 plutil -insert CFBundleIdentifier -string dev.ndm.open "$PLIST"
 plutil -insert CFBundlePackageType -string APPL "$PLIST"
+plutil -insert CFBundleIconFile -string NDM.icns "$PLIST"
 plutil -insert CFBundleShortVersionString -string "${NDM_VERSION:-0.1.0}" "$PLIST"
 plutil -insert CFBundleVersion -string "${NDM_BUILD_NUMBER:-1}" "$PLIST"
 plutil -insert LSMinimumSystemVersion -string "${NDM_MINIMUM_MACOS:-13.0}" "$PLIST"

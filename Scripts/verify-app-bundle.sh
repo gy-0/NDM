@@ -37,6 +37,9 @@ version_at_most() {
 }
 
 [[ -x "$APP/Contents/MacOS/NDM" ]] || fail "missing app executable"
+[[ -s "$APP/Contents/Resources/NDM.icns" ]] || fail "missing app icon"
+[[ "$(plutil -extract CFBundleIconFile raw -o - "$APP/Contents/Info.plist")" == "NDM.icns" ]] \
+  || fail "app icon is not declared in Info.plist"
 [[ -s "$APP/Contents/Resources/MediaToolchain.plist" ]] || fail "missing tool manifest"
 [[ -d "$APP/Contents/Resources/Licenses" ]] || fail "missing licenses"
 

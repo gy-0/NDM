@@ -88,6 +88,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             backing: .buffered,
             defer: false
         )
+        // ⌘W hides the main window but must leave a live controller for a later
+        // Dock click / applicationShouldHandleReopen to show it again.
+        window.isReleasedWhenClosed = false
         // Keep the requested number as the outer window size. Passing it
         // directly as `contentRect` makes the actual window taller than asked.
         window.setFrame(initialFrame, display: false)
@@ -763,6 +766,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
             // Media filters open as a poster wall; general files stay a list.
             preferGallery: selectedFilter == .video || selectedFilter == .image
         )
+#if DEBUG
         if !hasAppliedQAMultiSelection,
            let count = QAPreviewOverrides.multiSelectionCount {
             hasAppliedQAMultiSelection = true
@@ -770,6 +774,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate,
                 self?.listController.selectFirstRowsForQA(count: count)
             }
         }
+#endif
         updateInspector()
         updateToolbarEnablement()
         let snapshot = statusBarSnapshot()

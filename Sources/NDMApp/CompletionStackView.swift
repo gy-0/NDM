@@ -7,6 +7,9 @@ import NDMEngine
 @MainActor
 final class CompletionStackView: NSView {
     var onExpansionChanged: ((Bool) -> Void)?
+    /// Completion-only surfaces can dismiss after handing an artifact off;
+    /// progress and inspector surfaces leave this unset.
+    var onArtifactAction: (() -> Void)?
 
     private let shell = ChromeBox(
         fill: .clear
@@ -283,13 +286,15 @@ final class CompletionStackView: NSView {
     }
 
     @objc private func openArtifact(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
+        guard let url = sender.representedObject as? URL,
+              NSWorkspace.shared.open(url) else { return }
+        onArtifactAction?()
     }
 
     @objc private func revealArtifact(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+        onArtifactAction?()
     }
 }
 

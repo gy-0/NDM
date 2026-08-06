@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var completionWindowOrder: [Int64] = []
     private var onboardingWindow: OnboardingWindowController?
     private var terminationCheckInFlight = false
+    /// QA renders request an immediate AppKit termination. Without this one-shot
+    /// marker, the render callback enters the normal async termination handshake
+    /// while already inside NSApp.terminate, so the MainActor reply can never run.
+    private var qaRenderTerminationRequested = false
+    /// The app instance waiting for the deferred termination decision. Keep this
+    /// on the main actor so the background check never captures AppKit objects.
+    private var terminationReplyApplication: NSApplication?
     private var statusPollTask: Task<Void, Never>?
     private var lastPasteboardChangeCount = -1
     private var languageRebuildScheduled = false
@@ -212,8 +219,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the loading state documents the loading state, not the design.
                 let settle = ProcessInfo.processInfo.environment["NDM_QA_RENDER_DELAY"]
                     .flatMap(Double.init) ?? 5.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                    guard let self else { return }
                     QAWindowRenderer.renderMainWindow(to: renderPath)
+                    self.qaRenderTerminationRequested = true
                     NSApp.terminate(nil)
                 }
             }
@@ -275,28 +284,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// Clicking the Dock icon after ⌘W must restore the main window instead of
+    /// leaving the app active with no visible window.
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            showMain()
+        }
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if qaRenderTerminationRequested {
+            qaRenderTerminationRequested = false
+            return .terminateNow
+        }
         guard let manager else { return .terminateNow }
         guard !terminationCheckInFlight else { return .terminateLater }
+
         terminationCheckInFlight = true
-        Task { [weak self, manager, weak sender] in
+        terminationReplyApplication = sender
+
+        // Do not inherit AppDelegate's MainActor here. AppKit is synchronously
+        // inside NSApp.terminate while it waits for the later reply; a MainActor
+        // Task would be queued behind that wait and could never call reply(...).
+        Task.detached { [manager, weak self] in
             let active = await manager.hasActiveDownloads()
-            guard let self, let sender else { return }
-            var shouldTerminate = true
-            if active {
-                // Synchronous on purpose: AppKit is waiting on the reply below.
-                shouldTerminate = NDMDialog.runModal(
-                    title: L10n.downloadsInProgress,
-                    body: L10n.quitWithActiveBody,
-                    subject: .caution,
-                    buttons: [
-                        NDMDialog.Button(L10n.quit, isDestructive: true),
-                        NDMDialog.Button(L10n.cancel, isCancel: true),
-                    ]
-                ).buttonIndex == 0
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let sender = self.terminationReplyApplication else { return }
+                var shouldTerminate = true
+                if active {
+                    // Synchronous on purpose: this main-queue block is the
+                    // deferred AppKit decision point, and the modal dialog must
+                    // remain on the UI thread.
+                    shouldTerminate = NDMDialog.runModal(
+                        title: L10n.downloadsInProgress,
+                        body: L10n.quitWithActiveBody,
+                        subject: .caution,
+                        buttons: [
+                            NDMDialog.Button(L10n.quit, isDestructive: true),
+                            NDMDialog.Button(L10n.cancel, isCancel: true),
+                        ]
+                    ).buttonIndex == 0
+                }
+                self.terminationReplyApplication = nil
+                self.terminationCheckInFlight = false
+                sender.reply(toApplicationShouldTerminate: shouldTerminate)
             }
-            self.terminationCheckInFlight = false
-            sender.reply(toApplicationShouldTerminate: shouldTerminate)
         }
         return .terminateLater
     }
@@ -433,6 +469,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: L10n.windowMenu)
+        let closeWindow = NSMenuItem(
+            title: L10n.t("Close Window", "关闭窗口"),
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        closeWindow.keyEquivalentModifierMask = [.command]
+        closeWindow.ndmSymbol("xmark")
+        // Leave the target unset so AppKit routes ⌘W to the active window,
+        // including standalone completion and settings windows.
+        windowMenu.addItem(closeWindow)
+        windowMenu.addItem(.separator())
         // ⌘0 is Actual Size (View); show main window without stealing that chord.
         let showMain = NSMenuItem(title: L10n.showMainWindow, action: #selector(showMain), keyEquivalent: "")
         showMain.target = self
@@ -756,6 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showMain() {
         mainWindow?.showWindow(nil)
+        mainWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
