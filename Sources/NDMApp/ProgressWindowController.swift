@@ -954,8 +954,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         frame.size.height = min(requested, max(Self.compactFrameHeight, (visible?.height ?? requested) - 24))
         frame.origin.y = top - frame.height
 
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-
         if detailsVisible {
             // EXPAND: lay the section out at full height while the window is
             // still compact (the overflow is clipped at the window frame), then
@@ -966,11 +964,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             detailsSection.isHidden = false
             detailsSection.alphaValue = 0
             window.contentView?.layoutSubtreeIfNeeded()
-            if reduceMotion {
-                detailsSection.alphaValue = 1
-                window.setFrame(frame, display: true)
-                return
-            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.26
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -981,13 +974,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
             // COLLAPSE: fade the section out while the window is still at full
             // height, then shrink the frame — the reverse order removes the
             // "content vanished then window jumped" flash.
-            if reduceMotion {
-                compactBottomConstraint?.isActive = true
-                expandedBottomConstraint?.isActive = false
-                detailsSection.isHidden = true
-                window.setFrame(frame, display: true)
-                return
-            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.14
                 context.timingFunction = CAMediaTimingFunction(name: .easeIn)
