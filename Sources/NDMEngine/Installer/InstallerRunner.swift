@@ -32,6 +32,10 @@ public enum InstallerRunner: Sendable {
         /// The destination already contains this app; the caller must ask and
         /// re-drive with `replaceExisting: true`.
         case needsReplaceConsent(appName: String)
+        /// The image carries a software license agreement; `hdiutil attach`
+        /// cannot accept it programmatically. The caller hands the image to
+        /// Disk Image Mounter, which shows and records the license.
+        case needsLicenseHandoff
         case noAppFound
     }
 
@@ -57,6 +61,12 @@ public enum InstallerRunner: Sendable {
     ) async throws -> Outcome {
         func checkCancelled() throws {
             if cancelToken?.isCancelled ?? false { throw InstallerError.cancelled }
+        }
+
+        // SLA images cannot be attached programmatically; the system's
+        // Disk Image Mounter is the only path that shows the license.
+        if try DMGImageTool.hasLicenseAgreement(dmgURL: dmgURL) {
+            return .needsLicenseHandoff
         }
 
         onStep?(.mounting)

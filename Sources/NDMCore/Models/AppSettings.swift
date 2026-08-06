@@ -119,6 +119,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// written by older builds continue to decode without migration work.
     public var quickActions: [QuickAction]?
 
+    /// What to do with the installer file after a successful one-click
+    /// install. Nil until the user chooses; see `installerSourceDispositionValue`.
+    public var installerSourceDisposition: InstallerSourceDisposition?
+
     public var smartConnectionsEnabled: Bool { smartConnections ?? true }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
     public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
@@ -126,6 +130,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var transcriptionScopePreference: TranscriptionScope { transcriptionScope ?? .off }
     public var transcriptionWritesTextFileEnabled: Bool { transcriptionWritesTextFile ?? true }
     public var completionQuickActions: [QuickAction] { quickActions ?? [] }
+    public var installerSourceDispositionValue: InstallerSourceDisposition {
+        installerSourceDisposition ?? .defaultValue
+    }
 
     /// Whether a finished download should be transcribed without being asked.
     ///
@@ -167,7 +174,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         transcriptionScope: TranscriptionScope? = nil,
         transcriptionLanguage: String? = nil,
         transcriptionWritesTextFile: Bool? = nil,
-        quickActions: [QuickAction]? = nil
+        quickActions: [QuickAction]? = nil,
+        installerSourceDisposition: InstallerSourceDisposition? = nil
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConnections = maxConnections
@@ -195,6 +203,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.transcriptionLanguage = transcriptionLanguage
         self.transcriptionWritesTextFile = transcriptionWritesTextFile
         self.quickActions = quickActions
+        self.installerSourceDisposition = installerSourceDisposition
     }
 }
 

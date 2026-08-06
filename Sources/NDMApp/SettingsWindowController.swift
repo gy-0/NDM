@@ -94,6 +94,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let speedLimitUnitLabel = NSTextField(labelWithString: "MB/s")
     private let smartConnSwitch = SettingsAccentSwitch()
     private let mediaQualityPopup = SettingsPopupButton()
+    private let installerDispositionPopup = SettingsPopupButton()
     private let quickActionsListStack = NSStackView()
     private var draftQuickActions: [QuickAction]
     private var quickActionsWidthConstraints: [NSLayoutConstraint] = []
@@ -253,6 +254,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         mediaQualityPopup.removeAllItems()
         MediaQualityPreference.presetCases.forEach {
             mediaQualityPopup.addItem(withTitle: $0.settingsTitle)
+        }
+        installerDispositionPopup.removeAllItems()
+        InstallerSourceDisposition.allCases.forEach {
+            installerDispositionPopup.addItem(withTitle: L10n.installerDispositionTitle($0))
         }
         socksVersionPopup.removeAllItems()
         socksVersionPopup.addItems(withTitles: ["SOCKS5", "SOCKS4"])
@@ -753,6 +758,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             ]
         )
         mediaQualityPopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        installerDispositionPopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        let installerCard = makeCard(
+            title: L10n.installerAfterInstallTitle,
+            subtitle: L10n.t(
+                "What to do with the installer file once the app is installed.",
+                "应用安装完成后，如何处理安装包。"
+            ),
+            symbolName: "shippingbox",
+            rows: [
+                settingsRow(
+                    title: L10n.installerDispositionLabel,
+                    detail: nil,
+                    control: installerDispositionPopup
+                ),
+            ]
+        )
         let videoCard = makeCard(
             title: L10n.t("Video", "视频"),
             subtitle: nil,
@@ -768,7 +789,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 ),
             ]
         )
-        return paneStack([destinationCard, performanceCard, videoCard, makeCompletionActionsCard()])
+        return paneStack([destinationCard, performanceCard, installerCard, videoCard, makeCompletionActionsCard()])
     }
 
     private func makeCompletionActionsCard() -> NSView {
@@ -1498,6 +1519,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         if let qi = MediaQualityPreference.presetCases.firstIndex(of: settings.mediaQualityPreference) {
             mediaQualityPopup.selectItem(at: qi)
         }
+        if let index = InstallerSourceDisposition.allCases.firstIndex(
+            of: settings.installerSourceDispositionValue
+        ) {
+            installerDispositionPopup.selectItem(at: index)
+        }
         loadBandwidthLimit(settings.bandwidthLimitBytesPerSecond)
         categorySwitch.state = settings.useCategoryFolders ? .on : .off
         allAtOnceSwitch.state = settings.downloadAllAtOnce ? .on : .off
@@ -1810,6 +1836,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let qi = mediaQualityPopup.indexOfSelectedItem
         if MediaQualityPreference.presetCases.indices.contains(qi) {
             next.mediaQuality = MediaQualityPreference.presetCases[qi]
+        }
+        let dispositionIndex = installerDispositionPopup.indexOfSelectedItem
+        if InstallerSourceDisposition.allCases.indices.contains(dispositionIndex) {
+            next.installerSourceDisposition = InstallerSourceDisposition.allCases[dispositionIndex]
         }
         next.bandwidthLimitBytesPerSecond = selectedBandwidthLimit()!
         next.useCategoryFolders = categorySwitch.state == .on

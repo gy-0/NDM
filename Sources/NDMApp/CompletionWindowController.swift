@@ -269,7 +269,10 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
         // MARK: Action row.
         installerKind = InstallerKind.detect(filename: task.filename)
-        let isInstaller = installerKind.offersInstall
+        // v1 of the one-click install covers disk images only — pkg opens in
+        // Installer.app, archives in Archive Utility, .app launches directly.
+        // Everything else keeps the ordinary open action.
+        let isInstaller = installerKind == .dmg
         let open = InspectorActionButton(
             title: isMedia ? L10n.play : (isInstaller ? L10n.install : L10n.open),
             style: .filled
@@ -361,7 +364,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         // MARK: Deck assembly (everything under the hero).
         completionStackView.apply(completionStack)
         let hasSidecars = !(completionStack?.sidecars.isEmpty ?? true)
+        // Installer tasks always get a notice row — it carries the install
+        // status ("installed to Applications", "moved to Trash") that the
+        // primary button alone would not fit.
         let deliveryNoticeView = notice.map(makeDeliveryNotice)
+            ?? (isInstaller ? makeDeliveryNotice("") : nil)
         var arranged: [NSView] = []
         for section in CompletionPayoffLayout.sections(
             hasPromotedActions: promotedRow != nil,
@@ -622,7 +629,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func installClicked() {
         guard let url = destinationFileForAction(),
-              InstallerKind.detect(filename: task.filename).offersInstall else { return }
+              InstallerKind.detect(filename: task.filename) == .dmg else { return }
         installTask?.cancel()
         installTask = Task { [weak self] in
             await self?.runInstall(from: url, replaceExisting: false)
@@ -678,9 +685,8 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
 
         switch outcome {
         case .installed(let appName, let at):
-            await MainActor.run { [weak self] in
-                self?.installSucceeded(appName: appName, installedURL: at)
-            }
+            installSucceeded(appName: appName, installedURL: at)
+            await settleSourceFile(sourceURL: url, appName: appName)
         case .needsReplaceConsent(let appName):
             guard let window else {
                 resetInstallButton()
@@ -695,7 +701,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                     NDMDialog.Button(L10n.replace),
                 ],
                 host: window
-            ) == 1
+            ).buttonIndex == 1
             if replace {
                 await runInstall(from: url, replaceExisting: true)
             } else {
@@ -705,13 +711,37 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             await MainActor.run { [weak self] in
                 self?.offerToMountImage(url: url)
             }
+        case .needsLicenseHandoff:
+            // The image carries a license agreement; Disk Image Mounter shows
+            // and records it — the system path is the only legitimate one.
+            resetInstallButton()
+            guard let window else { return }
+            let open = await confirmDialog(
+                title: L10n.licenseAgreementTitle,
+                body: L10n.licenseAgreementBody,
+                subject: .caution,
+                buttons: [
+                    NDMDialog.Button(L10n.cancel, isCancel: true),
+                    NDMDialog.Button(L10n.openImage),
+                ],
+                host: window
+            ).buttonIndex == 1
+            if open, NSWorkspace.shared.open(url) {
+                closeAfterAction()
+            }
         }
     }
 
-    /// The install finished: the primary button hands off to the new app.
+    /// The install finished: reveal the app in Finder like Rapidmg, hand the
+    /// primary button off to the freshly installed app, and settle the source
+    /// installer file according to the user's disposition preference.
     private func installSucceeded(appName: String, installedURL: URL) {
         installInProgress = false
         installedAppURL = installedURL
+        // The button was created with the install action; handing it off to the
+        // installed app requires swapping the action, not just the title —
+        // otherwise "Open App" would re-run the install.
+        openButton?.action = #selector(openClicked)
         openButton?.title = L10n.openApp
         openButton?.image = NDMChrome.symbol(
             "arrow.up.forward.app.fill", pointSize: 12, weight: .semibold
@@ -720,6 +750,9 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         openButton?.imageHugsTitle = true
         openButton?.isEnabled = true
         noticeLabel?.stringValue = "\(appName) · \(L10n.installedToApplications)"
+        // Rapidmg reveals the finished install in Finder; do the same so the
+        // user lands where they can actually use the app.
+        NSWorkspace.shared.activateFileViewerSelecting([installedURL])
     }
 
     /// The button narrates the current step while the install runs.
@@ -728,6 +761,91 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         openButton?.title = text
         openButton?.image = nil
         openButton?.isEnabled = false
+    }
+
+    // MARK: Source installer disposition
+
+    /// Decide what happens to the installer file now that the install is done.
+    /// Default: ask, with "move to Trash" as the recommended answer and a
+    /// "remember my choice" checkbox that becomes the silent default.
+    @MainActor
+    private func settleSourceFile(sourceURL: URL, appName: String) async {
+        var settings = SettingsStore.load()
+        QAPreviewOverrides.apply(to: &settings)
+        let disposition = settings.installerSourceDispositionValue
+        switch disposition.sourceAction {
+        case .moveToTrash:
+            performSourceAction(.moveToTrash, on: sourceURL, appName: appName)
+        case .delete:
+            performSourceAction(.delete, on: sourceURL, appName: appName)
+        case nil:
+            guard disposition == .ask else { return } // .keep
+            await askAboutSourceFile(sourceURL: sourceURL, appName: appName)
+        }
+    }
+
+    /// The post-install dialog: keep or trash the installer, and optionally
+    /// remember the choice so future installs run silently.
+    @MainActor
+    private func askAboutSourceFile(sourceURL: URL, appName: String) async {
+        guard let window else {
+            performSourceAction(.moveToTrash, on: sourceURL, appName: appName)
+            return
+        }
+        let result = await confirmDialog(
+            title: L10n.installedAskTitle(appName),
+            body: L10n.installedAskBody,
+            subject: .info,
+            buttons: [
+                NDMDialog.Button(L10n.keepInstaller, isCancel: true),
+                NDMDialog.Button(L10n.trashInstaller),
+            ],
+            option: NDMDialog.Option(title: L10n.rememberDisposition),
+            host: window
+        )
+        // Button 1 = move to Trash (recommended), 0 = keep.
+        let chosen: InstallerSourceDisposition.SourceAction? = result.buttonIndex == 1 ? .moveToTrash : nil
+        if result.buttonIndex == 1 {
+            performSourceAction(.moveToTrash, on: sourceURL, appName: appName)
+        }
+        // "Remember my choice" persists it so the dialog stops asking.
+        guard result.optionIsOn else { return }
+        var settings = SettingsStore.load()
+        settings.installerSourceDisposition = InstallerSourceDisposition.disposition(
+            choosing: chosen,
+            remember: true,
+            current: settings.installerSourceDispositionValue
+        )
+        SettingsStore.save(settings)
+    }
+
+    private func performSourceAction(
+        _ action: InstallerSourceDisposition.SourceAction,
+        on sourceURL: URL,
+        appName: String
+    ) {
+        let succeeded: Bool
+        switch action {
+        case .moveToTrash:
+            do {
+                try FileManager.default.trashItem(at: sourceURL, resultingItemURL: nil)
+                succeeded = true
+            } catch {
+                succeeded = false
+            }
+        case .delete:
+            do {
+                try FileManager.default.removeItem(at: sourceURL)
+                succeeded = true
+            } catch {
+                succeeded = false
+            }
+        }
+        if succeeded {
+            noticeLabel?.stringValue = action == .moveToTrash
+                ? L10n.trashedInstaller(appName)
+                : L10n.deletedInstaller(appName)
+        }
     }
 
     private func resetInstallButton() {
@@ -749,7 +867,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.addItems(withTitles: candidates.map { ($0 as NSString).lastPathComponent })
         popup.selectItem(at: 0)
-        let index = await confirmDialog(
+        let result = await confirmDialog(
             title: L10n.t("Multiple apps detected", "检测到多个应用"),
             body: L10n.t("Choose the app to install.", "选择要安装的应用。"),
             subject: .info,
@@ -760,7 +878,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
             accessory: popup,
             host: window
         )
-        guard index == 1 else { return nil }
+        guard result.buttonIndex == 1 else { return nil }
         let selected = popup.indexOfSelectedItem
         guard selected >= 0, selected < candidates.count else { return nil }
         return candidates[selected]
@@ -784,7 +902,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                     NDMDialog.Button(L10n.openImage),
                 ],
                 host: window
-            ) == 1
+            ).buttonIndex == 1
             if mount {
                 if NSWorkspace.shared.open(url) {
                     closeAfterAction()
@@ -797,26 +915,29 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// One dialog, awaited — the sheet completion arrives asynchronously, so
-    /// callers read the chosen button index here instead of a local variable.
+    /// callers read the chosen button and checkbox state here instead of from
+    /// local variables.
     @MainActor
     private func confirmDialog(
         title: String,
         body: String,
         subject: NDMDialog.Subject,
         buttons: [NDMDialog.Button],
+        option: NDMDialog.Option? = nil,
         accessory: NSView? = nil,
         host: NSWindow
-    ) async -> Int {
+    ) async -> NDMDialog.Result {
         await withCheckedContinuation { continuation in
             NDMDialog.present(
                 title: title,
                 body: body,
                 subject: subject,
                 buttons: buttons,
+                option: option,
                 accessory: accessory,
                 host: host
             ) { result in
-                continuation.resume(returning: result.buttonIndex)
+                continuation.resume(returning: result)
             }
         }
     }

@@ -1161,6 +1161,52 @@ public enum L10n: Sendable {
     public static var replace: String { t("Replace", "替换") }
     public static var installFailed: String { t("Install Failed", "安装失败") }
 
+    // Source installer disposition (after a successful install).
+    public static func installedAskTitle(_ appName: String) -> String {
+        t("“\(appName)” was installed", "已安装「\(appName)」")
+    }
+    public static var installedAskBody: String {
+        t("Keep the installer file?", "安装包还要保留吗？")
+    }
+    public static var keepInstaller: String { t("Keep", "保留") }
+    public static var trashInstaller: String { t("Move to Trash", "移到废纸篓") }
+    public static var rememberDisposition: String {
+        t("Always handle it this way from now on", "以后都这样处理，不再询问")
+    }
+    public static func trashedInstaller(_ appName: String) -> String {
+        t("\(appName) was moved to the Trash", "已把「\(appName)」移到废纸篓")
+    }
+    public static func deletedInstaller(_ appName: String) -> String {
+        t("\(appName) was deleted", "已删除「\(appName)」")
+    }
+    public static var installerAfterInstallTitle: String { t("After Installing", "安装完成后") }
+    public static var installerDispositionLabel: String {
+        t("Handle the installer file", "处理安装包")
+    }
+    public static var installerDispositionAsk: String { t("Ask each time", "每次询问") }
+    public static var installerDispositionTrash: String {
+        t("Automatically move to Trash", "自动移到废纸篓")
+    }
+    public static var installerDispositionDelete: String { t("Automatically delete", "自动删除") }
+    public static var installerDispositionKeep: String { t("Keep the installer", "保留安装包") }
+    public static func installerDispositionTitle(_ disposition: InstallerSourceDisposition) -> String {
+        switch disposition {
+        case .ask: return installerDispositionAsk
+        case .trash: return installerDispositionTrash
+        case .delete: return installerDispositionDelete
+        case .keep: return installerDispositionKeep
+        }
+    }
+    public static var licenseAgreementTitle: String {
+        t("License Agreement", "许可协议")
+    }
+    public static var licenseAgreementBody: String {
+        t(
+            "This disk image contains a license agreement. Open it with Disk Image Mounter to review and accept it.",
+            "这个磁盘映像包含许可协议。需要用磁盘映像装载器打开以查看并接受。"
+        )
+    }
+
     // Completion details — normal finishing stays silent; only exceptions
     // need an explanation in the everyday completion window.
     public static var finalizeKeptTS: String {

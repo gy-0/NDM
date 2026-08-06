@@ -52,6 +52,26 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.completionQuickActions, s.quickActions)
     }
 
+    func testInstallerSourceDispositionPersists() throws {
+        let suiteName = "dev.ndm.open.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var settings = AppSettings()
+        XCTAssertEqual(settings.installerSourceDispositionValue, .ask)
+        settings.installerSourceDisposition = .trash
+        SettingsStore.save(settings, defaults: defaults)
+
+        let loaded = SettingsStore.load(defaults: defaults)
+        XCTAssertEqual(loaded.installerSourceDisposition, .trash)
+        XCTAssertEqual(loaded.installerSourceDispositionValue, .trash)
+
+        // Older payloads without the key decode to the default.
+        let legacy = try JSONEncoder().encode(AppSettings())
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: legacy)
+        XCTAssertEqual(decoded.installerSourceDispositionValue, .ask)
+    }
+
     func testOlderSettingsDefaultToNoCompletionQuickActions() throws {
         let data = try JSONEncoder().encode(AppSettings())
         let decoded = try JSONDecoder().decode(AppSettings.self, from: data)

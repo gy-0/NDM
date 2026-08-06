@@ -97,6 +97,33 @@ public enum DMGImageTool: Sendable {
         }
     }
 
+    /// Whether the image carries a software license agreement.
+    ///
+    /// This is the one real sacrifice of the hdiutil approach vs. Rapidmg's
+    /// embedded 7-Zip: `hdiutil attach` refuses (or interactively prompts on)
+    /// SLA-protected images, while 7-Zip reads them without caring. Detecting
+    /// the SLA up front lets the caller hand the image to Disk Image Mounter,
+    /// which is the system path that actually shows and records the license.
+    public static func hasLicenseAgreement(
+        dmgURL: URL, timeout: TimeInterval = 60
+    ) throws -> Bool {
+        let result = try run(["imageinfo", "-plist", dmgURL.path], timeout: timeout)
+        guard result.terminationStatus == 0 else { return false }
+        return parseLicenseAgreement(plist: result.standardOutput)
+    }
+
+    /// `hdiutil imageinfo -plist` reports the license under `Properties`.
+    static func parseLicenseAgreement(plist: String) -> Bool {
+        guard let data = plist.data(using: .utf8),
+              let root = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil
+              ) as? [String: Any],
+              let properties = root["Properties"] as? [String: Any] else {
+            return false
+        }
+        return properties["Software License Agreement"] as? Bool == true
+    }
+
     // MARK: - Parsing
 
     /// `hdiutil attach -plist` reports mount points inside `system-entities`.

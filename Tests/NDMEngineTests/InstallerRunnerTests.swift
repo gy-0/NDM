@@ -244,6 +244,39 @@ final class InstallerRunnerTests: XCTestCase {
         }
     }
 
+    // MARK: - License agreement detection
+
+    func testParseLicenseAgreementFromImageInfo() {
+        let withLicense = """
+        <?xml version="1.0"?><plist version="1.0"><dict>\
+        <key>Properties</key><dict><key>Software License Agreement</key><true/></dict>\
+        </dict></plist>
+        """
+        XCTAssertTrue(DMGImageTool.parseLicenseAgreement(plist: withLicense))
+
+        let without = """
+        <?xml version="1.0"?><plist version="1.0"><dict>\
+        <key>Properties</key><dict><key>Software License Agreement</key><false/></dict>\
+        </dict></plist>
+        """
+        XCTAssertFalse(DMGImageTool.parseLicenseAgreement(plist: without))
+        XCTAssertFalse(DMGImageTool.parseLicenseAgreement(plist: "not a plist"))
+        XCTAssertFalse(DMGImageTool.parseLicenseAgreement(plist: ""))
+    }
+
+    func testPlainImageDoesNotTriggerLicenseHandoff() async throws {
+        let volume = "NDMInst-\(UUID().uuidString.prefix(6))"
+        let src = sources.appendingPathComponent("plain", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try makeAppBundle(named: "NoSLA.app", in: src, marker: "v1")
+        let dmg = try makeDMG(volumeName: volume, sourceDir: src, fileName: "NoSLA.dmg")
+
+        let outcome = try await InstallerRunner.process(dmgURL: dmg, destination: destination())
+        guard case .installed = outcome else {
+            return XCTFail("expected a direct install, got \(outcome)")
+        }
+    }
+
     // MARK: - Volume enumerator (no hdiutil needed)
 
     func testVolumeEnumeratorPrunesJunkAndStopsInsideBundles() throws {

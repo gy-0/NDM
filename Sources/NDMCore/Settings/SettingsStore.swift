@@ -35,6 +35,7 @@ public enum SettingsStore {
         var transcriptionLanguage: String?
         var transcriptionWritesTextFile: Bool?
         var quickActions: [QuickAction]?
+        var installerSourceDisposition: String?
     }
 
     public static func load() -> AppSettings {
@@ -83,6 +84,8 @@ public enum SettingsStore {
         settings.transcriptionLanguage = disk.transcriptionLanguage
         settings.transcriptionWritesTextFile = disk.transcriptionWritesTextFile
         settings.quickActions = disk.quickActions
+        settings.installerSourceDisposition = disk.installerSourceDisposition
+            .flatMap(InstallerSourceDisposition.init(rawValue:))
         return settings
     }
 
@@ -120,7 +123,8 @@ public enum SettingsStore {
             transcriptionScope: settings.transcriptionScope?.rawValue,
             transcriptionLanguage: settings.transcriptionLanguage,
             transcriptionWritesTextFile: settings.transcriptionWritesTextFile,
-            quickActions: settings.quickActions
+            quickActions: settings.quickActions,
+            installerSourceDisposition: settings.installerSourceDisposition?.rawValue
         )
         if let data = try? JSONEncoder().encode(disk) {
             defaults.set(data, forKey: key)
