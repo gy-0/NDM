@@ -1200,12 +1200,14 @@ public enum L10n: Sendable {
     public static var licenseAgreementTitle: String {
         t("License Agreement", "许可协议")
     }
-    public static var licenseAgreementBody: String {
+    public static func licenseAgreementAskBody(_ filename: String) -> String {
         t(
-            "This disk image contains a license agreement. Open it with Disk Image Mounter to review and accept it.",
-            "这个磁盘映像包含许可协议。需要用磁盘映像装载器打开以查看并接受。"
+            "“\(filename)” contains a license agreement. Do you accept it?",
+            "「\(filename)」包含许可协议。你接受它吗？"
         )
     }
+    public static var viewAgreement: String { t("View Agreement", "查看协议") }
+    public static var accept: String { t("Accept", "接受") }
 
     // Completion details — normal finishing stays silent; only exceptions
     // need an explanation in the everyday completion window.

@@ -637,7 +637,11 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Drive the install; on conflict, ask once and re-drive with consent.
-    private func runInstall(from url: URL, replaceExisting: Bool) async {
+    private func runInstall(
+        from url: URL,
+        replaceExisting: Bool,
+        licenseAccepted: Bool = false
+    ) async {
         let applications = URL(fileURLWithPath: "/Applications", isDirectory: true)
         installInProgress = true
         let outcome: InstallerRunner.Outcome
@@ -646,6 +650,7 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                 dmgURL: url,
                 destination: applications,
                 replaceExisting: replaceExisting,
+                licenseAccepted: licenseAccepted,
                 onStep: { [weak self] step in
                     let text: String
                     switch step {
@@ -712,22 +717,30 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
                 self?.offerToMountImage(url: url)
             }
         case .needsLicenseHandoff:
-            // The image carries a license agreement; Disk Image Mounter shows
-            // and records it — the system path is the only legitimate one.
-            resetInstallButton()
+            // Rapidmg-style: the image carries a license agreement, so ask
+            // before touching it. 查看协议 opens Disk Image Mounter (the
+            // system path that shows the actual license text); 接受 proceeds
+            // through the SLA-stripping convert path.
             guard let window else { return }
-            let open = await confirmDialog(
+            let decision = await confirmDialog(
                 title: L10n.licenseAgreementTitle,
-                body: L10n.licenseAgreementBody,
+                body: L10n.licenseAgreementAskBody(task.filename),
                 subject: .caution,
                 buttons: [
                     NDMDialog.Button(L10n.cancel, isCancel: true),
-                    NDMDialog.Button(L10n.openImage),
+                    NDMDialog.Button(L10n.viewAgreement),
+                    NDMDialog.Button(L10n.accept),
                 ],
                 host: window
-            ).buttonIndex == 1
-            if open, NSWorkspace.shared.open(url) {
-                closeAfterAction()
+            )
+            switch decision.buttonIndex {
+            case 1:
+                NSWorkspace.shared.open(url)
+                resetInstallButton()
+            case 2:
+                await runInstall(from: url, replaceExisting: false, licenseAccepted: true)
+            default:
+                resetInstallButton()
             }
         }
     }

@@ -32,12 +32,23 @@ public enum InstallerRunner: Sendable {
         /// The destination already contains this app; the caller must ask and
         /// re-drive with `replaceExisting: true`.
         case needsReplaceConsent(appName: String)
-        /// The image carries a software license agreement; `hdiutil attach`
-        /// cannot accept it programmatically. The caller hands the image to
-        /// Disk Image Mounter, which shows and records the license.
+        /// The image carries a software license agreement and the user has not
+        /// accepted it yet. The caller shows its own accept dialog (Rapidmg
+        /// style), then re-drives with `licenseAccepted: true` — the runner
+        /// then mounts via the SLA-stripping convert path.
         case needsLicenseHandoff
         case noAppFound
     }
+
+    /// Seam for tests: how an image's license agreement is detected.
+    /// Defaults to `hdiutil imageinfo`; tests stub it because a real
+    /// SLA-protected image cannot be created on modern macOS (udifrez is
+    /// deprecated and broken).
+    public static let defaultSLADetection: @Sendable (URL) throws -> Bool = { dmgURL in
+        try DMGImageTool.hasLicenseAgreement(dmgURL: dmgURL)
+    }
+
+    static var slaDetection: @Sendable (URL) throws -> Bool = InstallerRunner.defaultSLADetection
 
     /// Run the whole install. Safe to call from any actor; the synchronous
     /// `hdiutil`/copy work runs on detached tasks.
@@ -55,6 +66,7 @@ public enum InstallerRunner: Sendable {
         dmgURL: URL,
         destination: URL = URL(fileURLWithPath: "/Applications", isDirectory: true),
         replaceExisting: Bool = false,
+        licenseAccepted: Bool = false,
         onStep: (@Sendable (Step) -> Void)? = nil,
         askChoose: (@Sendable ([String]) async -> String?)? = nil,
         cancelToken: CancelToken? = nil
@@ -63,15 +75,26 @@ public enum InstallerRunner: Sendable {
             if cancelToken?.isCancelled ?? false { throw InstallerError.cancelled }
         }
 
-        // SLA images cannot be attached programmatically; the system's
-        // Disk Image Mounter is the only path that shows the license.
-        if try DMGImageTool.hasLicenseAgreement(dmgURL: dmgURL) {
-            return .needsLicenseHandoff
-        }
-
+        // SLA images cannot be attached directly. First run: return so the
+        // caller can show its accept dialog; after acceptance the caller
+        // re-drives with `licenseAccepted` and we mount via the convert path,
+        // which strips the license wrapper (it lives in UDIF metadata, not in
+        // the volume contents).
+        let hasSLA = try await detached { try slaDetection(dmgURL) }
+        var bypass: DMGImageTool.BypassMount?
         onStep?(.mounting)
         try checkCancelled()
-        let mountPoint = try await detached { try DMGImageTool.attach(dmgURL: dmgURL) }
+        let mountPoint: URL
+        if hasSLA {
+            guard licenseAccepted else { return .needsLicenseHandoff }
+            let mounted = try await detached {
+                try DMGImageTool.attachBypassingLicense(dmgURL: dmgURL)
+            }
+            bypass = mounted
+            mountPoint = mounted.mountPoint
+        } else {
+            mountPoint = try await detached { try DMGImageTool.attach(dmgURL: dmgURL) }
+        }
 
         do {
             onStep?(.enumerating)
@@ -85,7 +108,7 @@ public enum InstallerRunner: Sendable {
                 if let picked = await askChoose?(candidates), candidates.contains(picked) {
                     plan = .install(app: picked)
                 } else {
-                    try await finish(detach: mountPoint, onStep: onStep)
+                    try await finish(detach: mountPoint, bypass: bypass, onStep: onStep)
                     return .noAppFound
                 }
             }
@@ -102,25 +125,33 @@ public enum InstallerRunner: Sendable {
                         replaceExisting: replaceExisting
                     )
                 }
-                try await finish(detach: mountPoint, onStep: onStep)
+                try await finish(detach: mountPoint, bypass: bypass, onStep: onStep)
                 return result
             case .noAppFound, .chooseApp, .notApplicable:
-                try await finish(detach: mountPoint, onStep: onStep)
+                try await finish(detach: mountPoint, bypass: bypass, onStep: onStep)
                 return .noAppFound
             }
         } catch {
             try? await detached { try DMGImageTool.detach(mountPoint: mountPoint) }
+            if let bypass {
+                try? FileManager.default.removeItem(at: bypass.temporaryDirectory)
+            }
             throw error
         }
     }
 
-    /// Detach after notifying the step hook.
+    /// Detach after notifying the step hook; deletes the SLA-stripped temp
+    /// image when the mount went through the bypass path.
     private static func finish(
         detach mountPoint: URL,
+        bypass: DMGImageTool.BypassMount?,
         onStep: (@Sendable (Step) -> Void)?
     ) async throws {
         onStep?(.detaching)
         try await detached { try DMGImageTool.detach(mountPoint: mountPoint) }
+        if let bypass {
+            try? FileManager.default.removeItem(at: bypass.temporaryDirectory)
+        }
     }
 
     /// Copy one app bundle into `destination` (sync, off the main actor).

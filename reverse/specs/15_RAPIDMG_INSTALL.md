@@ -116,10 +116,10 @@ application:openURLs: (AppDelegate.openedFromFiles=true)
 
 | Rapidmg 能力 | NDM 移植方案 |
 |--------------|-------------|
-| 7-Zip 直接读 DMG | **改用 `hdiutil attach -nobrowse -readonly -plist`**（NDM 非沙盒、系统自带、可离线造 fixture 测试）；保留「不挂载残留」的收尾（detach 一定执行） |
+| 7-Zip 直接读 DMG | **改用 `hdiutil attach -nobrowse -readonly -plist`**（NDM 非沙盒、系统自带、可离线造 fixture 测试）；保留「不挂载残留」的收尾（detach 一定执行）；**attach 遇瞬态失败自动重试 3 次**（对应原版 `attachHandleBusy`） |
+| EULA 检测 + 自己的接受框 | 原样移植。`hdiutil imageinfo -plist` 的 `Properties.Software License Agreement` 检测；检测到 → 弹「包含许可协议。你接受它吗？[查看协议][接受]」（查看协议=交给 DiskImageMounter 展示原文，与 Rapidmg 的 MountButtonTarget 一致）；接受后 **`hdiutil convert -format UDTO` 转裸镜像再挂载**（SLA 存在 UDIF 元数据里、不在卷内容里，转换即剥离，社区验证 15 年的自动化方案），装完删临时镜像 |
 | 条目过滤器（§5） | 原样移植为纯函数（NDMCore） |
 | 冲突替换确认 | 原样移植（NDMDialog） |
-| EULA 检测 | `hdiutil imageinfo -plist` 读 SLAs（等价于 resource fork） |
 | 多 app 选择 | 原样移植（「安装所选应用」选择） |
 | 无 app 五动作 | 原样移植（默认 Leave） |
 | 安装后 mtime 打戳 | 原样移植（刚装好的语义） |

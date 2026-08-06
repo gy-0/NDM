@@ -51,18 +51,15 @@ public enum DMGImageTool: Sendable {
 
     /// Mount the image read-only and hidden from Finder; returns the mount point.
     /// The caller must call `detach` (preferably via `withMountedImage`).
+    ///
+    /// Retries transient failures: the disk-images helper daemon occasionally
+    /// answers "resource temporarily unavailable" when several attaches land
+    /// in quick succession (Rapidmg's `attachHandleBusy` behavior).
     public static func attach(dmgURL: URL, timeout: TimeInterval = 60) throws -> URL {
-        let result = try run(
+        try attachImage(
             ["attach", "-nobrowse", "-readonly", "-plist", dmgURL.path],
             timeout: timeout
         )
-        guard result.terminationStatus == 0,
-              let mountPoint = parseMountPoint(plist: result.standardOutput) else {
-            throw InstallerError.mountFailed(
-                detail: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-        }
-        return URL(fileURLWithPath: mountPoint, isDirectory: true)
     }
 
     /// Detach the volume; retries with `-force` once for a busy handle.
@@ -97,13 +94,58 @@ public enum DMGImageTool: Sendable {
         }
     }
 
+    // MARK: License-agreement bypass
+
+    /// A mount obtained through `attachBypassingLicense`.
+    public struct BypassMount: Sendable {
+        public let mountPoint: URL
+        /// The converted UDTO image in a private temp directory; delete the
+        /// parent directory after detaching.
+        public let temporaryImage: URL
+
+        public var temporaryDirectory: URL {
+            temporaryImage.deletingLastPathComponent()
+        }
+    }
+
+    /// Mount an SLA-protected image by stripping the license wrapper first.
+    ///
+    /// The license agreement lives in the UDIF metadata, not in the volume
+    /// contents. Converting the image to raw UDTO (`hdiutil convert -format
+    /// UDTO`) produces a bare partition image that carries no SLA — the
+    /// community-verified way to mount such images non-interactively. The
+    /// converted image lives in a temp directory the caller must delete after
+    /// detaching (see `BypassMount.temporaryDirectory`).
+    public static func attachBypassingLicense(
+        dmgURL: URL, timeout: TimeInterval = 90
+    ) throws -> BypassMount {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-install-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let stripped = tempDir.appendingPathComponent("stripped.cdr")
+
+        let convert = try run(
+            ["convert", "-quiet", dmgURL.path, "-format", "UDTO", "-o", stripped.path],
+            timeout: timeout
+        )
+        guard convert.terminationStatus == 0 else {
+            try? FileManager.default.removeItem(at: tempDir)
+            throw InstallerError.mountFailed(
+                detail: convert.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        let mountPoint = try attachImage(
+            ["attach", stripped.path, "-nobrowse", "-readonly", "-plist"],
+            timeout: timeout
+        )
+        return BypassMount(mountPoint: mountPoint, temporaryImage: stripped)
+    }
+
     /// Whether the image carries a software license agreement.
     ///
-    /// This is the one real sacrifice of the hdiutil approach vs. Rapidmg's
-    /// embedded 7-Zip: `hdiutil attach` refuses (or interactively prompts on)
-    /// SLA-protected images, while 7-Zip reads them without caring. Detecting
-    /// the SLA up front lets the caller hand the image to Disk Image Mounter,
-    /// which is the system path that actually shows and records the license.
+    /// `hdiutil attach` refuses (or interactively prompts on) SLA-protected
+    /// images, so the caller routes them through `attachBypassingLicense`
+    /// after the user accepts — the same dialog-first flow as Rapidmg.
     public static func hasLicenseAgreement(
         dmgURL: URL, timeout: TimeInterval = 60
     ) throws -> Bool {
@@ -125,6 +167,26 @@ public enum DMGImageTool: Sendable {
     }
 
     // MARK: - Parsing
+
+    /// Attach an image path with up to three attempts against transient
+    /// "resource temporarily unavailable" failures from the helper daemon.
+    private static func attachImage(
+        _ arguments: [String], timeout: TimeInterval
+    ) throws -> URL {
+        var lastDetail = "hdiutil attach failed"
+        for attempt in 0..<3 {
+            let result = try run(arguments, timeout: timeout)
+            if result.terminationStatus == 0,
+               let mountPoint = parseMountPoint(plist: result.standardOutput) {
+                return URL(fileURLWithPath: mountPoint, isDirectory: true)
+            }
+            lastDetail = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            if attempt < 2 {
+                Thread.sleep(forTimeInterval: 0.6 * Double(attempt + 1))
+            }
+        }
+        throw InstallerError.mountFailed(detail: lastDetail)
+    }
 
     /// `hdiutil attach -plist` reports mount points inside `system-entities`.
     static func parseMountPoint(plist: String) -> String? {

@@ -277,6 +277,55 @@ final class InstallerRunnerTests: XCTestCase {
         }
     }
 
+    // MARK: - License agreement flow (stubbed detection)
+
+    /// A real SLA image cannot be created on this macOS (udifrez is broken),
+    /// so the detection seam is stubbed and the *flow* is what gets tested.
+    private func withSLADetection(_ result: Bool, _ body: () async throws -> Void) async rethrows {
+        defer { InstallerRunner.slaDetection = InstallerRunner.defaultSLADetection }
+        InstallerRunner.slaDetection = { _ in result }
+        try await body()
+    }
+
+    func testSLABecomesLicenseHandoffUntilAccepted() async throws {
+        let volume = "NDMInst-\(UUID().uuidString.prefix(6))"
+        let src = sources.appendingPathComponent("sla", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try makeAppBundle(named: "Licensed.app", in: src, marker: "v1")
+        let dmg = try makeDMG(volumeName: volume, sourceDir: src, fileName: "Licensed.dmg")
+
+        try await withSLADetection(true) {
+            let first = try await InstallerRunner.process(dmgURL: dmg, destination: destination())
+            XCTAssertEqual(first, .needsLicenseHandoff)
+            // Nothing was mounted by the first pass.
+            assertDetached(volumeName: volume)
+        }
+    }
+
+    func testSLAAcceptedInstallsThroughTheConvertBypass() async throws {
+        let volume = "NDMInst-\(UUID().uuidString.prefix(6))"
+        let src = sources.appendingPathComponent("sla2", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try makeAppBundle(named: "Licensed.app", in: src, marker: "v1")
+        let dmg = try makeDMG(volumeName: volume, sourceDir: src, fileName: "Licensed.dmg")
+
+        try await withSLADetection(true) {
+            let outcome = try await InstallerRunner.process(
+                dmgURL: dmg,
+                destination: destination(),
+                licenseAccepted: true
+            )
+            guard case .installed(_, let at) = outcome else {
+                return XCTFail("expected install via bypass, got \(outcome)")
+            }
+            XCTAssertEqual(
+                try? String(contentsOf: at.appendingPathComponent("Contents/MacOS/Licensed")),
+                "v1"
+            )
+            assertDetached(volumeName: volume)
+        }
+    }
+
     // MARK: - Volume enumerator (no hdiutil needed)
 
     func testVolumeEnumeratorPrunesJunkAndStopsInsideBundles() throws {
