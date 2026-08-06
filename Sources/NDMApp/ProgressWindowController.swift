@@ -943,9 +943,6 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleDetails() {
         guard let window, let detailsSection else { return }
         detailsVisible.toggle()
-        compactBottomConstraint?.isActive = !detailsVisible
-        expandedBottomConstraint?.isActive = detailsVisible
-        detailsSection.isHidden = !detailsVisible
         detailsButton.title = detailsVisible ? L10n.hideDetails : L10n.detailsEllipsis
         detailsButton.image = NDMChrome.symbol(
             detailsVisible ? "chevron.up" : "slider.horizontal.3",
@@ -959,11 +956,58 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
         frame.size.height = min(requested, max(Self.compactFrameHeight, (visible?.height ?? requested) - 24))
         frame.origin.y = top - frame.height
-        window.setFrame(
-            frame,
-            display: true,
-            animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        )
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
+        if detailsVisible {
+            // EXPAND: lay the section out at full height while the window is
+            // still compact (the overflow is clipped at the window frame), then
+            // grow the window and fade the section in together. No layout jump:
+            // the content is never unhidden after the frame has already landed.
+            compactBottomConstraint?.isActive = false
+            expandedBottomConstraint?.isActive = true
+            detailsSection.isHidden = false
+            detailsSection.alphaValue = 0
+            window.contentView?.layoutSubtreeIfNeeded()
+            if reduceMotion {
+                detailsSection.alphaValue = 1
+                window.setFrame(frame, display: true)
+                return
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.26
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(frame, display: true)
+                detailsSection.animator().alphaValue = 1
+            }
+        } else {
+            // COLLAPSE: fade the section out while the window is still at full
+            // height, then shrink the frame — the reverse order removes the
+            // "content vanished then window jumped" flash.
+            if reduceMotion {
+                compactBottomConstraint?.isActive = true
+                expandedBottomConstraint?.isActive = false
+                detailsSection.isHidden = true
+                window.setFrame(frame, display: true)
+                return
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                detailsSection.animator().alphaValue = 0
+            } completionHandler: { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.compactBottomConstraint?.isActive = true
+                self.expandedBottomConstraint?.isActive = false
+                self.detailsSection?.isHidden = true
+                window.contentView?.layoutSubtreeIfNeeded()
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.2
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    window.animator().setFrame(frame, display: true)
+                }
+            }
+        }
     }
 
     /// Presents only this lightweight session surface. Browser captures use
