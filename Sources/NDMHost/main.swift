@@ -57,6 +57,14 @@ final class Hub: @unchecked Sendable {
 
 let hub = Hub()
 
+Task {
+    await manager.setCompletionHandler { _ in
+        Task {
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        }
+    }
+}
+
 // Start Browser WebSocket Bridge for Chrome / Edge / Firefox extensions
 let bridge = BrowserBridge(port: currentSettings.bridgePort)
 bridge.onDownloadMessage = { msg in

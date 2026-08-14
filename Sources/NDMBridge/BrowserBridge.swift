@@ -126,15 +126,17 @@ public final class BrowserBridge: @unchecked Sendable {
             }
             let firstLine = req.components(separatedBy: "\r\n").first ?? ""
             let requestParts = firstLine.split(separator: " ")
-            let path = requestParts.count >= 2 ? String(requestParts[1]) : ""
+            let isLegacyPort = self.configuredPort == BridgeConstants.legacyNeatPort
             let pathOK = requestParts.count >= 2
                 && requestParts[0] == "GET"
-                && (path == BridgeConstants.path || path == "/" || path == "/ndm" || path == "/download")
+                && (requestParts[1] == Substring(BridgeConstants.path) || (isLegacyPort && (requestParts[1] == "/" || requestParts[1] == "/download")))
             let upgradeOK = req.lowercased().contains("upgrade: websocket")
             let requestedProtocols = Self.headerValue(req, name: "Sec-WebSocket-Protocol")?
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
-            guard pathOK, upgradeOK else {
+            let protocolOK = requestedProtocols.contains(BridgeConstants.subprotocol)
+                || (isLegacyPort && (requestedProtocols.contains("neatextension.v1") || requestedProtocols.isEmpty))
+            guard pathOK, upgradeOK, protocolOK else {
                 connection.cancel()
                 return
             }
@@ -144,9 +146,10 @@ public final class BrowserBridge: @unchecked Sendable {
             response += "Upgrade: websocket\r\n"
             response += "Connection: Upgrade\r\n"
             response += "Sec-WebSocket-Accept: \(accept)\r\n"
-            if let firstProto = requestedProtocols.first {
-                response += "Sec-WebSocket-Protocol: \(firstProto)\r\n"
-            }
+            let chosenProtocol = requestedProtocols.contains(BridgeConstants.subprotocol)
+                ? BridgeConstants.subprotocol
+                : (requestedProtocols.first ?? BridgeConstants.subprotocol)
+            response += "Sec-WebSocket-Protocol: \(chosenProtocol)\r\n"
             response += "\r\n"
             connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
                 guard let self, error == nil else {
