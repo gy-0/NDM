@@ -16,9 +16,11 @@ do {
     exit(1)
 }
 
+var currentSettings = SettingsStore.load()
+
 let manager = DownloadManager(
     store: store,
-    settings: AppSettings(),
+    settings: currentSettings,
     supportRoot: support,
     fileRecycler: { url in
         var resulting: NSURL?
@@ -68,6 +70,18 @@ func broadcast(_ value: Any) {
     var data = jsonObject(value)
     data.append(0x0A)
     hub.send(data)
+}
+
+func settingsJSON(_ s: AppSettings) -> [String: Any] {
+    [
+        "downloadDirectory": s.downloadDirectory.path,
+        "maxConnections": s.maxConnections,
+        "bandwidthLimitBytesPerSecond": NSNumber(value: s.bandwidthLimitBytesPerSecond),
+        "useCategoryFolders": s.useCategoryFolders,
+        "downloadAllAtOnce": s.downloadAllAtOnce,
+        "smartConnections": s.smartConnectionsEnabled,
+        "bridgePort": NSNumber(value: s.bridgePort)
+    ]
 }
 
 func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any] {
@@ -130,16 +144,55 @@ func handle(request: [String: Any], connection: NWConnection) async {
             sendJSON(connection, ["id": id, "ok": true, "engine": "NDMHost"])
         case "list":
             sendJSON(connection, ["id": id, "ok": true, "tasks": await snapshot()])
+        case "getSettings":
+            sendJSON(connection, ["id": id, "ok": true, "settings": settingsJSON(currentSettings)])
+        case "updateSettings":
+            if let dir = request["downloadDirectory"] as? String, !dir.isEmpty {
+                currentSettings.downloadDirectory = URL(fileURLWithPath: dir)
+            }
+            if let conns = request["maxConnections"] as? Int, conns > 0 {
+                currentSettings.maxConnections = conns
+            }
+            if let speed = request["bandwidthLimitBytesPerSecond"] as? Int64 ?? (request["bandwidthLimitBytesPerSecond"] as? Int).map(Int64.init) {
+                currentSettings.bandwidthLimitBytesPerSecond = speed
+            }
+            if let catFolders = request["useCategoryFolders"] as? Bool {
+                currentSettings.useCategoryFolders = catFolders
+            }
+            SettingsStore.save(currentSettings)
+            await manager.updateSettings(currentSettings)
+            sendJSON(connection, ["id": id, "ok": true, "settings": settingsJSON(currentSettings)])
         case "add":
             guard let url = request["url"] as? String, !url.isEmpty else {
                 throw ManagerError.invalidURL
             }
-            var task = try await manager.addURL(url)
-            do {
-                try await manager.start(taskID: task.id)
-                task = try await manager.task(id: task.id) ?? task
-            } catch ManagerError.queueBusy {
-                // Task sits in the queue; the shell already shows waiting.
+            let connections = request["connections"] as? Int
+            let pageURL = request["pageURL"] as? String
+            let pageTitle = request["pageTitle"] as? String
+            var destinationDirectory: URL? = nil
+            if let folderPath = request["folderPath"] as? String, !folderPath.isEmpty {
+                destinationDirectory = URL(fileURLWithPath: folderPath)
+            }
+            var task = try await manager.addURL(
+                url,
+                connections: connections,
+                pageURL: pageURL,
+                pageTitle: pageTitle,
+                destinationDirectory: destinationDirectory
+            )
+            if let customFilename = request["filename"] as? String, !customFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                task.filename = customFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+                task.category = DownloadCategory.infer(filename: task.filename, mimeType: nil)
+                try? store.update(task)
+            }
+            let autoStart = request["autoStart"] as? Bool ?? true
+            if autoStart {
+                do {
+                    try await manager.start(taskID: task.id)
+                    task = try await manager.task(id: task.id) ?? task
+                } catch ManagerError.queueBusy {
+                    // Task sits in the queue; the shell already shows waiting.
+                }
             }
             sendJSON(connection, ["id": id, "ok": true, "task": taskJSON(task, progress: nil)])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
@@ -155,6 +208,19 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 throw ManagerError.taskNotFound
             }
             try await manager.start(taskID: taskID)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "restart", "retry":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            if var task = try await manager.task(id: taskID) {
+                await manager.pause(taskID: taskID)
+                task.status = .waiting
+                task.errorText = nil
+                try? store.update(task)
+                try? await manager.start(taskID: taskID)
+            }
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "remove":
