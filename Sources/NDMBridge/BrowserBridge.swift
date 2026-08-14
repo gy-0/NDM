@@ -126,15 +126,15 @@ public final class BrowserBridge: @unchecked Sendable {
             }
             let firstLine = req.components(separatedBy: "\r\n").first ?? ""
             let requestParts = firstLine.split(separator: " ")
+            let path = requestParts.count >= 2 ? String(requestParts[1]) : ""
             let pathOK = requestParts.count >= 2
                 && requestParts[0] == "GET"
-                && requestParts[1] == Substring(BridgeConstants.path)
+                && (path == BridgeConstants.path || path == "/" || path == "/ndm" || path == "/download")
             let upgradeOK = req.lowercased().contains("upgrade: websocket")
             let requestedProtocols = Self.headerValue(req, name: "Sec-WebSocket-Protocol")?
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
-            let protocolOK = requestedProtocols.contains(BridgeConstants.subprotocol)
-            guard pathOK, upgradeOK, protocolOK else {
+            guard pathOK, upgradeOK else {
                 connection.cancel()
                 return
             }
@@ -144,7 +144,9 @@ public final class BrowserBridge: @unchecked Sendable {
             response += "Upgrade: websocket\r\n"
             response += "Connection: Upgrade\r\n"
             response += "Sec-WebSocket-Accept: \(accept)\r\n"
-            response += "Sec-WebSocket-Protocol: \(BridgeConstants.subprotocol)\r\n"
+            if let firstProto = requestedProtocols.first {
+                response += "Sec-WebSocket-Protocol: \(firstProto)\r\n"
+            }
             response += "\r\n"
             connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
                 guard let self, error == nil else {

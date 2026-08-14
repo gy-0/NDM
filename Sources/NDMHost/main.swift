@@ -2,6 +2,7 @@ import Foundation
 import Network
 import NDMCore
 import NDMEngine
+import NDMBridge
 
 let port = NWEndpoint.Port(rawValue: UInt16(ProcessInfo.processInfo.environment["NDM_HOST_PORT"] ?? "51874") ?? 51874)!
 let queue = DispatchQueue(label: "ndm.host")
@@ -55,6 +56,66 @@ final class Hub: @unchecked Sendable {
 }
 
 let hub = Hub()
+
+// Start Browser WebSocket Bridge for Chrome / Edge / Firefox extensions
+let bridge = BrowserBridge(port: currentSettings.bridgePort)
+bridge.onDownloadMessage = { msg in
+    Task {
+        do {
+            var headerList: [String] = []
+            if !msg.cookies.isEmpty { headerList.append("Cookie: \(msg.cookies)") }
+            if !msg.userAgent.isEmpty { headerList.append("User-Agent: \(msg.userAgent)") }
+            if !msg.referer.isEmpty { headerList.append("Referer: \(msg.referer)") }
+            for (k, v) in msg.extraHeaders {
+                headerList.append("\(k): \(v)")
+            }
+
+            var task = try await manager.addURL(
+                msg.url,
+                connections: currentSettings.maxConnections,
+                pageURL: msg.pageURL.isEmpty ? nil : msg.pageURL,
+                pageTitle: msg.pageTitle.isEmpty ? nil : msg.pageTitle,
+                headers: headerList,
+                method: msg.method,
+                ltype: msg.ltype
+            )
+            if !msg.filename.isEmpty {
+                task.filename = msg.filename
+                try? store.update(task)
+            }
+            try? await manager.start(taskID: task.id)
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        } catch {
+            FileHandle.standardError.write(Data("NDMHost: browser bridge error: \(error)\n".utf8))
+        }
+    }
+}
+bridge.onClientCountChanged = { count in
+    guard count > 0 else { return }
+    for message in BridgeConstants.showPanelMessages(enabled: currentSettings.showBrowserMediaPanel) {
+        bridge.sendToAllClients(message)
+    }
+}
+do {
+    try bridge.start()
+    FileHandle.standardError.write(Data("NDMHost: Browser bridge listening on port \(currentSettings.bridgePort)\n".utf8))
+} catch {
+    FileHandle.standardError.write(Data("NDMHost: Browser bridge failed to start on port \(currentSettings.bridgePort): \(error)\n".utf8))
+}
+
+var legacyBridge: BrowserBridge? = nil
+if currentSettings.bridgePort != BridgeConstants.legacyNeatPort {
+    let leg = BrowserBridge(port: BridgeConstants.legacyNeatPort)
+    leg.onDownloadMessage = bridge.onDownloadMessage
+    leg.onClientCountChanged = bridge.onClientCountChanged
+    do {
+        try leg.start()
+        legacyBridge = leg
+        FileHandle.standardError.write(Data("NDMHost: Legacy browser bridge listening on port \(BridgeConstants.legacyNeatPort)\n".utf8))
+    } catch {
+        // Port 10007 might be busy
+    }
+}
 
 func jsonObject(_ value: Any) -> Data {
     (try? JSONSerialization.data(withJSONObject: value, options: [])) ?? Data("{}".utf8)

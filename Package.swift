@@ -77,7 +77,7 @@ let package = Package(
         // Headless engine for the Electron shell. JSON-lines on 127.0.0.1:51874.
         .executableTarget(
             name: "NDMHost",
-            dependencies: ["NDMCore", "NDMEngine"],
+            dependencies: ["NDMCore", "NDMEngine", "NDMBridge"],
             path: "Sources/NDMHost"
         ),
         .testTarget(
