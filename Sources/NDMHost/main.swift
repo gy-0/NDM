@@ -70,6 +70,11 @@ bridge.onDownloadMessage = { msg in
                 headerList.append("\(k): \(v)")
             }
 
+            var ltype = msg.ltype
+            if ltype.lowercased() == "media-page" || MediaLinkClassifier.looksLikeMediaPage(msg.url) || msg.url.contains("youtube.com") || msg.url.contains("youtu.be") || msg.url.contains("bilibili.com") {
+                ltype = "ytdlp"
+            }
+
             var task = try await manager.addURL(
                 msg.url,
                 connections: currentSettings.maxConnections,
@@ -77,7 +82,7 @@ bridge.onDownloadMessage = { msg in
                 pageTitle: msg.pageTitle.isEmpty ? nil : msg.pageTitle,
                 headers: headerList,
                 method: msg.method,
-                ltype: msg.ltype
+                ltype: ltype
             )
             if !msg.filename.isEmpty {
                 task.filename = msg.filename
@@ -197,7 +202,7 @@ func snapshot() async -> [[String: Any]] {
     var seen = Set<Int64>()
     for task in active + newest {
         if seen.insert(task.id).inserted { picked.append(task) }
-        if picked.count >= 200 { break }
+        if picked.count >= 1000 { break }
     }
     var rows: [[String: Any]] = []
     for task in picked {
@@ -277,6 +282,11 @@ func handle(request: [String: Any], connection: NWConnection) async {
             let connections = request["connections"] as? Int
             let pageURL = request["pageURL"] as? String
             let pageTitle = request["pageTitle"] as? String
+            let formatID = request["formatID"] as? String
+            var ltype = request["ltype"] as? String ?? "normal"
+            if formatID != nil || MediaLinkClassifier.looksLikeMediaPage(url) || url.contains("youtube.com") || url.contains("youtu.be") || url.contains("bilibili.com") {
+                ltype = "ytdlp"
+            }
             var destinationDirectory: URL? = nil
             if let folderPath = request["folderPath"] as? String, !folderPath.isEmpty {
                 destinationDirectory = URL(fileURLWithPath: folderPath)
@@ -286,8 +296,13 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 connections: connections,
                 pageURL: pageURL,
                 pageTitle: pageTitle,
+                ltype: ltype,
                 destinationDirectory: destinationDirectory
             )
+            if let formatID, !formatID.isEmpty {
+                task.hitTitle = formatID
+                try? store.update(task)
+            }
             if let customFilename = request["filename"] as? String, !customFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 task.filename = customFilename.trimmingCharacters(in: .whitespacesAndNewlines)
                 task.category = DownloadCategory.infer(filename: task.filename, mimeType: nil)
