@@ -73,7 +73,7 @@ func broadcast(_ value: Any) {
 }
 
 func settingsJSON(_ s: AppSettings) -> [String: Any] {
-    [
+    var dict: [String: Any] = [
         "downloadDirectory": s.downloadDirectory.path,
         "maxConnections": s.maxConnections,
         "bandwidthLimitBytesPerSecond": NSNumber(value: s.bandwidthLimitBytesPerSecond),
@@ -82,6 +82,17 @@ func settingsJSON(_ s: AppSettings) -> [String: Any] {
         "smartConnections": s.smartConnectionsEnabled,
         "bridgePort": NSNumber(value: s.bridgePort)
     ]
+    if let http = s.httpProxy {
+        dict["httpProxyHost"] = http.host
+        dict["httpProxyPort"] = Int(http.port)
+        dict["httpProxyEnabled"] = http.enabled
+    }
+    if let socks = s.socksProxy {
+        dict["socksProxyHost"] = socks.host
+        dict["socksProxyPort"] = Int(socks.port)
+        dict["socksProxyEnabled"] = socks.enabled
+    }
+    return dict
 }
 
 func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any] {
@@ -159,9 +170,45 @@ func handle(request: [String: Any], connection: NWConnection) async {
             if let catFolders = request["useCategoryFolders"] as? Bool {
                 currentSettings.useCategoryFolders = catFolders
             }
+            if let httpHost = request["httpProxyHost"] as? String {
+                let port = UInt16(request["httpProxyPort"] as? Int ?? 8080)
+                let enabled = request["httpProxyEnabled"] as? Bool ?? true
+                currentSettings.httpProxy = httpHost.isEmpty ? nil : ProxySettings(host: httpHost, port: port, enabled: enabled)
+            }
+            if let socksHost = request["socksProxyHost"] as? String {
+                let port = UInt16(request["socksProxyPort"] as? Int ?? 1080)
+                let enabled = request["socksProxyEnabled"] as? Bool ?? true
+                currentSettings.socksProxy = socksHost.isEmpty ? nil : SocksProxySettings(host: socksHost, port: port, version: .v5, enabled: enabled)
+            }
             SettingsStore.save(currentSettings)
             await manager.updateSettings(currentSettings)
             sendJSON(connection, ["id": id, "ok": true, "settings": settingsJSON(currentSettings)])
+        case "probeMedia":
+            guard let url = request["url"] as? String, !url.isEmpty else {
+                throw ManagerError.invalidURL
+            }
+            do {
+                let probe = try await YtDlpTool.probe(url: url)
+                let formats = probe.formats.map { f in
+                    [
+                        "id": f.id,
+                        "label": f.label,
+                        "height": f.height,
+                        "approximateBytes": NSNumber(value: f.approximateBytes ?? 0),
+                        "containerHint": f.containerHint,
+                        "isVideo": f.isVideo
+                    ] as [String: Any]
+                }
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": true,
+                    "title": probe.title,
+                    "duration": probe.durationSeconds ?? 0,
+                    "formats": formats
+                ])
+            } catch {
+                sendJSON(connection, ["id": id, "ok": false, "error": error.localizedDescription])
+            }
         case "add":
             guard let url = request["url"] as? String, !url.isEmpty else {
                 throw ManagerError.invalidURL
