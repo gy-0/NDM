@@ -203,11 +203,25 @@ func handle(request: [String: Any], connection: NWConnection) async {
             await manager.pause(taskID: taskID)
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "pauseAll":
+            let tasks = (try? await manager.listTasks()) ?? []
+            for task in tasks where task.status == .downloading || task.status == .waiting {
+                await manager.pause(taskID: task.id)
+            }
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "resume":
             guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
                 throw ManagerError.taskNotFound
             }
             try await manager.start(taskID: taskID)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "resumeAll":
+            let tasks = (try? await manager.listTasks()) ?? []
+            for task in tasks where task.status == .paused || task.status == .waiting || task.status == .incomplete {
+                try? await manager.start(taskID: task.id)
+            }
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "restart", "retry":
