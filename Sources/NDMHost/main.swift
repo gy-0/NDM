@@ -1,0 +1,231 @@
+import Foundation
+import Network
+import NDMCore
+import NDMEngine
+
+let port = NWEndpoint.Port(rawValue: UInt16(ProcessInfo.processInfo.environment["NDM_HOST_PORT"] ?? "51874") ?? 51874)!
+let queue = DispatchQueue(label: "ndm.host")
+
+let support = DownloadStore.defaultSupportDirectory
+let store: DownloadStore
+do {
+    store = try DownloadStore(directory: support)
+    try store.recoverInterruptedTasks()
+} catch {
+    FileHandle.standardError.write(Data("NDMHost: cannot open store: \(error)\n".utf8))
+    exit(1)
+}
+
+let manager = DownloadManager(
+    store: store,
+    settings: AppSettings(),
+    supportRoot: support,
+    fileRecycler: { url in
+        var resulting: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
+    }
+)
+
+final class Hub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+
+    func add(_ connection: NWConnection) {
+        lock.lock()
+        connections[ObjectIdentifier(connection)] = connection
+        lock.unlock()
+    }
+
+    func remove(_ connection: NWConnection) {
+        lock.lock()
+        connections.removeValue(forKey: ObjectIdentifier(connection))
+        lock.unlock()
+    }
+
+    func send(_ data: Data) {
+        lock.lock()
+        let all = Array(connections.values)
+        lock.unlock()
+        for connection in all {
+            connection.send(content: data, completion: .contentProcessed { _ in })
+        }
+    }
+}
+
+let hub = Hub()
+
+func jsonObject(_ value: Any) -> Data {
+    (try? JSONSerialization.data(withJSONObject: value, options: [])) ?? Data("{}".utf8)
+}
+
+func sendJSON(_ connection: NWConnection, _ value: Any) {
+    var data = jsonObject(value)
+    data.append(0x0A)
+    connection.send(content: data, completion: .contentProcessed { _ in })
+}
+
+func broadcast(_ value: Any) {
+    var data = jsonObject(value)
+    data.append(0x0A)
+    hub.send(data)
+}
+
+func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any] {
+    let completed = progress?.completedBytes ?? (task.status == .complete ? task.fileSize : 0)
+    let speed = progress?.bytesPerSecond ?? 0
+    let status = progress?.status.rawValue ?? task.status.rawValue
+    let phase = progress?.phase?.rawValue
+    let connections = progress?.currentConnections ?? task.connections
+    let segments = (progress?.segmentStates ?? []).map { segment in
+        [
+            "id": segment.id,
+            "fraction": segment.fractionCompleted as Double
+        ] as [String: Any]
+    }
+    let source = URL(string: task.pageURL ?? task.url)?.host
+    var row: [String: Any] = [
+        "id": NSNumber(value: task.id),
+        "filename": task.filename,
+        "title": task.hitTitle ?? task.pageTitle ?? task.filename,
+        "url": task.url,
+        "category": task.category.rawValue,
+        "status": status,
+        "fileSize": NSNumber(value: progress?.totalBytes ?? task.fileSize),
+        "completedBytes": NSNumber(value: completed),
+        "bytesPerSecond": speed,
+        "connections": connections,
+        "segments": segments,
+        "folderPath": task.folderPath ?? ""
+    ]
+    if let source { row["source"] = source }
+    if let phase { row["phase"] = phase }
+    if let errorText = task.errorText { row["errorText"] = errorText }
+    return row
+}
+
+func snapshot() async -> [[String: Any]] {
+    let tasks = (try? await manager.listTasks()) ?? []
+    let newest = tasks.sorted { $0.id > $1.id }
+    let active = newest.filter { $0.status == .downloading || $0.status == .paused || $0.status == .waiting }
+    var picked: [DownloadTask] = []
+    var seen = Set<Int64>()
+    for task in active + newest {
+        if seen.insert(task.id).inserted { picked.append(task) }
+        if picked.count >= 200 { break }
+    }
+    var rows: [[String: Any]] = []
+    for task in picked {
+        let progress = await manager.progress(taskID: task.id)
+        rows.append(taskJSON(task, progress: progress))
+    }
+    return rows
+}
+
+func handle(request: [String: Any], connection: NWConnection) async {
+    let id = request["id"] as? Int ?? 0
+    let op = request["op"] as? String ?? ""
+    do {
+        switch op {
+        case "ping":
+            sendJSON(connection, ["id": id, "ok": true, "engine": "NDMHost"])
+        case "list":
+            sendJSON(connection, ["id": id, "ok": true, "tasks": await snapshot()])
+        case "add":
+            guard let url = request["url"] as? String, !url.isEmpty else {
+                throw ManagerError.invalidURL
+            }
+            var task = try await manager.addURL(url)
+            do {
+                try await manager.start(taskID: task.id)
+                task = try await manager.task(id: task.id) ?? task
+            } catch ManagerError.queueBusy {
+                // Task sits in the queue; the shell already shows waiting.
+            }
+            sendJSON(connection, ["id": id, "ok": true, "task": taskJSON(task, progress: nil)])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "pause":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            await manager.pause(taskID: taskID)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "resume":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            try await manager.start(taskID: taskID)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "remove":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            let deleteFile = request["deleteFile"] as? Bool ?? false
+            try await manager.remove(taskID: taskID, deleteFile: deleteFile)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        default:
+            sendJSON(connection, ["id": id, "ok": false, "error": "unknown op"])
+        }
+    } catch {
+        sendJSON(connection, ["id": id, "ok": false, "error": error.localizedDescription])
+    }
+}
+
+func serve(_ connection: NWConnection) {
+    hub.add(connection)
+    var buffer = Data()
+    func receive() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+            if let data, !data.isEmpty {
+                buffer.append(data)
+                while let newline = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer.subdata(in: 0..<newline)
+                    buffer.removeSubrange(0...newline)
+                    if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
+                        Task { await handle(request: object, connection: connection) }
+                    }
+                }
+            }
+            if isComplete || error != nil {
+                hub.remove(connection)
+                connection.cancel()
+                return
+            }
+            receive()
+        }
+    }
+    receive()
+}
+
+let listener: NWListener
+do {
+    listener = try NWListener(using: .tcp, on: port)
+} catch {
+    FileHandle.standardError.write(Data("NDMHost: cannot listen: \(error)\n".utf8))
+    exit(1)
+}
+listener.newConnectionHandler = { connection in
+    connection.start(queue: queue)
+    serve(connection)
+}
+listener.stateUpdateHandler = { state in
+    if case .failed(let error) = state {
+        FileHandle.standardError.write(Data("NDMHost: listener failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
+listener.start(queue: queue)
+FileHandle.standardOutput.write(Data("NDMHost ready 127.0.0.1:\(port)\n".utf8))
+
+Task {
+    while true {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if await manager.hasActiveDownloads() {
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        }
+    }
+}
+
+dispatchMain()

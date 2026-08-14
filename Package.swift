@@ -16,6 +16,7 @@ let package = Package(
         // Not "ndm": the app product is "NDM", and on a case-insensitive filesystem
         // the two would fight over the same output path.
         .executable(name: "ndmcli", targets: ["NDMCLI"]),
+        .executable(name: "NDMHost", targets: ["NDMHost"]),
     ],
     targets: [
         .target(
@@ -72,6 +73,12 @@ let package = Package(
             name: "NDMCLI",
             dependencies: ["NDMCore", "NDMEngine", "NDMCLICore"],
             path: "Sources/NDMCLI"
+        ),
+        // Headless engine for the Electron shell. JSON-lines on 127.0.0.1:51874.
+        .executableTarget(
+            name: "NDMHost",
+            dependencies: ["NDMCore", "NDMEngine"],
+            path: "Sources/NDMHost"
         ),
         .testTarget(
             name: "NDMCLICoreTests",
