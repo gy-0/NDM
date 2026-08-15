@@ -294,12 +294,17 @@ func snapshot(activeOnly: Bool = false) async -> [[String: Any]] {
         let right = $1.mostRecentActivity ?? .distantPast
         return left == right ? $0.id > $1.id : left > right
     }
-    let picked = activeOnly
-        ? newest.filter { $0.status == .downloading || $0.status == .waiting }
-        : newest
     var rows: [[String: Any]] = []
-    for task in picked {
+    for task in newest {
         let progress = await manager.progress(taskID: task.id)
+        if activeOnly {
+            // A newly-created task may still be persisted as `.waiting` while
+            // its in-memory engine is already transferring. Filter by the live
+            // status when it exists so the 4 Hz partial stream never strands
+            // the renderer on the stale queued row.
+            let status = progress?.status ?? task.status
+            guard status == .downloading || status == .waiting else { continue }
+        }
         rows.append(taskJSON(task, progress: progress))
     }
     return rows
