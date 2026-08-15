@@ -146,12 +146,20 @@ final class CompletionWindowController: NSWindowController, NSWindowDelegate {
         hasCelebrated = true
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             deckStack?.alphaValue = 1
+        } else if let deckStack {
+            let visibleResults = deckStack.arrangedSubviews.filter { !$0.isHidden }
+            // Amicro CardCascadeStagger, adapted for a calm Mac delivery deck:
+            // no rotation, 8 pt travel, 55 ms between real result rows.
+            AmicroReveal.play(
+                visibleResults,
+                stagger: 0.055,
+                duration: 0.28,
+                offsetY: -8,
+                scale: 0.98
+            )
+            deckStack.alphaValue = 1
         } else {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.24
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                deckStack?.animator().alphaValue = 1
-            }
+            deckStack?.alphaValue = 1
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
             self?.hero?.celebrateCompletion()
@@ -1348,30 +1356,37 @@ final class CompletionCinemaHero: NSView {
             NSColor.systemPink,
         ]
 
-        let ring = CAShapeLayer()
-        ring.bounds = CGRect(x: 0, y: 0, width: 34, height: 34)
-        ring.position = origin
-        ring.path = CGPath(
-            ellipseIn: CGRect(x: 1, y: 1, width: 32, height: 32),
-            transform: nil
-        )
-        ring.fillColor = NSColor.clear.cgColor
-        ring.strokeColor = NDMChrome.accent.withAlphaComponent(0.9).cgColor
-        ring.lineWidth = 2
-        hostLayer.addSublayer(ring)
-        let ringScale = CABasicAnimation(keyPath: "transform.scale")
-        ringScale.fromValue = 0.55
-        ringScale.toValue = 4.2
-        let ringFade = CABasicAnimation(keyPath: "opacity")
-        ringFade.fromValue = 0.9
-        ringFade.toValue = 0
-        let ringBurst = CAAnimationGroup()
-        ringBurst.animations = [ringScale, ringFade]
-        ringBurst.duration = 0.58
-        ringBurst.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        ringBurst.fillMode = .forwards
-        ringBurst.isRemovedOnCompletion = false
-        ring.add(ringBurst, forKey: "completionRing")
+        // Amicro `ripple-effect`: three rings, 0.7 s stagger, scale 0.3 → 1.6,
+        // opacity 0.8 → 0. Completion plays the sequence once instead of looping.
+        let rippleRings: [CAShapeLayer] = (0..<3).map { index in
+            let ring = CAShapeLayer()
+            ring.bounds = CGRect(x: 0, y: 0, width: 86, height: 86)
+            ring.position = origin
+            ring.path = CGPath(
+                ellipseIn: CGRect(x: 1, y: 1, width: 84, height: 84),
+                transform: nil
+            )
+            ring.fillColor = NSColor.clear.cgColor
+            ring.strokeColor = NDMChrome.accent.withAlphaComponent(0.72).cgColor
+            ring.lineWidth = 1.5
+            hostLayer.addSublayer(ring)
+
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 0.3
+            scale.toValue = 1.6
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.8
+            fade.toValue = 0
+            let burst = CAAnimationGroup()
+            burst.animations = [scale, fade]
+            burst.duration = 2.2
+            burst.beginTime = CACurrentMediaTime() + Double(index) * 0.7
+            burst.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            burst.fillMode = .forwards
+            burst.isRemovedOnCompletion = false
+            ring.add(burst, forKey: "amicroCompletionRipple")
+            return ring
+        }
 
         titleLabel.wantsLayer = true
         let titlePop = CAKeyframeAnimation(keyPath: "transform.scale")
@@ -1437,9 +1452,9 @@ final class CompletionCinemaHero: NSView {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
             shine.removeFromSuperlayer()
-            ring.removeFromSuperlayer()
+            rippleRings.forEach { $0.removeFromSuperlayer() }
         }
     }
 

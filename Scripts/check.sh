@@ -96,6 +96,30 @@ else
   record "design contracts" fail "$(print -r -- "$alert_uses" | grep -c .) NSAlert use(s)"
 fi
 
+# The Appllama page is a visual renderer behind one native AppKit button. A
+# `role="button"` in either the source template or bundled runtime creates a
+# second remote WebKit control in VoiceOver after every page load.
+loader_ax_failures=""
+for loader_html in \
+  "$ROOT/Sources/NDMApp/Resources/loader_buttons.html" \
+  "$ROOT/Sources/NDMApp/Resources/loader_buttons_template.html"; do
+  if ! grep -q '<html lang="zh-CN" aria-hidden="true">' "$loader_html"; then
+    loader_ax_failures+="$(basename "$loader_html"): missing hidden document root\n"
+  fi
+  if ! grep -q '<body inert aria-hidden="true">' "$loader_html"; then
+    loader_ax_failures+="$(basename "$loader_html"): missing inert hidden body\n"
+  fi
+  if grep -q 'id="phase-button" role="button"' "$loader_html"; then
+    loader_ax_failures+="$(basename "$loader_html"): exposes duplicate web button\n"
+  fi
+done
+if [[ -z "$loader_ax_failures" ]]; then
+  record "loader accessibility" ok "WebKit visual layer is inert and AX-hidden"
+else
+  print -r -- "$loader_ax_failures"
+  record "loader accessibility" fail "visual-only loader exposes web semantics"
+fi
+
 print
 bold "Gates"
 for line in "${summary[@]}"; do print -r -- "$line"; done

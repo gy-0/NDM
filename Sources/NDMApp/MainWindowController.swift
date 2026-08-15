@@ -2568,8 +2568,11 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
     private let galleryScroll = NSScrollView()
     private let galleryView = GalleryCollectionView()
     private let galleryLayout = NSCollectionViewFlowLayout()
+    private let viewModePill = ChromeBox(fill: NDMChrome.rowActive, cornerRadius: 7)
     private let listModeButton = NSButton()
     private let gridModeButton = NSButton()
+    private var viewModePillCenterX: NSLayoutConstraint?
+    private var viewModePillShowsGallery = false
     private var preferGallery = false
     /// User toggle; nil follows the filter's preference. Reset on filter switch.
     private var galleryOverride: Bool?
@@ -2647,20 +2650,13 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         scrollView.backgroundColor = NDMChrome.contentSurface
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        let mark = ChromeBox(fill: NDMChrome.accent, cornerRadius: 14)
+        // Amicro `ripple-effect`: Paste Anything is a live receiving surface,
+        // not a static empty-folder illustration.
+        let mark = AmicroRippleIconView(symbolName: "arrow.down.to.line")
         mark.translatesAutoresizingMaskIntoConstraints = false
-        let markIcon = NSImageView()
-        markIcon.image = NDMChrome.symbol("arrow.down.to.line", pointSize: 22, weight: .semibold)
-        markIcon.contentTintColor = .white
-        markIcon.translatesAutoresizingMaskIntoConstraints = false
-        markIcon.setAccessibilityElement(false)
-        mark.setAccessibilityElement(false)
-        mark.addSubview(markIcon)
         NSLayoutConstraint.activate([
-            mark.widthAnchor.constraint(equalToConstant: 52),
-            mark.heightAnchor.constraint(equalToConstant: 52),
-            markIcon.centerXAnchor.constraint(equalTo: mark.centerXAnchor),
-            markIcon.centerYAnchor.constraint(equalTo: mark.centerYAnchor),
+            mark.widthAnchor.constraint(equalToConstant: 82),
+            mark.heightAnchor.constraint(equalToConstant: 82),
         ])
 
         emptyLabel.font = .systemFont(ofSize: 20, weight: .bold)
@@ -2769,6 +2765,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
         view.addSubview(headerTitleLabel)
         view.addSubview(headerMetaLabel)
+        viewModePill.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(viewModePill)
         view.addSubview(listModeButton)
         view.addSubview(gridModeButton)
         view.addSubview(heroContainer)
@@ -2782,6 +2780,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             headerTitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerMetaLabel.leadingAnchor, constant: -12),
             headerMetaLabel.firstBaselineAnchor.constraint(equalTo: headerTitleLabel.firstBaselineAnchor),
             headerMetaLabel.trailingAnchor.constraint(equalTo: listModeButton.leadingAnchor, constant: -14),
+            viewModePill.centerYAnchor.constraint(equalTo: listModeButton.centerYAnchor),
+            viewModePill.widthAnchor.constraint(equalToConstant: 28),
+            viewModePill.heightAnchor.constraint(equalToConstant: 24),
             listModeButton.centerYAnchor.constraint(equalTo: headerTitleLabel.centerYAnchor),
             listModeButton.trailingAnchor.constraint(equalTo: gridModeButton.leadingAnchor, constant: -2),
             gridModeButton.centerYAnchor.constraint(equalTo: headerTitleLabel.centerYAnchor),
@@ -2814,6 +2815,9 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             batchBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             batchBar.heightAnchor.constraint(equalToConstant: 48),
         ])
+        let initialPill = viewModePill.centerXAnchor.constraint(equalTo: listModeButton.centerXAnchor)
+        initialPill.isActive = true
+        viewModePillCenterX = initialPill
 
         // --- Table-level hover tracking --------------------------------
         // A single tracking area on the table view replaces unreliable per-
@@ -2873,6 +2877,26 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         galleryScroll.isHidden = !gallery || listIsEmpty
         listModeButton.contentTintColor = gallery ? .tertiaryLabelColor : NDMChrome.accent
         gridModeButton.contentTintColor = gallery ? NDMChrome.accent : .tertiaryLabelColor
+        guard gallery != viewModePillShowsGallery else { return }
+        viewModePillShowsGallery = gallery
+
+        view.layoutSubtreeIfNeeded()
+        viewModePillCenterX?.isActive = false
+        let target = gallery ? gridModeButton : listModeButton
+        let next = viewModePill.centerXAnchor.constraint(equalTo: target.centerXAnchor)
+        next.isActive = true
+        viewModePillCenterX = next
+        guard view.window != nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            view.layoutSubtreeIfNeeded()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.26
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0, 0, 1)
+            context.allowsImplicitAnimation = true
+            view.animator().layoutSubtreeIfNeeded()
+        }
     }
 
     private func selectGalleryItem(at index: Int) {
@@ -2969,19 +2993,6 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
 
     @objc private func emptyNewClicked() {
         onEmptyNewDownload?()
-    }
-
-    private func startEmptyFloatAnimation() {
-        emptyStack.wantsLayer = true
-        guard emptyStack.layer?.animation(forKey: "float") == nil else { return }
-        let float = CABasicAnimation(keyPath: "transform.translation.y")
-        float.fromValue = -4
-        float.toValue = 4
-        float.duration = 2.4
-        float.autoreverses = true
-        float.repeatCount = .infinity
-        float.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        emptyStack.layer?.add(float, forKey: "float")
     }
 
     private func stopEmptyFloatAnimation() {
@@ -3116,7 +3127,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
         if wasEmpty != isEmpty {
             emptyStack.isHidden = !isEmpty
             tableView.isHidden = isEmpty
-            if view.window != nil {
+            if view.window != nil,
+               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 let fade = CATransition()
                 fade.type = .fade
                 fade.duration = 0.22
@@ -3125,7 +3137,8 @@ private final class TaskListViewController: NSViewController, NSTableViewDataSou
             }
         }
         if isEmpty, !wasEmpty {
-            startEmptyFloatAnimation()
+            // Amicro `word-reveal` + `fade-up`: icon, promise, hint, action.
+            AmicroReveal.play(emptyStack.arrangedSubviews.filter { !$0.isHidden })
         } else if !isEmpty {
             stopEmptyFloatAnimation()
         }
@@ -4267,6 +4280,7 @@ private final class HoverIconButton: NSButton {
 
     private var isHoveringMouse = false
     private var tracking: NSTrackingArea?
+    private let iconSwap = AmicroIconSwapView()
 
     init(symbolName: String, tooltip: String) {
         super.init(frame: .zero)
@@ -4274,13 +4288,21 @@ private final class HoverIconButton: NSButton {
         isBordered = false
         // Ring only for keyboard focus — see FocusRingPolicy.
         focusRingType = .none
-        imagePosition = .imageOnly
-        contentTintColor = .secondaryLabelColor
+        imagePosition = .noImage
         wantsLayer = true
         layer?.cornerRadius = NDMChrome.controlCornerRadius
+        iconSwap.translatesAutoresizingMaskIntoConstraints = false
+        iconSwap.tintColor = .secondaryLabelColor
+        addSubview(iconSwap)
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: 26).isActive = true
         heightAnchor.constraint(equalToConstant: 26).isActive = true
+        NSLayoutConstraint.activate([
+            iconSwap.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconSwap.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconSwap.widthAnchor.constraint(equalToConstant: 16),
+            iconSwap.heightAnchor.constraint(equalToConstant: 16),
+        ])
         setIcon(symbolName, tooltip: tooltip)
     }
 
@@ -4290,7 +4312,12 @@ private final class HoverIconButton: NSButton {
     override var wantsUpdateLayer: Bool { true }
 
     func setIcon(_ symbolName: String, tooltip: String) {
-        image = NDMChrome.symbol(symbolName, pointSize: 11.5, weight: .semibold)
+        iconSwap.setSymbol(
+            symbolName,
+            pointSize: 11.5,
+            weight: .semibold,
+            animated: window != nil
+        )
         toolTip = tooltip
         setAccessibilityLabel(tooltip)
     }
@@ -4310,16 +4337,42 @@ private final class HoverIconButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         isHoveringMouse = true
+        setAmicroScale(1.02)
         needsDisplay = true
     }
 
     override func mouseExited(with event: NSEvent) {
         isHoveringMouse = false
+        setAmicroScale(1)
         needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        setAmicroScale(0.96)
+        super.mouseDown(with: event)
+        setAmicroScale(isHoveringMouse ? 1.02 : 1)
     }
 
     override func updateLayer() {
         layer?.backgroundColor = (isHoveringMouse ? NDMChrome.track : NSColor.clear).cgColor
+        iconSwap.tintColor = isHoveringMouse ? NDMChrome.accent : .secondaryLabelColor
+    }
+
+    private func setAmicroScale(_ target: CGFloat) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            layer?.setAffineTransform(.identity)
+            return
+        }
+        let visible = layer?.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat ?? 1
+        layer?.setAffineTransform(CGAffineTransform(scaleX: target, y: target))
+        let spring = CASpringAnimation(keyPath: "transform.scale")
+        spring.mass = 1
+        spring.stiffness = 600
+        spring.damping = 25
+        spring.fromValue = visible
+        spring.toValue = target
+        spring.duration = spring.settlingDuration
+        layer?.add(spring, forKey: "amicroButtonScale")
     }
 }
 

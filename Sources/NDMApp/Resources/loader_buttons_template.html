@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN" aria-hidden="true">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NDM Loader Buttons</title>
+<style>
+  /* Appllama loader-button chrome — lifted verbatim from loader-buttons.appllama.io
+     so the buttons in NDM are pixel-identical to the reference site. */
+  :root {
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+    --ndm-accent: #1e5dda;
+    --ndm-accent-border: rgba(30, 93, 218, 0.38);
+    --ndm-accent-shadow: rgba(30, 93, 218, 0.16);
+    --ndm-ink: #2b2a28;
+    --ndm-fill: #fffefa;
+    --ndm-fill-hover: #ffffff;
+    --ndm-border: rgba(54, 50, 46, 0.13);
+    --ndm-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset,
+      0 0 0 0.5px rgba(255, 255, 255, 0.42) inset,
+      0 6px 16px rgba(45, 39, 32, 0.09);
+    --ink: var(--ndm-ink);
+  }
+  html[data-appearance="dark"] {
+    --ndm-ink: #f1f4f9;
+    --ndm-fill: #181d27;
+    --ndm-fill-hover: #202735;
+    --ndm-border: rgba(255, 255, 255, 0.14);
+    --ndm-shadow: 0 1px 0 rgba(255, 255, 255, 0.10) inset,
+      0 0 0 0.5px rgba(255, 255, 255, 0.05) inset,
+      0 8px 20px rgba(0, 0, 0, 0.34);
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+  }
+  #gallery {
+    display: none;
+  }
+
+  /* ---- single phase button ---- */
+  #phase-button {
+    position: relative;
+    z-index: 0;
+    display: flex;
+    width: 172px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    overflow: visible;
+    border: 1px solid var(--ndm-border);
+    border-radius: 9999px;
+    background: var(--ndm-fill);
+    box-shadow: var(--ndm-shadow);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+    isolation: isolate;
+    transform: translateZ(0) scale(1);
+    transition:
+      transform 0.34s var(--ease-out-quart),
+      background 0.22s ease,
+      border-color 0.22s ease,
+      box-shadow 0.22s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #phase-button.ndm-hover {
+    border-color: var(--ndm-accent-border);
+    background: var(--ndm-fill-hover);
+    box-shadow: var(--ndm-shadow), 0 8px 22px var(--ndm-accent-shadow);
+  }
+  #phase-button:active,
+  #phase-button.ndm-pressed {
+    transition-duration: 90ms;
+  }
+  #phase-button .button-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    padding: 0 12px;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    border-radius: inherit;
+  }
+  #phase-button .loader-slot {
+    position: relative;
+    display: block;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    contain: strict;
+    color: var(--ink);
+  }
+  #phase-button .loader-label {
+    position: relative;
+    min-width: 0;
+    white-space: nowrap;
+    color: var(--ndm-ink);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.14px;
+    line-height: 20px;
+    transition: color 0.2s ease;
+  }
+  #phase-button .button-sheen,
+  #phase-button .button-rim {
+    position: absolute;
+    display: block;
+    border-radius: inherit;
+    pointer-events: none;
+  }
+  #phase-button .button-sheen {
+    z-index: 3;
+    inset: 0.6px;
+    overflow: clip;
+    background: linear-gradient(
+        -45deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.5) 40%,
+        rgba(255, 255, 255, 0.5) 50%,
+        rgba(255, 255, 255, 0) 55%
+      )
+      no-repeat 0% 50% / 200% 200%;
+    mix-blend-mode: soft-light;
+    transition: background-position 0.45s var(--ease-out-quart);
+  }
+  #phase-button .button-rim {
+    --rim-angle: -75deg;
+    z-index: 1;
+    inset: -0.5px;
+    padding: 1px;
+    background:
+      conic-gradient(
+        from var(--rim-angle),
+        rgba(0, 0, 0, 0.5),
+        rgba(0, 0, 0, 0) 5%,
+        rgba(0, 0, 0, 0) 40%,
+        rgba(0, 0, 0, 0.5) 50%,
+        rgba(0, 0, 0, 0) 60%,
+        rgba(0, 0, 0, 0) 95%,
+        rgba(0, 0, 0, 0.5)
+      ),
+      linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5));
+    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.35) inset;
+    transition: --rim-angle 0.45s var(--ease-out-quart);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  #phase-button.ndm-hover .loader-label { color: var(--ndm-accent); }
+  #phase-button.ndm-hover .button-sheen { background-position: 28% 50%; }
+  #phase-button.ndm-hover .button-rim { --rim-angle: -125deg; }
+  html[data-mode="glyph"] #phase-button {
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  html[data-mode="glyph"] #phase-button .button-content {
+    padding: 0;
+    gap: 0;
+  }
+  html[data-mode="glyph"] #phase-button .loader-slot {
+    width: 26px;
+    height: 26px;
+    flex-basis: 26px;
+  }
+  html[data-mode="glyph"] #phase-button .loader-label,
+  html[data-mode="glyph"] #phase-button .button-sheen,
+  html[data-mode="glyph"] #phase-button .button-rim {
+    display: none;
+  }
+  .visual-canvas, .visual-svg, .visual-dom {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ---- gallery (all 25, like the site) ---- */
+  #gallery {
+    flex-wrap: wrap;
+    gap: 18px;
+    padding: 24px;
+    align-content: flex-start;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+    overflow: auto;
+    box-sizing: border-box;
+  }
+  .specimen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .specimen-name {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #444;
+  }
+  .loader-button {
+    position: relative;
+    z-index: 0;
+    display: flex;
+    width: 150px;
+    height: 58px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 9999px;
+    background:
+      linear-gradient(-75deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.1)),
+      rgba(255, 255, 255, 0.55);
+    box-shadow:
+      0 1px 4px rgba(255, 255, 255, 0.667) inset,
+      0 -4px 4px rgba(255, 255, 255, 0.85) inset,
+      0 0 14px rgba(229, 229, 229, 0.55) inset,
+      0 11px 28px rgba(0, 0, 0, 0.07),
+      0 23px 31px rgba(0, 0, 0, 0.05);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+    isolation: isolate;
+    transform: translateZ(0) scale(1);
+    transition: transform 0.4s var(--ease-out-quart);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .loader-button:hover { transform: translateZ(0) scale(0.975); }
+  .loader-button:active { transform: translateZ(0) scale(0.975); transition-duration: 110ms; }
+  .loader-button .button-content {
+    position: relative; z-index: 2;
+    display: flex; width: 100%; height: 100%;
+    padding: 0 13.3px; align-items: center; justify-content: center;
+    gap: 9px; border-radius: inherit;
+  }
+  .loader-button .loader-slot {
+    position: relative; display: block;
+    width: 30px; height: 30px; flex: 0 0 30px;
+    contain: strict; color: var(--ink);
+  }
+  .loader-button .loader-label {
+    position: relative; min-width: 0; white-space: nowrap;
+    color: #363636; font-size: 19px; font-weight: 400;
+    letter-spacing: -0.19px; line-height: 28.5px;
+  }
+  .loader-button .button-sheen,
+  .loader-button .button-rim {
+    position: absolute; display: block; border-radius: inherit; pointer-events: none;
+  }
+  .loader-button .button-sheen {
+    z-index: 3; inset: 0.6px; overflow: clip;
+    background: linear-gradient(-45deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.5) 40%, rgba(255,255,255,0.5) 50%, rgba(255,255,255,0) 55%) no-repeat 0% 50% / 200% 200%;
+    mix-blend-mode: soft-light;
+    transition: background-position 0.5s var(--ease-out-quart);
+  }
+  .loader-button:hover .button-sheen { background-position: 25% 50%; }
+  .loader-button .button-rim {
+    --rim-angle: -75deg; z-index: 1; inset: -0.5px; padding: 1px;
+    background:
+      conic-gradient(from var(--rim-angle), rgba(0,0,0,0.5), rgba(0,0,0,0) 5%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0) 60%, rgba(0,0,0,0) 95%, rgba(0,0,0,0.5)),
+      linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5));
+    box-shadow: 0 0 0 0.5px rgba(255,255,255,0.35) inset;
+    transition: --rim-angle 0.5s var(--ease-out-quart);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  .loader-button:hover .button-rim { --rim-angle: -125deg; }
+</style>
+</head>
+<body inert aria-hidden="true">
+  <div id="stage">
+    <div id="phase-button" role="presentation" aria-hidden="true">
+      <span class="button-content">
+        <span class="loader-slot" aria-hidden="true"></span>
+        <span class="loader-label">下载</span>
+      </span>
+      <span class="button-sheen" aria-hidden="true"></span>
+      <span class="button-rim" aria-hidden="true"></span>
+    </div>
+    <div id="gallery"></div>
+  </div>
+
+    <script type="module">
+    import loaders from "./src/designs/index.js";
+    import { createShaderVisual } from "./src/core/webgl.js";
+
+    const phaseButton = document.getElementById("phase-button");
+    const phaseSlot = phaseButton.querySelector(".loader-slot");
+    const phaseLabel = phaseButton.querySelector(".loader-label");
+    const gallery = document.getElementById("gallery");
+
+    // Phase → design mapping. The site's 25 verbs map naturally onto NDM's
+    // engine phases; the reference's own labels are kept so the button looks
+    // exactly like the site.
+    const PHASES = {
+      preparing:    { index: 0,  label: "Gathering" },   // 01 Fibonacci Breather
+      recognizing:  { index: 4,  label: "Growing" },     // 05 Living Reaction Seed
+      transferring: { index: 3,  label: "Drifting" },    // 04 Curl-Field Comet
+      merging:      { index: 2,  label: "Merging" },     // 03 Binary Metaball Mitosis
+      subtitles:    { index: 17, label: "Syncing" },     // 18 Contour Choir
+      finalizing:   { index: 11, label: "Polishing" },   // 12 Voxel Assembly Line
+      completed:    { index: 21, label: "Settling" },    // 22 Sandpile Bloom
+      paused:       { index: 14, label: "Paused" },      // 15 Orbital Calligraphy
+      failed:       { index: 23, label: "Adjusting" },   // 24 Mechanical Iris
+    };
+
+    let records = [];
+    let activeRecord = null;
+    let rafId = 0;
+    let lastTime = 0;
+
+    function ensureInstance(design, slot) {
+      try {
+        return design.mount(slot);
+      } catch (error) {
+        console.error(`[${design.name}] failed to mount`, error);
+        return { render() {}, resize() {}, reset() {}, destroy() {} };
+      }
+    }
+
+    function startLoop(record) {
+      if (rafId) return;
+      lastTime = performance.now();
+      function tick(now) {
+        const delta = now - lastTime;
+        lastTime = now;
+        if (record && record.instance) {
+          record.instance.render?.(now / 1000, delta / 1000);
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function stopLoop() {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    }
+
+    function setActivePhase(phase) {
+      const mapping = PHASES[phase] || PHASES.transferring;
+      const design = loaders[mapping.index];
+      if (!design) return;
+
+      phaseLabel.textContent = mapping.label;
+      // Swap the mounted visual on the phase slot.
+      if (activeRecord && activeRecord.design === design) return;
+      if (activeRecord) {
+        activeRecord.instance?.destroy?.();
+        phaseSlot.innerHTML = "";
+        activeRecord = null;
+      }
+      const instance = ensureInstance(design, phaseSlot);
+      const bounds = phaseSlot.getBoundingClientRect();
+      instance.resize?.(bounds.width, bounds.height, window.devicePixelRatio || 1);
+      activeRecord = { design, instance };
+      startLoop(activeRecord);
+      // Tell the native side the button is ready (labels etc.).
+      window.webkit?.messageHandlers?.loaderState?.postMessage({ state: "phase", phase, label: mapping.label });
+    }
+
+    function showGallery() {
+      phaseButton.style.display = "none";
+      gallery.style.display = "flex";
+      stopLoop();
+      gallery.innerHTML = "";
+      records = [];
+      loaders.forEach((design, index) => {
+        const article = document.createElement("div");
+        article.className = "specimen";
+
+        const button = document.createElement("button");
+        button.className = "loader-button";
+        button.type = "button";
+        const content = document.createElement("span");
+        content.className = "button-content";
+        const slot = document.createElement("span");
+        slot.className = "loader-slot";
+        slot.setAttribute("aria-hidden", "true");
+        const label = document.createElement("span");
+        label.className = "loader-label";
+        label.textContent = design.label ?? "Working";
+        const sheen = document.createElement("span");
+        sheen.className = "button-sheen";
+        sheen.setAttribute("aria-hidden", "true");
+        const rim = document.createElement("span");
+        rim.className = "button-rim";
+        rim.setAttribute("aria-hidden", "true");
+        content.append(slot, label);
+        button.append(content, sheen, rim);
+
+        const name = document.createElement("h3");
+        name.className = "specimen-name";
+        name.textContent = design.name;
+
+        article.append(button, name);
+        gallery.appendChild(article);
+
+        const instance = ensureInstance(design, slot);
+        const bounds = slot.getBoundingClientRect();
+        instance.resize?.(bounds.width, bounds.height, window.devicePixelRatio || 1);
+        records.push({ design, instance, button });
+
+        // Every gallery button plays its own animation forever — like the site.
+        button.addEventListener("click", () => {
+          instance.reset?.();
+        });
+      });
+      records.forEach(r => startLoop(r));
+    }
+
+    // Native bridge API
+    window.ndmLoaders = {
+      setPhase(phase) {
+        if (gallery.style.display === "flex") return;
+        setActivePhase(phase);
+      },
+      setInteraction(hovered, pressed) {
+        phaseButton.classList.toggle("ndm-hover", Boolean(hovered));
+        phaseButton.classList.toggle("ndm-pressed", Boolean(pressed));
+      },
+      setTheme(accentHex, isDark) {
+        const match = /^#?([0-9a-f]{6})$/i.exec(accentHex || "");
+        if (match) {
+          const value = Number.parseInt(match[1], 16);
+          const r = (value >> 16) & 255;
+          const g = (value >> 8) & 255;
+          const b = value & 255;
+          const root = document.documentElement.style;
+          root.setProperty("--ndm-accent", `rgb(${r}, ${g}, ${b})`);
+          root.setProperty("--ndm-accent-border", `rgba(${r}, ${g}, ${b}, ${isDark ? 0.52 : 0.38})`);
+          root.setProperty("--ndm-accent-shadow", `rgba(${r}, ${g}, ${b}, ${isDark ? 0.24 : 0.16})`);
+        }
+        document.documentElement.dataset.appearance = isDark ? "dark" : "light";
+      },
+      setIdle() {
+        stopLoop();
+        if (activeRecord) {
+          activeRecord.instance?.destroy?.();
+          phaseSlot.innerHTML = "";
+          activeRecord = null;
+        }
+        phaseLabel.textContent = "下载";
+      },
+      showGallery() {
+        showGallery();
+      },
+      showPhaseButton() {
+        document.documentElement.dataset.mode = "button";
+        phaseButton.style.display = "flex";
+        gallery.style.display = "none";
+        stopLoop();
+      },
+      showGlyphOnly() {
+        document.documentElement.dataset.mode = "glyph";
+        phaseButton.style.display = "flex";
+        gallery.style.display = "none";
+        const bounds = phaseSlot.getBoundingClientRect();
+        activeRecord?.instance?.resize?.(bounds.width, bounds.height, window.devicePixelRatio || 1);
+      },
+    };
+
+    // Default: show the transferring design so the button is alive on launch.
+    setActivePhase("transferring");
+    window.webkit?.messageHandlers?.loaderState?.postMessage({ state: "ready" });
+  </script>
+</body>
+</html>

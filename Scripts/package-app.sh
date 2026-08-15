@@ -48,6 +48,31 @@ esac
 
 swift build -c "$CONFIGURATION" --disable-sandbox
 
+# Two-layer versioning:
+#   CFBundleShortVersionString  CalVer YYYY.M.D   (what About shows)
+#   CFBundleVersion             YYYYMMDDNN        (must rise every package)
+# 0.MMDD.patch is not used: 0.91.0 (1 Sep) compares older than 0.814.0 (14 Aug),
+# and next January sorts below this year's August.
+day="$(date +%Y%m%d)"
+if [[ -z "${NDM_VERSION:-}" ]]; then
+  NDM_VERSION="$(date +%Y.%-m.%-d)"
+fi
+if [[ -z "${NDM_BUILD_NUMBER:-}" ]]; then
+  prev=""
+  for candidate in "$APP" "/Applications/NDM.app"; do
+    if [[ -f "$candidate/Contents/Info.plist" ]]; then
+      prev="$(plutil -extract CFBundleVersion raw -o - "$candidate/Contents/Info.plist" 2>/dev/null || true)"
+      [[ -n "$prev" ]] && break
+    fi
+  done
+  if [[ "$prev" == "$day"[[:digit:]][[:digit:]] ]]; then
+    seq=$((10#${prev:8} + 1))
+    NDM_BUILD_NUMBER="$(printf '%s%02d' "$day" "$seq")"
+  else
+    NDM_BUILD_NUMBER="${day}01"
+  fi
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$TOOLS" "$LICENSES"
 cp "$ROOT/.build/$CONFIGURATION/NDM" "$APP/Contents/MacOS/NDM"
@@ -74,8 +99,8 @@ plutil -insert CFBundleExecutable -string NDM "$PLIST"
 plutil -insert CFBundleIdentifier -string dev.ndm.open "$PLIST"
 plutil -insert CFBundlePackageType -string APPL "$PLIST"
 plutil -insert CFBundleIconFile -string NDM.icns "$PLIST"
-plutil -insert CFBundleShortVersionString -string "${NDM_VERSION:-0.1.0}" "$PLIST"
-plutil -insert CFBundleVersion -string "${NDM_BUILD_NUMBER:-1}" "$PLIST"
+plutil -insert CFBundleShortVersionString -string "$NDM_VERSION" "$PLIST"
+plutil -insert CFBundleVersion -string "$NDM_BUILD_NUMBER" "$PLIST"
 plutil -insert LSMinimumSystemVersion -string "${NDM_MINIMUM_MACOS:-13.0}" "$PLIST"
 plutil -insert NSHighResolutionCapable -bool true "$PLIST"
 if [[ -n "${NDM_PURCHASE_URL:-}" ]]; then
@@ -138,4 +163,4 @@ fi
 
 "$ROOT/Scripts/verify-app-bundle.sh" "$APP"
 
-print "$APP"
+print "$APP  $NDM_VERSION ($NDM_BUILD_NUMBER)"

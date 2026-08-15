@@ -63,16 +63,18 @@ enum NDMChrome {
     }
 
     /// Window + titlebar + sidebar share one fill so traffic-lights corner doesn’t seam.
-    /// Obsidian Cinema: the dark ramp is deep space blue-black, not system gray —
-    /// covers and accent light are the bright objects on this canvas.
+    /// The rails recede so the list can be the subject. Light mode used to make
+    /// all three panes the same #FAFBFD — "one seamless paper canvas" — which
+    /// reads as a single flat sheet with no figure and no ground. Sampling the
+    /// window found four identical values top to bottom. Dark mode always had
+    /// this ramp (#0A0C11 rail vs #12161E content); light mode simply lost it.
+    ///
+    /// 2026-08 design-language pass: the light ramp tilts warm-neutral (R−B > 0),
+    /// the way a warm lamp over the window would read — cool blue-grey paper is
+    /// the exact "cold, hard" signal the previous direction measured and rejected.
     static var sidebarFill: NSColor {
-        // The rails recede so the list can be the subject. Light mode used to make
-        // all three panes the same #FAFBFD — "one seamless paper canvas" — which
-        // reads as a single flat sheet with no figure and no ground. Sampling the
-        // window found four identical values top to bottom. Dark mode always had
-        // this ramp (#0A0C11 rail vs #12161E content); light mode simply lost it.
         dynamic(
-            light: srgb(0.949, 0.957, 0.973), // #F2F4F8 — recessed rail
+            light: srgb(0.957, 0.950, 0.941), // #F4F2F0 — recessed rail, warm paper
             dark: srgb(0.039, 0.047, 0.067)   // #0A0C11
         )
     }
@@ -83,7 +85,7 @@ enum NDMChrome {
     /// Obsidian canvas keeps its behind-window glass.
     static var sidebarPaperOverlay: NSColor {
         dynamic(
-            light: srgb(0.949, 0.957, 0.973),
+            light: srgb(0.957, 0.950, 0.941),
             dark: .clear
         )
     }
@@ -93,7 +95,7 @@ enum NDMChrome {
     /// sits nearer the surface than the navigation does.
     static var toolbarSurface: NSColor {
         dynamic(
-            light: srgb(0.969, 0.976, 0.988), // #F7F9FC
+            light: srgb(0.976, 0.969, 0.960), // #F9F7F5 — warm tool strip
             dark: srgb(0.059, 0.071, 0.098)   // #0F1219
         )
     }
@@ -111,14 +113,14 @@ enum NDMChrome {
     /// rather than on the chrome around it.
     static var contentSurface: NSColor {
         dynamic(
-            light: srgb(1.0, 1.0, 1.0),       // #FFFFFF
+            light: srgb(1.0, 0.998, 0.994),   // #FFFFFE — warm white, not blue-white
             dark: srgb(0.071, 0.086, 0.118)   // #12161E
         )
     }
 
     static var searchSurface: NSColor {
         dynamic(
-            light: NSColor.white.withAlphaComponent(0.86),
+            light: srgb(1.0, 0.998, 0.994).withAlphaComponent(0.86),
             dark: NSColor.white.withAlphaComponent(0.07)
         )
     }
@@ -127,7 +129,7 @@ enum NDMChrome {
     /// search capsule gets. No ring, no accent-colored stroke.
     static var searchSurfaceFocused: NSColor {
         dynamic(
-            light: NSColor.white.withAlphaComponent(0.98),
+            light: srgb(1.0, 0.998, 0.994).withAlphaComponent(0.98),
             dark: NSColor.white.withAlphaComponent(0.11)
         )
     }
@@ -288,6 +290,11 @@ enum NDMChrome {
     // Rail text actions stay tight (radius 4) so hover never reads as a card.
     // Filled / outlined sheet controls share radius 6 — never half-height
     // capsules, never a one-off 8–9 that fights the rail.
+    //
+    // 2026-08 design-language pass: primary filled actions graduate to true
+    // capsules (pill buttons). Rail text actions stay square-ish — the
+    // "technical instrument" surface keeps its tight geometry while the
+    // confident actions get the soft pill language from the Appllama reference.
 
     /// Flat text-rail hover pad radius.
     static let railCornerRadius: CGFloat = 4
@@ -297,6 +304,10 @@ enum NDMChrome {
     static let railActionHeight: CGFloat = 28
     /// Sheet action row height (completion / progress primaries).
     static let sheetActionHeight: CGFloat = 36
+    /// Filled primary action pill height — capsules use half this as radius.
+    static let primaryPillHeight: CGFloat = 32
+    /// Filled primary actions are true capsules (radius = half height).
+    static var primaryPillRadius: CGFloat { primaryPillHeight / 2 }
 
     /// Selected task row wash (Design Suite `--row-active`).
     static var rowActive: NSColor {
@@ -392,7 +403,7 @@ enum NDMChrome {
     /// Sheets / pickers — near-white paper (Design Suite `--surface`), not sidebar wash.
     static var sheetSurface: NSColor {
         dynamic(
-            light: srgb(0.988, 0.990, 0.994), // #FCFCFD
+            light: srgb(0.993, 0.990, 0.986), // #FDFCFB — warm paper sheet
             dark: srgb(0.098, 0.114, 0.153)   // #191D27
         )
     }
@@ -843,11 +854,30 @@ final class ThinProgressView: NSView, AccentChromeRefreshing {
 
     private func updateFill(from previous: Double, to target: Double) {
         guard bounds.width > 0 else { needsLayout = true; return }
+        let visibleScale = fillLayer.presentation()?.transform.m11 ?? CGFloat(previous)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         fillLayer.removeAnimation(forKey: "progress")
         fillLayer.transform = CATransform3DMakeScale(CGFloat(target), 1, 1)
         CATransaction.commit()
+
+        // Amicro ProgressIndicator port. The source component follows progress
+        // with useSpring(stiffness: 100, damping: 30, restDelta: 0.001).
+        // Continue from the presentation layer so frequent engine samples remain
+        // interruptible instead of snapping back to the previous model value.
+        if window != nil,
+           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           abs(CGFloat(target) - visibleScale) > 0.000_5 {
+            let spring = CASpringAnimation(keyPath: "transform.scale.x")
+            spring.fromValue = visibleScale
+            spring.toValue = CGFloat(target)
+            spring.mass = 1
+            spring.stiffness = 100
+            spring.damping = 30
+            spring.initialVelocity = 0
+            spring.duration = spring.settlingDuration
+            fillLayer.add(spring, forKey: "progress")
+        }
 
         guard target >= 0.999,
               !didCelebrate,

@@ -27,7 +27,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     )
     private let tabContainer = NSView()
     private let sessionHero = NowDownloadingHeroView()
-    private let detailsButton = InspectorActionButton(title: L10n.detailsEllipsis)
+    private let detailsButton = AmicroIconSwapButton(
+        title: L10n.detailsEllipsis,
+        symbol: "slider.horizontal.3"
+    )
     private var detailsSection: NSView?
     private var compactBottomConstraint: NSLayoutConstraint?
     private var expandedBottomConstraint: NSLayoutConstraint?
@@ -56,7 +59,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     private let segmentsCaption = NSTextField(labelWithString: L10n.segments)
     private let segmentStrip = SegmentStripView()
     private var segmentBlock: NSView?
-    private let pauseButton = InspectorActionButton(title: L10n.pause, style: .filled)
+    private let pauseButton = LoaderPauseButton()
     private let cancelButton = InspectorActionButton(title: L10n.close)
     private let openButton = InspectorActionButton(title: L10n.open, style: .filled)
     private let revealActionButton = InspectorActionButton(title: L10n.showInFinder)
@@ -203,20 +206,13 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         detailsButton.target = self
         detailsButton.action = #selector(toggleDetails)
-        detailsButton.image = NDMChrome.symbol("slider.horizontal.3", pointSize: 12, weight: .medium)
-        detailsButton.imagePosition = .imageLeading
-        detailsButton.imageHugsTitle = true
         detailsButton.font = .systemFont(ofSize: 13, weight: .medium)
         detailsButton.heightAnchor.constraint(equalToConstant: NDMChrome.railActionHeight).isActive = true
 
-        pauseButton.target = self
-        pauseButton.action = #selector(pauseClicked)
-        pauseButton.image = NDMChrome.symbol("pause.fill", pointSize: 12, weight: .semibold)
-        pauseButton.imagePosition = .imageLeading
-        pauseButton.imageHugsTitle = true
-        pauseButton.font = .systemFont(ofSize: 13, weight: .semibold)
-        pauseButton.heightAnchor.constraint(equalToConstant: NDMChrome.sheetActionHeight).isActive = true
-        pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108).isActive = true
+        pauseButton.onAction = { [weak self] in self?.pauseClicked() }
+        pauseButton.keyEquivalent = "\r"
+        pauseButton.heightAnchor.constraint(equalToConstant: LoaderPauseButton.preferredHeight).isActive = true
+        pauseButton.widthAnchor.constraint(equalToConstant: LoaderPauseButton.preferredWidth).isActive = true
 
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
@@ -361,7 +357,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
 
         progressRing.translatesAutoresizingMaskIntoConstraints = false
         overallProgress.progress = 0
-        for button in [pauseButton, cancelButton, openButton, revealActionButton] {
+        for button in [cancelButton, openButton, revealActionButton] {
             button.imagePosition = .imageLeading
             button.imageHugsTitle = true
             button.font = .systemFont(ofSize: 13, weight: button.style == .filled ? .semibold : .medium)
@@ -406,9 +402,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         let card = makeStatsCard()
 
         pauseButton.keyEquivalent = "\r"
-        pauseButton.target = self
-        pauseButton.action = #selector(pauseClicked)
-        pauseButton.image = NDMChrome.symbol("pause.fill", pointSize: 12, weight: .semibold)
+        pauseButton.onAction = { [weak self] in self?.pauseClicked() }
 
         openButton.target = self
         openButton.action = #selector(openClicked)
@@ -459,9 +453,10 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         actions.orientation = .horizontal
         actions.spacing = 8
         actions.distribution = .fill
-        for button in [pauseButton, openButton, revealActionButton, cancelButton] {
+        for button in [openButton, revealActionButton, cancelButton] {
             button.setContentHuggingPriority(.required, for: .horizontal)
         }
+        pauseButton.setContentHuggingPriority(.required, for: .horizontal)
         actionsStack = actions
 
         let stripBlock = NSStackView(views: [segmentsCaption, segmentStrip])
@@ -941,10 +936,9 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
         guard let window, let detailsSection else { return }
         detailsVisible.toggle()
         detailsButton.title = detailsVisible ? L10n.hideDetails : L10n.detailsEllipsis
-        detailsButton.image = NDMChrome.symbol(
+        detailsButton.setSymbol(
             detailsVisible ? "chevron.up" : "slider.horizontal.3",
-            pointSize: 12,
-            weight: .medium
+            animated: true
         )
 
         var frame = window.frame
@@ -1213,9 +1207,21 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
                 || (isYtDlpTask && progress.fractionCompleted >= 0.82))
         overallProgress.isActive = progress.status == .downloading && !isPostProcessing
         progressRing.isWorking = isPostProcessing
-        statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
+        if progress.status == .downloading {
+            // Live verb badge — every transfer gets its own motion. Plain
+            // direct downloads have phase == nil, which maps to .transferring
+            // (light streaming) — NOT a static label. This is the state users
+            // see the most, so it must be the most alive, not the most idle.
+            statusPill.setPhase(progress.phase)
+            // The primary action button becomes the stage itself: the bundled
+            // Appllama loader plays the phase's own animation (Drifting while
+            // transferring, Merging while merging, Polishing while finishing).
+            pauseButton.setPhase(progress.phase)
+        } else {
+            statusPill.setStatus(progress.status, error: progress.errorDescription ?? task?.errorText)
+        }
         if isPostProcessing {
-            statusPill.setPhaseText(Self.phaseLabel(progress.phase))
+            statusPill.setPhase(progress.phase)
         }
 
         let isYtDlp = task?.linkType.lowercased() == "ytdlp"
@@ -1467,34 +1473,33 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     /// Keep the action's glyph and verb inseparable. Previously the button
     /// changed from "Pause" to "Resume" but retained pause bars, a costly
     /// contradiction in the compact window's only primary action.
+    ///
+    /// While a transfer is RUNNING the button stays in live phase mode (the
+    /// Appllama loader plays Drifting/Merging/…), so `setIdle` is only issued
+    /// for paused / failed / incomplete states — never for downloading.
     private func applyTransferActionAppearance(
         for status: DownloadStatus,
         recoveryAction: TaskRecoveryAction
     ) {
+        guard status != .downloading else { return }
         let title: String
-        let symbol: String
         switch status {
         case .error:
             switch recoveryAction {
             case .openSourcePage:
                 title = L10n.openSourcePage
-                symbol = "arrow.up.right.square"
             case .renewURL:
                 title = L10n.renewURL
-                symbol = "arrow.triangle.2.circlepath"
             case .retry, .none:
                 title = L10n.retry
-                symbol = "arrow.clockwise"
             }
         case .paused, .incomplete:
             title = L10n.resume
-            symbol = "play.fill"
         default:
             title = L10n.pause
-            symbol = "pause.fill"
         }
-        pauseButton.title = title
-        pauseButton.image = NDMChrome.symbol(symbol, pointSize: 12, weight: .semibold)
+        pauseButton.setStatus(status)
+        pauseButton.setActionTitle(title)
         pauseButton.toolTip = title
         pauseButton.setAccessibilityLabel(title)
     }
@@ -1840,88 +1845,101 @@ private final class SegmentStripView: NSView {
 
 // MARK: - Status pill
 
+/// Status pill that speaks in verbs and moves. A small glyph beside the label
+/// plays the phase's own motion: recognition gathers particles, merging fuses
+/// two discs, finishing pulses a polish ring. Idle states hold a static glyph.
+/// (PhaseVerb lives in PhaseGlyphView.swift and is shared with PhaseActionButton.)
+@MainActor
 private final class StatusPillView: NSView {
     private let label = NSTextField(labelWithString: "")
-    private var lastStatus: DownloadStatus = .waiting
+    private let glyph = PhaseGlyphView()
+    private var lastVerb: PhaseVerb = .waiting
     private var lastError: String?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = 10  // capsule — the pill speaks, not the corner
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glyph)
         addSubview(label)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         label.setAccessibilityElement(false)
         NSLayoutConstraint.activate([
+            glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: 14),
+            glyph.heightAnchor.constraint(equalToConstant: 14),
+            label.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 5),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             heightAnchor.constraint(equalToConstant: 20),
         ])
-        setStatus(.waiting, error: nil)
+        setVerb(.waiting, error: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
     func setStatus(_ status: DownloadStatus, error: String?) {
-        lastStatus = status
-        lastError = error
-        let title: String
-        let fg: NSColor
-        let bg: NSColor
-        // One accent voice: active uses controlAccent; others stay neutral ink on soft track.
-        let track = NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
-        switch status {
-        case .downloading:
-            title = L10n.downloading
-            fg = NDMChrome.accent
-            bg = NDMChrome.accent.withAlphaComponent(0.12)
-        case .paused:
-            title = L10n.paused
-            fg = .secondaryLabelColor
-            bg = track
-        case .complete:
-            title = L10n.completed
-            fg = NSColor.systemGreen.blended(withFraction: 0.35, of: .labelColor) ?? .systemGreen
-            bg = NDMChrome.okSoft
-        case .error:
-            title = L10n.failed
-            fg = NSColor.systemRed.blended(withFraction: 0.25, of: .labelColor) ?? .systemRed
-            bg = NDMChrome.dangerSoft
-        case .waiting:
-            title = L10n.queued
-            fg = .secondaryLabelColor
-            bg = track
-        case .incomplete:
-            title = L10n.incomplete
-            fg = .secondaryLabelColor
-            bg = track
-        }
-        label.stringValue = title
-        label.textColor = fg
-        layer?.backgroundColor = bg.cgColor
-        toolTip = error
-        setAccessibilityLabel(title)
-        setAccessibilityValue(error)
+        let verb = PhaseVerb.live(status: status, phase: nil, error: error)
+        setVerb(verb, error: error)
     }
 
-    /// Override the pill text with the current finalize phase (合并中 / 字幕 /
-    /// 整理中) while keeping the accent "active" colors.
+    /// Live download with a post-process phase (合并中 / 字幕 / 整理中).
+    func setPhase(_ phase: DownloadPhase?) {
+        let verb = PhaseVerb.live(status: .downloading, phase: phase, error: nil)
+        setVerb(verb, error: nil)
+    }
+
+    /// Compact pill text for the finishing tail (kept for call sites that pass
+    /// a pre-formatted string).
     func setPhaseText(_ text: String) {
+        lastVerb = .finalizing
         label.stringValue = text
         label.textColor = NDMChrome.accent
         layer?.backgroundColor = NDMChrome.accent.withAlphaComponent(0.12).cgColor
         setAccessibilityLabel(text)
+        glyph.setVerb(.finalizing, color: NDMChrome.accent)
+    }
+
+    private func setVerb(_ verb: PhaseVerb, error: String?) {
+        lastVerb = verb
+        lastError = error
+        let fg: NSColor
+        let bg: NSColor
+        // One accent voice: active uses controlAccent; others stay neutral ink on soft track.
+        let track = NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
+        switch verb {
+        case .transferring, .recognizing, .preparing, .merging, .subtitles, .finalizing:
+            fg = NDMChrome.accent
+            bg = NDMChrome.accent.withAlphaComponent(0.12)
+        case .paused, .waiting, .incomplete:
+            fg = .secondaryLabelColor
+            bg = track
+        case .completed:
+            fg = NSColor.systemGreen.blended(withFraction: 0.35, of: .labelColor) ?? .systemGreen
+            bg = NDMChrome.okSoft
+        case .failed:
+            fg = NSColor.systemRed.blended(withFraction: 0.25, of: .labelColor) ?? .systemRed
+            bg = NDMChrome.dangerSoft
+        }
+        label.stringValue = verb.title
+        label.textColor = fg
+        layer?.backgroundColor = bg.cgColor
+        toolTip = error
+        setAccessibilityLabel(verb.title)
+        setAccessibilityValue(error)
+        glyph.setVerb(verb, color: fg)
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        setStatus(lastStatus, error: lastError)
+        // Redraw the verb (colors + glyph) for the new appearance.
+        setVerb(lastVerb, error: lastError)
     }
 }
 

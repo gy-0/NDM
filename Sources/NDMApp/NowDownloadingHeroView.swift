@@ -56,6 +56,7 @@ final class NowDownloadingHeroView: NSView {
         borderWidth: 1
     )
     private let coverSymbol = NSImageView()
+    private let coverProgressRing = AmicroProgressRingView()
     private let eyebrowLabel = NSTextField(labelWithString: "")
     private let nameLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
@@ -104,6 +105,7 @@ final class NowDownloadingHeroView: NSView {
         coverView.layer?.masksToBounds = true
 
         coverPlate.translatesAutoresizingMaskIntoConstraints = false
+        coverProgressRing.translatesAutoresizingMaskIntoConstraints = false
         coverSymbol.translatesAutoresizingMaskIntoConstraints = false
         coverSymbol.imageScaling = .scaleProportionallyUpOrDown
         coverSymbol.contentTintColor = .tertiaryLabelColor
@@ -151,6 +153,7 @@ final class NowDownloadingHeroView: NSView {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
+        coverPlate.addSubview(coverProgressRing)
         coverPlate.addSubview(coverSymbol)
 
         NSLayoutConstraint.activate([
@@ -172,6 +175,10 @@ final class NowDownloadingHeroView: NSView {
             coverPlate.trailingAnchor.constraint(equalTo: coverView.trailingAnchor),
             coverPlate.topAnchor.constraint(equalTo: coverView.topAnchor),
             coverPlate.bottomAnchor.constraint(equalTo: coverView.bottomAnchor),
+            coverProgressRing.centerXAnchor.constraint(equalTo: coverPlate.centerXAnchor),
+            coverProgressRing.centerYAnchor.constraint(equalTo: coverPlate.centerYAnchor),
+            coverProgressRing.widthAnchor.constraint(equalToConstant: 52),
+            coverProgressRing.heightAnchor.constraint(equalToConstant: 52),
             coverSymbol.centerXAnchor.constraint(equalTo: coverPlate.centerXAnchor),
             coverSymbol.centerYAnchor.constraint(equalTo: coverPlate.centerYAnchor),
             coverSymbol.widthAnchor.constraint(equalToConstant: 40),
@@ -320,6 +327,8 @@ final class NowDownloadingHeroView: NSView {
             progressBar.isActive = false
             progressBar.clearSmoothProgress()
             progressBar.onDisplayedProgressChange = nil
+            coverProgressRing.setProgress(0, animated: false)
+            coverProgressRing.isHidden = true
             percentLabel.stringValue = ""
             segmentStrip.isActive = false
             setSelected(false)
@@ -328,6 +337,8 @@ final class NowDownloadingHeroView: NSView {
         let taskChanged = currentTaskID != primary.taskID
         currentTaskID = primary.taskID
         currentRow = primary
+        coverProgressRing.setProgress(primary.progressFraction, animated: !taskChanged)
+        coverProgressRing.isHidden = coverView.image != nil || primary.isComplete
 
         nameLabel.stringValue = primary.filename
         progressBar.onDisplayedProgressChange = { [weak self] display in
@@ -340,7 +351,7 @@ final class NowDownloadingHeroView: NSView {
         // of a flickering byte/phase line — it reads as active work, not a stall.
         if primary.isFinalizing {
             metaLabel.stringValue = ""
-            eyebrowLabel.stringValue = L10n.finishingUp
+            AmicroTextMorph.set(L10n.finishingUp, on: eyebrowLabel)
             // A stable line — no flickering byte counts or bouncing phase text
             // during the lumpy tail. metaLabel below still carries any detail.
             speedLabel.stringValue = L10n.almostDone
@@ -367,7 +378,10 @@ final class NowDownloadingHeroView: NSView {
         }
         stopFinalizePulse()
         metaLabel.stringValue = primary.statusDetail
-        eyebrowLabel.stringValue = primary.isDownloading ? L10n.nowDownloading : primary.statusTitle
+        AmicroTextMorph.set(
+            primary.isDownloading ? L10n.nowDownloading : primary.statusTitle,
+            on: eyebrowLabel
+        )
         speedLabel.font = .monospacedDigitSystemFont(ofSize: 40, weight: .light)
 
         // Multiple live connections → show the parallel segment strip on the
@@ -458,6 +472,8 @@ final class NowDownloadingHeroView: NSView {
         coverView.image = cover
         coverPlate.isHidden = cover != nil
         coverSymbol.isHidden = cover != nil
+        coverProgressRing.isHidden = cover != nil || row.isComplete
+        coverProgressRing.setProgress(row.progressFraction, animated: !allowsCrossfade)
         if cover == nil {
             coverSymbol.image = NDMChrome.fileIcon(filename: row.filename, pointSize: 40)
         }

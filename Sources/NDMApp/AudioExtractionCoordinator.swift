@@ -83,7 +83,7 @@ final class AudioExtractionCoordinator {
 /// Compact, persistent feedback for an action launched from a transient menu.
 @MainActor
 final class AudioExtractionStatusView: NSView {
-    private let icon = NSImageView()
+    private let icon = AmicroIconSwapView()
     private let label = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
 
@@ -92,7 +92,8 @@ final class AudioExtractionStatusView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
 
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.contentTintColor = NDMChrome.accent
+        icon.tintColor = NDMChrome.accent
+        icon.setSymbol("waveform", pointSize: 13, weight: .semibold, animated: false)
         label.font = .systemFont(ofSize: 11.5, weight: .medium)
         label.textColor = .secondaryLabelColor
         label.maximumNumberOfLines = 2
@@ -143,15 +144,15 @@ final class AudioExtractionStatusView: NSView {
             setAccessibilityValue(L10n.extractingAudio)
         case .succeeded:
             isHidden = false
-            icon.image = NDMChrome.symbol("checkmark.circle.fill", pointSize: 13, weight: .semibold)
-            icon.contentTintColor = NDMChrome.accent
+            icon.tintColor = NDMChrome.accent
+            icon.setSymbol("checkmark.circle.fill", pointSize: 13, weight: .semibold)
             label.textColor = .secondaryLabelColor
             label.stringValue = L10n.audioExtractionReady
             setAccessibilityValue(L10n.audioExtractionReady)
         case let .failed(message):
             isHidden = false
-            icon.image = NDMChrome.symbol("exclamationmark.circle.fill", pointSize: 13, weight: .semibold)
-            icon.contentTintColor = .secondaryLabelColor
+            icon.tintColor = .secondaryLabelColor
+            icon.setSymbol("exclamationmark.circle.fill", pointSize: 13, weight: .semibold)
             label.textColor = .secondaryLabelColor
             label.stringValue = message
             setAccessibilityValue(message)

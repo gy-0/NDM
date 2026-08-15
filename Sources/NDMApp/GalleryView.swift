@@ -27,6 +27,7 @@ final class GalleryCardItem: NSCollectionViewItem {
     // Frosted "play/open" affordance that scales in on hover — the poster
     // invites the click like a streaming tile, over a soft darkening scrim.
     private let hoverScrim = CALayer()
+    private let pointerSpotlight = CAGradientLayer()
     private let playChip = NSVisualEffectView()
     private let playGlyph = NSImageView()
     private var currentTaskID: Int64?
@@ -82,6 +83,15 @@ final class GalleryCardItem: NSCollectionViewItem {
         hoverScrim.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
         hoverScrim.opacity = 0
         coverPlate.layer?.addSublayer(hoverScrim)
+        // Amicro `spotlight`: a radial highlight follows the pointer over art.
+        pointerSpotlight.type = .radial
+        pointerSpotlight.colors = [
+            NSColor.white.withAlphaComponent(0.20).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        pointerSpotlight.locations = [0, 1]
+        pointerSpotlight.opacity = 0
+        coverPlate.layer?.addSublayer(pointerSpotlight)
 
         // Frosted circular chip with a play/open glyph.
         playChip.material = .hudWindow
@@ -152,7 +162,7 @@ final class GalleryCardItem: NSCollectionViewItem {
 
         let tracking = NSTrackingArea(
             rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -256,6 +266,7 @@ final class GalleryCardItem: NSCollectionViewItem {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hoverScrim.frame = coverPlate.bounds
+        pointerSpotlight.frame = coverPlate.bounds
         CATransaction.commit()
     }
 
@@ -281,6 +292,37 @@ final class GalleryCardItem: NSCollectionViewItem {
         setHovering(false)
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard isHovering, coverPlate.bounds.width > 0, coverPlate.bounds.height > 0 else { return }
+        let point = coverPlate.convert(event.locationInWindow, from: nil)
+        let x = min(1, max(0, point.x / coverPlate.bounds.width))
+        let y = min(1, max(0, point.y / coverPlate.bounds.height))
+        pointerSpotlight.startPoint = CGPoint(x: x, y: y)
+        pointerSpotlight.endPoint = CGPoint(x: x + 0.58, y: y + 0.58)
+
+        // Amicro `tilt-card`: source uses ±15°. NDM deliberately caps the
+        // editorial poster at ±4° while preserving its 200/20/0.5 spring feel.
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let normalizedX = x - 0.5
+        let normalizedY = y - 0.5
+        var target = CATransform3DIdentity
+        target.m34 = -1 / 800
+        target = CATransform3DScale(target, 1.06, 1.06, 1)
+        target = CATransform3DRotate(target, -normalizedY * 8 * .pi / 180, 1, 0, 0)
+        target = CATransform3DRotate(target, normalizedX * 8 * .pi / 180, 0, 1, 0)
+        let source = imageLayer.presentation()?.transform ?? imageLayer.transform
+        imageLayer.transform = target
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.mass = 0.5
+        spring.stiffness = 200
+        spring.damping = 20
+        spring.fromValue = NSValue(caTransform3D: source)
+        spring.toValue = NSValue(caTransform3D: target)
+        spring.duration = spring.settlingDuration
+        imageLayer.add(spring, forKey: "amicroTilt")
+    }
+
     /// The frame stays perfectly still; the artwork breathes inside it and
     /// the shadow blooms underneath — touching a print in a gallery, not
     /// bouncing a widget.
@@ -298,6 +340,7 @@ final class GalleryCardItem: NSCollectionViewItem {
         coverHost.layer?.shadowOpacity = hovering ? 0.24 : 0.10
         coverHost.layer?.shadowRadius = hovering ? 16 : 8
         hoverScrim.opacity = hovering ? 1 : 0
+        pointerSpotlight.opacity = hovering ? 1 : 0
         if !isSelected {
             coverPlate.layer?.borderColor = hovering
                 ? NDMChrome.accent.withAlphaComponent(0.45).cgColor
@@ -361,6 +404,7 @@ final class GalleryCardItem: NSCollectionViewItem {
         CATransaction.setDisableActions(true)
         imageLayer.contents = nil
         imageLayer.transform = CATransform3DIdentity
+        pointerSpotlight.opacity = 0
         CATransaction.commit()
         progressBar.isHidden = true
         progressBar.isActive = false

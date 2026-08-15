@@ -35,6 +35,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
     private var destinationDirectoryOverride: URL?
     private let urlField = NSTextField(string: "")
     private let urlShell = LinkInputShell()
+    private let inputIcon = AmicroIconSwapView()
     private let clearButton = NSButton()
     private let statusIcon = NSImageView()
     private let hintLabel = NSTextField(wrappingLabelWithString: "")
@@ -184,11 +185,9 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         urlField.setAccessibilityHelp(L10n.pasteURLHint)
         urlField.translatesAutoresizingMaskIntoConstraints = false
 
-        let linkIcon = NSImageView()
-        linkIcon.image = NDMChrome.symbol("link", pointSize: 13, weight: .semibold)
-        linkIcon.contentTintColor = .secondaryLabelColor
-        linkIcon.imageScaling = .scaleProportionallyDown
-        linkIcon.translatesAutoresizingMaskIntoConstraints = false
+        inputIcon.tintColor = .secondaryLabelColor
+        inputIcon.setSymbol("link", pointSize: 13, weight: .semibold, animated: false)
+        inputIcon.translatesAutoresizingMaskIntoConstraints = false
 
         clearButton.bezelStyle = .inline
         clearButton.isBordered = false
@@ -207,15 +206,15 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             guard let self else { return }
             self.window?.makeFirstResponder(self.urlField)
         }
-        urlShell.addSubview(linkIcon)
+        urlShell.addSubview(inputIcon)
         urlShell.addSubview(urlField)
         urlShell.addSubview(clearButton)
         NSLayoutConstraint.activate([
-            linkIcon.leadingAnchor.constraint(equalTo: urlShell.leadingAnchor, constant: 14),
-            linkIcon.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
-            linkIcon.widthAnchor.constraint(equalToConstant: 16),
-            linkIcon.heightAnchor.constraint(equalToConstant: 16),
-            urlField.leadingAnchor.constraint(equalTo: linkIcon.trailingAnchor, constant: 9),
+            inputIcon.leadingAnchor.constraint(equalTo: urlShell.leadingAnchor, constant: 14),
+            inputIcon.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
+            inputIcon.widthAnchor.constraint(equalToConstant: 16),
+            inputIcon.heightAnchor.constraint(equalToConstant: 16),
+            urlField.leadingAnchor.constraint(equalTo: inputIcon.trailingAnchor, constant: 9),
             urlField.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -4),
             urlField.centerYAnchor.constraint(equalTo: urlShell.centerYAnchor),
             clearButton.trailingAnchor.constraint(equalTo: urlShell.trailingAnchor, constant: -7),
@@ -407,6 +406,16 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         clearButton.isHidden = urlField.stringValue.isEmpty
     }
 
+    private func setInputRecognized(_ recognized: Bool) {
+        inputIcon.tintColor = recognized ? NDMChrome.accent : .secondaryLabelColor
+        inputIcon.setSymbol(
+            recognized ? "checkmark.circle.fill" : "link",
+            pointSize: 13,
+            weight: .semibold,
+            animated: window?.isVisible == true
+        )
+    }
+
     private func setStatus(_ text: String, symbolName: String, color: NSColor) {
         statusRow.isHidden = false
         statusLabel.stringValue = text
@@ -460,6 +469,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
         preparedResult = nil
         readyChoice = nil
         guard let resolution = ClipboardLinks.resolution(raw) else {
+            setInputRecognized(false)
             refreshDuplicate(urlStrings: [])
             identityView.clear()
             hideStatus()
@@ -467,6 +477,7 @@ final class NewDownloadWindowController: NSWindowController, NSWindowDelegate, N
             setPreviewVisible(false)
             return
         }
+        setInputRecognized(true)
         setPreviewVisible(true)
         let urlString = resolution.urlString
         refreshDuplicate(urlStrings: [urlString])
@@ -787,6 +798,8 @@ private final class NewDownloadActionButton: NSButton {
     private let actionStyle: Style
     private var isHovering = false
     private var hoverTrackingArea: NSTrackingArea?
+    private let pointerGlow = CAGradientLayer()
+    private var magneticOffset = CGPoint.zero
 
     init(title: String, style: Style) {
         self.actionStyle = style
@@ -801,6 +814,11 @@ private final class NewDownloadActionButton: NSButton {
         wantsLayer = true
         layer?.cornerRadius = NDMChrome.controlCornerRadius
         layer?.masksToBounds = true
+        // Amicro `glow-button`: a radial accent highlight follows the pointer.
+        pointerGlow.type = .radial
+        pointerGlow.locations = [0, 1]
+        pointerGlow.opacity = 0
+        layer?.addSublayer(pointerGlow)
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.required, for: .horizontal)
     }
@@ -843,6 +861,11 @@ private final class NewDownloadActionButton: NSButton {
                     : NDMChrome.hairline).cgColor
             }
             layer?.opacity = isEnabled ? 1 : 0.78
+            pointerGlow.frame = bounds
+            let glow = actionStyle == .primary
+                ? NSColor.white.withAlphaComponent(0.24)
+                : NDMChrome.accent.withAlphaComponent(0.18)
+            pointerGlow.colors = [glow.cgColor, NSColor.clear.cgColor]
         }
     }
 
@@ -851,7 +874,7 @@ private final class NewDownloadActionButton: NSButton {
         if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
         let area = NSTrackingArea(
             rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -861,29 +884,60 @@ private final class NewDownloadActionButton: NSButton {
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return super.mouseDown(with: event) }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.08
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            ctx.allowsImplicitAnimation = true
-            self.layer?.setAffineTransform(CGAffineTransform(scaleX: 0.95, y: 0.95))
-        }
+        setMagneticTransform(scale: 0.95, spring: false)
         super.mouseDown(with: event)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
-            ctx.allowsImplicitAnimation = true
-            self.layer?.setAffineTransform(.identity)
-        }
+        setMagneticTransform(scale: 1, spring: true)
     }
 
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
+        pointerGlow.opacity = 1
         needsDisplay = true
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let normalized = CGPoint(x: point.x / bounds.width, y: point.y / bounds.height)
+        pointerGlow.startPoint = normalized
+        pointerGlow.endPoint = CGPoint(x: normalized.x + 0.68, y: normalized.y + 0.68)
+
+        // Amicro `magnetic-button`: source spring 150/15/0.6. The native
+        // version uses an 18% pull so the hit target never visually escapes.
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        magneticOffset = CGPoint(
+            x: (point.x - bounds.midX) * 0.18,
+            y: (point.y - bounds.midY) * 0.18
+        )
+        setMagneticTransform(scale: 1, spring: true)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
+        pointerGlow.opacity = 0
+        magneticOffset = .zero
+        setMagneticTransform(scale: 1, spring: true)
         needsDisplay = true
+    }
+
+    private func setMagneticTransform(scale: CGFloat, spring: Bool) {
+        guard let layer else { return }
+        let target = CATransform3DConcat(
+            CATransform3DMakeTranslation(magneticOffset.x, magneticOffset.y, 0),
+            CATransform3DMakeScale(scale, scale, 1)
+        )
+        let source = layer.presentation()?.transform ?? layer.transform
+        layer.transform = target
+        if spring, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let animation = CASpringAnimation(keyPath: "transform")
+            animation.mass = 0.6
+            animation.stiffness = 150
+            animation.damping = 15
+            animation.fromValue = NSValue(caTransform3D: source)
+            animation.toValue = NSValue(caTransform3D: target)
+            animation.duration = animation.settlingDuration
+            layer.add(animation, forKey: "amicroMagnetic")
+        }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -1002,6 +1056,7 @@ private final class LinkLensView: NSView {
 
     func showIdentity(urlString: String) {
         artworkTask?.cancel()
+        coverView.stopShimmer()
         guard let url = URL(string: urlString), let host = url.host?.lowercased() else {
             clear()
             return
@@ -1106,6 +1161,7 @@ private final class LinkLensView: NSView {
         showIdentity(urlString: urlString)
         titleLabel.stringValue = L10n.linkLensRecognizing
         metaLabel.stringValue = L10n.linkLensContinueAnytime
+        coverView.startShimmer()
         spinner.startAnimation(nil)
     }
 
@@ -1168,11 +1224,13 @@ private final class LinkLensView: NSView {
 
     func showDirectFileLoading(url: URL) {
         showDirectFileEstimate(url: url)
+        coverView.startShimmer()
         spinner.startAnimation(nil)
     }
 
     func showDirectFilePreview(_ preview: RemoteFilePreview) {
         artworkTask?.cancel()
+        coverView.stopShimmer()
         representedHost = preview.resolvedURL.host?.lowercased() ?? ""
         representedSource = .web
         isHidden = false
@@ -1280,6 +1338,7 @@ private final class LinkLensCoverView: NSView {
     private var image: NSImage?
     private var isArtwork = false
     private var accentColor = NDMChrome.accent
+    private let shimmer = CAGradientLayer()
 
     /// True while the cover is showing a site brand glyph (not video artwork).
     var showsBrandPlaceholder: Bool { image != nil && !isArtwork }
@@ -1289,6 +1348,16 @@ private final class LinkLensCoverView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 11
         layer?.masksToBounds = true
+        shimmer.colors = [
+            NSColor.clear.cgColor,
+            NSColor.white.withAlphaComponent(0.20).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        shimmer.locations = [0, 0.5, 1]
+        shimmer.startPoint = CGPoint(x: 0, y: 0.5)
+        shimmer.endPoint = CGPoint(x: 1, y: 0.5)
+        shimmer.opacity = 0
+        layer?.addSublayer(shimmer)
     }
 
     @available(*, unavailable)
@@ -1298,7 +1367,37 @@ private final class LinkLensCoverView: NSView {
         self.image = image
         self.isArtwork = isArtwork
         if let accentColor { self.accentColor = accentColor }
+        if isArtwork { stopShimmer() }
         needsDisplay = true
+    }
+
+    override func layout() {
+        super.layout()
+        shimmer.frame = CGRect(
+            x: -bounds.width * 0.8,
+            y: 0,
+            width: bounds.width * 0.8,
+            height: bounds.height
+        )
+    }
+
+    /// Amicro `skeleton`: -150% → 150%, 1.6 s ease-in-out.
+    func startShimmer() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        shimmer.opacity = 1
+        if shimmer.animation(forKey: "amicroSkeleton") != nil { return }
+        let sweep = CABasicAnimation(keyPath: "transform.translation.x")
+        sweep.fromValue = -bounds.width * 0.7
+        sweep.toValue = bounds.width * 2.7
+        sweep.duration = 1.6
+        sweep.repeatCount = .infinity
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        shimmer.add(sweep, forKey: "amicroSkeleton")
+    }
+
+    func stopShimmer() {
+        shimmer.opacity = 0
+        shimmer.removeAnimation(forKey: "amicroSkeleton")
     }
 
     override func draw(_ dirtyRect: NSRect) {

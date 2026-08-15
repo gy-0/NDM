@@ -7,7 +7,7 @@ import AppKit
 /// fill and/or a slight tint deepen. Press deepens a notch further. No glow,
 /// no conspicuous gray cushion.
 @MainActor
-final class InspectorActionButton: NSButton {
+class InspectorActionButton: NSButton {
     enum Style { case flat, filled }
 
     /// Image-only AppKit buttons can report a larger alignment rect than their
@@ -90,14 +90,27 @@ final class InspectorActionButton: NSButton {
     private func applyCornerRadius() {
         // Flat 4–6 system: rail stays tight; filled / outlined share one
         // control radius so completion "打开" and sheet secondaries match.
+        // 2026-08 pass: filled primaries become true capsules — radius tracks
+        // the actual height (clamped at half height) so any filled size reads
+        // as a pill instead of a fixed-radius block.
         switch style {
         case .filled:
-            layer?.cornerRadius = NDMChrome.controlCornerRadius
+            // True capsule: radius tracks the resolved height. Fall back to a
+            // sane minimum if layout hasn't happened yet (bounds == zero).
+            let half = bounds.height / 2
+            layer?.cornerRadius = half > 1 ? half : NDMChrome.controlCornerRadius
         case .flat:
             layer?.cornerRadius = usesOutlinedHover
                 ? NDMChrome.controlCornerRadius
                 : NDMChrome.railCornerRadius
         }
+    }
+
+    override func layout() {
+        super.layout()
+        // Corner radius depends on the resolved height; re-derive whenever the
+        // layout pass changes it (first layout happens after constraint solve).
+        applyCornerRadius()
     }
 
     override func becomeFirstResponder() -> Bool {
