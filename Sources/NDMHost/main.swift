@@ -247,8 +247,15 @@ func settingsJSON(_ s: AppSettings) -> [String: Any] {
 func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any] {
     let completed = progress?.completedBytes ?? (task.status == .complete ? task.fileSize : 0)
     let speed = progress?.bytesPerSecond ?? 0
-    let status = progress?.status.rawValue ?? task.status.rawValue
-    let phase = progress?.phase?.rawValue
+    // Persisted terminal states are authoritative. A completed/failed/paused
+    // task can briefly retain its last in-memory progress object; surfacing
+    // that stale `.downloading` value makes the shell lie. The only promotion
+    // we need is the real startup race where persistence still says waiting.
+    let liveStatus = progress?.status
+    let status = task.status == .waiting && liveStatus == .downloading
+        ? DownloadStatus.downloading.rawValue
+        : task.status.rawValue
+    let phase = status == DownloadStatus.downloading.rawValue ? progress?.phase?.rawValue : nil
     let connections = progress.map {
         $0.currentConnections > 0 ? $0.currentConnections : task.connections
     } ?? task.connections
@@ -282,9 +289,20 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         "folderPath": task.folderPath ?? ""
     ]
     if let source { row["source"] = source }
+    if let pageURL = task.pageURL { row["pageURL"] = pageURL }
     if let thumbnailURL = task.thumbnailURL { row["thumbnailURL"] = thumbnailURL }
     if let phase { row["phase"] = phase }
-    if let errorText = task.errorText { row["errorText"] = errorText }
+    if let errorText = task.errorText {
+        row["errorText"] = errorText
+        if let diagnostic = DownloadDiagnostic.fromStoredErrorText(errorText) {
+            row["diagnostic"] = [
+                "title": diagnostic.title,
+                "message": diagnostic.message(hasSavedData: completed > 0),
+                "summary": diagnostic.rowSummary(hasSavedData: completed > 0),
+                "primaryAction": diagnostic.primaryAction.rawValue
+            ]
+        }
+    }
     return row
 }
 
@@ -492,6 +510,20 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 try? await manager.start(taskID: taskID)
             }
             sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "renew":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init),
+                  let newURL = request["url"] as? String, !newURL.isEmpty else {
+                throw ManagerError.invalidURL
+            }
+            try await manager.renewURL(taskID: taskID, newURL: newURL)
+            if request["autoStart"] as? Bool ?? true {
+                try await manager.start(taskID: taskID)
+            }
+            guard let task = try await manager.task(id: taskID) else {
+                throw ManagerError.taskNotFound
+            }
+            sendJSON(connection, ["id": id, "ok": true, "task": taskJSON(task, progress: await manager.progress(taskID: taskID))])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "remove":
             guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
