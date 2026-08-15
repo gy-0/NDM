@@ -160,7 +160,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         downloadAllAtOnce: Bool = true,
         showCompletionDialog: Bool = true,
         launchAtLogin: Bool = false,
-        useCategoryFolders: Bool = true,
+        useCategoryFolders: Bool = false,
         customUserAgent: String? = nil,
         useCustomUserAgent: Bool = false,
         httpProxy: ProxySettings? = nil,

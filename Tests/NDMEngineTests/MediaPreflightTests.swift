@@ -180,6 +180,13 @@ final class MediaPreflightTests: XCTestCase {
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/install.sh"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/payload.dat"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("ftp://example.com/archive.zip"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage(
+            "https://release-assets.githubusercontent.com/assets/opaque-token?response-content-disposition=attachment%3B%20filename%3DCipherTalk-Setup.dmg"
+        ))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload(
+            "https://release-assets.githubusercontent.com/assets/opaque-token",
+            suggestedFilename: "CipherTalk-Setup.dmg"
+        ))
         XCTAssertTrue(MediaLinkClassifier.looksLikeCollectionURL(
             "https://www.youtube.com/watch?v=one&list=PL123"
         ))

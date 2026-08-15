@@ -192,18 +192,41 @@ public enum MediaLinkClassifier {
         guard let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return false }
+        if looksLikeOrdinaryFileDownload(raw) {
+            return false
+        }
         let ext = url.pathExtension.lowercased()
-        if ordinaryFileExtensions.contains(ext) || mediaOrPageDirectExtensions.contains(ext) {
+        if mediaOrPageDirectExtensions.contains(ext) {
             return false
         }
         return url.host != nil
     }
 
-    public static func looksLikeOrdinaryFileDownload(_ raw: String) -> Bool {
+    public static func looksLikeOrdinaryFileDownload(
+        _ raw: String,
+        suggestedFilename: String? = nil
+    ) -> Bool {
         guard let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" || scheme == "ftp" else { return false }
-        return ordinaryFileExtensions.contains(url.pathExtension.lowercased())
+        var candidates = [url.lastPathComponent]
+        if let suggestedFilename, !suggestedFilename.isEmpty {
+            candidates.append(suggestedFilename)
+        }
+        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        for item in queryItems {
+            let key = item.name.lowercased()
+            if key.contains("filename") || key.contains("disposition") || key == "rscd" {
+                candidates.append(item.value ?? "")
+            }
+        }
+        return candidates.contains { candidate in
+            let decoded = candidate.removingPercentEncoding ?? candidate
+            let ext = (decoded as NSString).pathExtension
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            return ordinaryFileExtensions.contains(ext)
+        }
     }
 
     /// Browser captures from supported video sites used to always rewrite the

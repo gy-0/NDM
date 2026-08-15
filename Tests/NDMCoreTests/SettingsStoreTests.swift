@@ -9,6 +9,11 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(settings.languageMode, .system)
         XCTAssertTrue(settings.smartConnectionsEnabled)
         XCTAssertTrue(settings.clipboardWatchEnabled)
+        XCTAssertFalse(settings.useCategoryFolders)
+        XCTAssertEqual(
+            settings.downloadDirectory.standardizedFileURL,
+            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].standardizedFileURL
+        )
     }
 
     func testRoundTrip() {

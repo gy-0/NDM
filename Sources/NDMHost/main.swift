@@ -57,6 +57,60 @@ final class Hub: @unchecked Sendable {
 
 let hub = Hub()
 
+func embeddedFilename(in rawURL: String) -> String? {
+    guard let url = URL(string: rawURL),
+          let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+        return nil
+    }
+    for item in items {
+        let key = item.name.lowercased()
+        guard key.contains("filename") || key.contains("disposition") || key == "rscd" else { continue }
+        let decoded = (item.value ?? "").removingPercentEncoding ?? item.value ?? ""
+        if key.contains("filename"), !decoded.isEmpty {
+            return (decoded as NSString).lastPathComponent
+        }
+        for field in decoded.split(separator: ";") {
+            let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2, pair[0].lowercased().contains("filename") else { continue }
+            var value = pair[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.lowercased().hasPrefix("utf-8''") { value.removeFirst(7) }
+            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            value = value.removingPercentEncoding ?? value
+            if !value.isEmpty { return (value as NSString).lastPathComponent }
+        }
+    }
+    return nil
+}
+
+func applyFilename(_ filename: String, to task: inout DownloadTask, overrideDirectory: URL? = nil) {
+    let clean = DownloadFilename.sanitize(filename)
+    guard !clean.isEmpty else { return }
+    task.filename = clean
+    task.category = DownloadCategory.infer(filename: clean, mimeType: task.mimeType)
+    task.folderPath = DownloadDestinationPolicy.directory(
+        defaultDirectory: currentSettings.downloadDirectory,
+        override: overrideDirectory,
+        category: task.category,
+        organizeByCategory: currentSettings.useCategoryFolders
+    ).path
+}
+
+// Older desktop builds classified opaque signed CDN paths as media pages before
+// looking at the embedded filename. Repair only unambiguous ordinary files so a
+// retry does not send an installer or document through yt-dlp again.
+if let persisted = try? store.allDownloads() {
+    for var task in persisted where task.linkType.lowercased() == "ytdlp" {
+        let filename = embeddedFilename(in: task.url)
+        guard MediaLinkClassifier.looksLikeOrdinaryFileDownload(
+            task.url,
+            suggestedFilename: filename ?? task.filename
+        ) else { continue }
+        task.linkType = "normal"
+        if let filename { applyFilename(filename, to: &task) }
+        try? store.update(task)
+    }
+}
+
 Task {
     await manager.setCompletionHandler { _ in
         Task {
@@ -79,8 +133,20 @@ bridge.onDownloadMessage = { msg in
             }
 
             var ltype = msg.ltype
-            if ltype.lowercased() == "media-page" || MediaLinkClassifier.looksLikeMediaPage(msg.url) || msg.url.contains("youtube.com") || msg.url.contains("youtu.be") || msg.url.contains("bilibili.com") {
-                ltype = "ytdlp"
+            let capturedFilename = msg.filename.isEmpty ? embeddedFilename(in: msg.url) : msg.filename
+            let ordinaryFile = MediaLinkClassifier.looksLikeOrdinaryFileDownload(
+                msg.url,
+                suggestedFilename: capturedFilename
+            )
+            if !ordinaryFile && (ltype.lowercased() == "media-page" || MediaLinkClassifier.looksLikeMediaPage(msg.url) || msg.url.contains("youtube.com") || msg.url.contains("youtu.be") || msg.url.contains("bilibili.com")) {
+                broadcast([
+                    "op": "openMediaComposer",
+                    "url": msg.url,
+                    "pageTitle": msg.pageTitle
+                ])
+                return
+            } else if ordinaryFile {
+                ltype = "normal"
             }
 
             var task = try await manager.addURL(
@@ -92,8 +158,8 @@ bridge.onDownloadMessage = { msg in
                 method: msg.method,
                 ltype: ltype
             )
-            if !msg.filename.isEmpty {
-                task.filename = msg.filename
+            if let capturedFilename, !capturedFilename.isEmpty {
+                applyFilename(capturedFilename, to: &task)
                 try? store.update(task)
             }
             try? await manager.start(taskID: task.id)
@@ -174,7 +240,9 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     let speed = progress?.bytesPerSecond ?? 0
     let status = progress?.status.rawValue ?? task.status.rawValue
     let phase = progress?.phase?.rawValue
-    let connections = progress?.currentConnections ?? task.connections
+    let connections = progress.map {
+        $0.currentConnections > 0 ? $0.currentConnections : task.connections
+    } ?? task.connections
     let segments = (progress?.segmentStates ?? []).map { segment in
         [
             "id": segment.id,
@@ -182,15 +250,23 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         ] as [String: Any]
     }
     let source = URL(string: task.pageURL ?? task.url)?.host
+    // For yt-dlp tasks hitTitle stores the selected formatID, not a title.
+    let displayTitle: String
+    if task.linkType.lowercased() == "ytdlp" {
+        displayTitle = task.pageTitle ?? task.filename
+    } else {
+        displayTitle = task.hitTitle ?? task.pageTitle ?? task.filename
+    }
     var row: [String: Any] = [
         "id": NSNumber(value: task.id),
         "filename": task.filename,
-        "title": task.hitTitle ?? task.pageTitle ?? task.filename,
+        "title": displayTitle,
         "url": task.url,
         "category": task.category.rawValue,
         "status": status,
         "fileSize": NSNumber(value: progress?.totalBytes ?? task.fileSize),
         "completedBytes": NSNumber(value: completed),
+        "progressFraction": progress?.fractionCompleted ?? (task.status == .complete ? 1 : 0),
         "bytesPerSecond": speed,
         "connections": connections,
         "segments": segments,
@@ -202,16 +278,16 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     return row
 }
 
-func snapshot() async -> [[String: Any]] {
+func snapshot(activeOnly: Bool = false) async -> [[String: Any]] {
     let tasks = (try? await manager.listTasks()) ?? []
-    let newest = tasks.sorted { $0.id > $1.id }
-    let active = newest.filter { $0.status == .downloading || $0.status == .paused || $0.status == .waiting }
-    var picked: [DownloadTask] = []
-    var seen = Set<Int64>()
-    for task in active + newest {
-        if seen.insert(task.id).inserted { picked.append(task) }
-        if picked.count >= 1000 { break }
+    let newest = tasks.sorted {
+        let left = $0.mostRecentActivity ?? .distantPast
+        let right = $1.mostRecentActivity ?? .distantPast
+        return left == right ? $0.id > $1.id : left > right
     }
+    let picked = activeOnly
+        ? newest.filter { $0.status == .downloading || $0.status == .waiting }
+        : newest
     var rows: [[String: Any]] = []
     for task in picked {
         let progress = await manager.progress(taskID: task.id)
@@ -262,7 +338,10 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 throw ManagerError.invalidURL
             }
             do {
-                let probe = try await YtDlpTool.probe(url: url)
+                // Reuse the engine's session cache so reopening the same page is
+                // instant and simultaneous UI/browser probes share one yt-dlp job.
+                let preflight = try await MediaPreflightStore.shared.result(for: url)
+                let probe = preflight.probe
                 let formats = probe.formats.map { f in
                     [
                         "id": f.id,
@@ -278,6 +357,7 @@ func handle(request: [String: Any], connection: NWConnection) async {
                     "ok": true,
                     "title": probe.title,
                     "duration": probe.durationSeconds ?? 0,
+                    "thumbnailURL": probe.thumbnailURL ?? "",
                     "formats": formats
                 ])
             } catch {
@@ -311,9 +391,10 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 task.hitTitle = formatID
                 try? store.update(task)
             }
-            if let customFilename = request["filename"] as? String, !customFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                task.filename = customFilename.trimmingCharacters(in: .whitespacesAndNewlines)
-                task.category = DownloadCategory.infer(filename: task.filename, mimeType: nil)
+            let explicitFilename = (request["filename"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedFilename = explicitFilename?.isEmpty == false ? explicitFilename : embeddedFilename(in: url)
+            if let resolvedFilename, !resolvedFilename.isEmpty {
+                applyFilename(resolvedFilename, to: &task, overrideDirectory: destinationDirectory)
                 try? store.update(task)
             }
             let autoStart = request["autoStart"] as? Bool ?? true
@@ -434,7 +515,7 @@ Task {
     while true {
         try? await Task.sleep(nanoseconds: 250_000_000)
         if await manager.hasActiveDownloads() {
-            broadcast(["op": "snapshot", "tasks": await snapshot()])
+            broadcast(["op": "snapshot", "partial": true, "tasks": await snapshot(activeOnly: true)])
         }
     }
 }
