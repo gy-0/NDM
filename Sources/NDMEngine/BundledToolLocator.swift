@@ -42,7 +42,9 @@ enum BundledToolLocator {
         roots.append(exeDir.appendingPathComponent("Tools", isDirectory: true))
         roots.append(exeDir.appendingPathComponent("../Tools", isDirectory: true))
         roots.append(exeDir.appendingPathComponent("../Resources/Tools", isDirectory: true))
+#if DEBUG
         roots.append(URL(fileURLWithPath: "/Users/gaoyuan/NDM/Vendor/Tools", isDirectory: true))
+#endif
         return roots
     }
 
@@ -60,20 +62,26 @@ enum BundledToolLocator {
                 if FileManager.default.isExecutableFile(atPath: path) { return path }
             }
         }
-        for path in developerFallbacks where FileManager.default.isExecutableFile(atPath: path) {
-            return path
-        }
-        let systemDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-        for dir in systemDirs {
-            for name in names {
-                let path = "\(dir)/\(name)"
-                if FileManager.default.isExecutableFile(atPath: path) { return path }
+        if allowDeveloperFallbacks {
+            for path in developerFallbacks where FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+            let systemDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            for dir in systemDirs {
+                for name in names {
+                    let path = "\(dir)/\(name)"
+                    if FileManager.default.isExecutableFile(atPath: path) { return path }
+                }
             }
         }
         return nil
     }
 
     private static var developerFallbacksEnabled: Bool {
+#if DEBUG
         true
+#else
+        false
+#endif
     }
 }
