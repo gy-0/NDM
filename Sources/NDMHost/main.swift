@@ -38,6 +38,17 @@ let manager = DownloadManager(
     }
 )
 
+enum HostRequestError: LocalizedError {
+    case collectionUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .collectionUnavailable:
+            return "没有可加入队列的合集条目，请重新解析后再试"
+        }
+    }
+}
+
 final class Hub: @unchecked Sendable {
     private let lock = NSLock()
     private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -292,6 +303,13 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     if let pageURL = task.pageURL { row["pageURL"] = pageURL }
     if let thumbnailURL = task.thumbnailURL { row["thumbnailURL"] = thumbnailURL }
     if let phase { row["phase"] = phase }
+    if let data = task.postData,
+       let options = try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: data) {
+        row["mediaOptions"] = [
+            "container": options.container.rawValue,
+            "subtitleLanguage": options.subtitleLanguage ?? ""
+        ] as [String: Any]
+    }
     if let errorText = task.errorText {
         row["errorText"] = errorText
         if let diagnostic = DownloadDiagnostic.fromStoredErrorText(errorText) {
@@ -304,6 +322,44 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         }
     }
     return row
+}
+
+/// Browser-session retries stay deliberately uncached, but they still need
+/// the same collection-aware preparation as the default MediaPreflightStore.
+/// This keeps a cookie-gated playlist from becoming a misleading single item.
+func prepareMediaWithBrowserSession(url: String, browser: String) async throws -> MediaPreflightResult {
+    let expanded = await ShortLinkExpander.expand(url)
+    let source: YtDlpCookieSource = .browser(browser)
+    let isCollection = MediaLinkClassifier.looksLikeCollectionURL(expanded.resolvedURL)
+    let collection = isCollection
+        ? try? await YtDlpTool.probeCollection(url: expanded.resolvedURL, cookieSource: source)
+        : nil
+
+    var mediaURL = expanded.resolvedURL
+    let probe: YtDlpProbe
+    if isCollection,
+       !MediaLinkClassifier.hasExplicitSingleMedia(expanded.resolvedURL),
+       let first = collection?.items.first {
+        mediaURL = first.url
+        probe = try await YtDlpTool.probe(url: first.url, cookieSource: source)
+    } else {
+        do {
+            probe = try await YtDlpTool.probe(url: expanded.resolvedURL, cookieSource: source)
+        } catch {
+            guard let first = collection?.items.first else { throw error }
+            mediaURL = first.url
+            probe = try await YtDlpTool.probe(url: first.url, cookieSource: source)
+        }
+    }
+
+    return MediaPreflightResult(
+        originalURL: expanded.originalURL,
+        resolvedURL: expanded.resolvedURL,
+        mediaURL: mediaURL,
+        didExpandShortLink: expanded.didExpand,
+        probe: probe,
+        collection: collection
+    )
 }
 
 func snapshot(activeOnly: Bool = false) async -> [[String: Any]] {
@@ -372,20 +428,20 @@ func handle(request: [String: Any], connection: NWConnection) async {
             }
             do {
                 let probe: YtDlpProbe
+                var prepared: MediaPreflightResult?
                 if let browser = request["cookieBrowser"] as? String,
                    ["chrome", "firefox", "safari", "edge", "brave", "chromium"].contains(browser) {
                     // Browser-cookie access is an explicit retry chosen by the user.
                     // Keep the default probe private and cacheable; never read a
                     // browser profile unless this request includes that choice.
-                    let expanded = await ShortLinkExpander.expand(url)
-                    probe = try await YtDlpTool.probe(
-                        url: expanded.resolvedURL,
-                        cookieSource: .browser(browser)
-                    )
+                    let preflight = try await prepareMediaWithBrowserSession(url: url, browser: browser)
+                    prepared = preflight
+                    probe = preflight.probe
                 } else {
                     // Reuse the engine's session cache so reopening the same page is
                     // instant and simultaneous UI/browser probes share one yt-dlp job.
                     let preflight = try await MediaPreflightStore.shared.result(for: url)
+                    prepared = preflight
                     probe = preflight.probe
                 }
                 let formats = probe.formats.map { f in
@@ -395,18 +451,39 @@ func handle(request: [String: Any], connection: NWConnection) async {
                         "height": f.height,
                         "approximateBytes": NSNumber(value: f.approximateBytes ?? 0),
                         "componentBytes": f.componentBytes.map { NSNumber(value: $0) },
+                        "compactApproximateBytes": NSNumber(value: f.compactApproximateBytes ?? f.approximateBytes ?? 0),
+                        "compactComponentBytes": (f.compactComponentBytes.isEmpty ? f.componentBytes : f.compactComponentBytes).map { NSNumber(value: $0) },
                         "containerHint": f.containerHint,
                         "isVideo": f.isVideo
                     ] as [String: Any]
                 }
-                sendJSON(connection, [
+                let subtitles = probe.subtitleTracks.map { track in
+                    [
+                        "code": track.code,
+                        "displayName": track.displayName,
+                        "isAutomatic": track.isAutomatic
+                    ] as [String: Any]
+                }
+                var response: [String: Any] = [
                     "id": id,
                     "ok": true,
                     "title": probe.title,
                     "duration": probe.durationSeconds ?? 0,
                     "thumbnailURL": probe.thumbnailURL ?? "",
-                    "formats": formats
-                ])
+                    "formats": formats,
+                    "subtitles": subtitles,
+                    "mediaURL": prepared?.mediaURL ?? url
+                ]
+                if let collection = prepared?.collection {
+                    response["collection"] = [
+                        "title": collection.title,
+                        "itemCount": collection.totalCount,
+                        "availableItemCount": collection.items.count,
+                        "isTruncated": collection.isTruncated,
+                        "thumbnailURL": collection.thumbnailURL ?? ""
+                    ] as [String: Any]
+                }
+                sendJSON(connection, response)
             } catch {
                 let errorKind: String
                 switch YtDlpTool.accessIssue(error: error) {
@@ -425,14 +502,34 @@ func handle(request: [String: Any], connection: NWConnection) async {
             guard let folderPath = request["folderPath"] as? String, !folderPath.isEmpty else {
                 throw ManagerError.invalidURL
             }
-            let finalBytes = request["finalBytes"] as? Int64
-                ?? (request["finalBytes"] as? Int).map(Int64.init)
-            let componentBytes = (request["componentBytes"] as? [NSNumber])?.map(\.int64Value) ?? []
-            let budget = StorageBudget.media(
-                sampleFinalBytes: finalBytes,
-                sampleComponentBytes: componentBytes,
-                sampleDurationSeconds: nil
-            )
+            let budget: StorageBudget
+            if request["collectionScope"] as? String == "all",
+               let url = request["url"] as? String,
+               let formatID = request["formatID"] as? String {
+                let prepared = try await MediaPreflightStore.shared.result(for: url)
+                guard let format = prepared.probe.formats.first(where: { $0.id == formatID }),
+                      let collection = prepared.collection else {
+                    throw ManagerError.invalidURL
+                }
+                let container: YtDlpContainerPreference = request["container"] as? String == "compactMKV"
+                    ? .compactMKV
+                    : .compatibleMP4
+                budget = StorageBudget.media(
+                    sampleFinalBytes: format.estimatedBytes(for: container),
+                    sampleComponentBytes: format.estimatedComponentBytes(for: container),
+                    sampleDurationSeconds: prepared.probe.durationSeconds,
+                    collectionDurations: collection.items.map(\.durationSeconds)
+                )
+            } else {
+                let finalBytes = request["finalBytes"] as? Int64
+                    ?? (request["finalBytes"] as? Int).map(Int64.init)
+                let componentBytes = (request["componentBytes"] as? [NSNumber])?.map(\.int64Value) ?? []
+                budget = StorageBudget.media(
+                    sampleFinalBytes: finalBytes,
+                    sampleComponentBytes: componentBytes,
+                    sampleDurationSeconds: nil
+                )
+            }
             let available = VolumeCapacity.availableBytes(at: URL(fileURLWithPath: folderPath, isDirectory: true))
             let confidence = StorageConfidence(budget: budget, availableBytes: available)
             let level: String
@@ -447,10 +544,85 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 "ok": true,
                 "level": level,
                 "peakBytes": NSNumber(value: budget.peakBytes ?? 0),
+                "finalBytes": NSNumber(value: budget.finalBytes ?? 0),
+                "isCollectionEstimate": budget.isCollectionEstimate,
                 "availableBytes": NSNumber(value: available ?? 0),
                 "projectedFreeBytes": NSNumber(value: confidence.projectedFreeBytes ?? 0),
                 "shortfallBytes": NSNumber(value: confidence.shortfallBytes)
             ])
+        case "addMedia":
+            guard let url = request["url"] as? String, !url.isEmpty,
+                  let requestedFormatID = request["formatID"] as? String, !requestedFormatID.isEmpty else {
+                throw ManagerError.invalidURL
+            }
+            let allowedBrowsers = ["chrome", "firefox", "safari", "edge", "brave", "chromium"]
+            let cookieBrowser = (request["cookieBrowser"] as? String).flatMap {
+                allowedBrowsers.contains($0) ? $0 : nil
+            }
+            let prepared: MediaPreflightResult
+            if let cookieBrowser {
+                prepared = try await prepareMediaWithBrowserSession(url: url, browser: cookieBrowser)
+            } else {
+                prepared = try await MediaPreflightStore.shared.result(for: url)
+            }
+            guard let format = prepared.probe.formats.first(where: { $0.id == requestedFormatID }) else {
+                throw ManagerError.invalidURL
+            }
+            let container: YtDlpContainerPreference = request["container"] as? String == "compactMKV"
+                ? .compactMKV
+                : .compatibleMP4
+            let subtitleLanguage = (request["subtitleLanguage"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let options = YtDlpDownloadOptions(
+                container: container,
+                subtitleLanguage: subtitleLanguage,
+                cookieSource: cookieBrowser.map { .browser($0) }
+            )
+            let destination = (request["folderPath"] as? String).flatMap {
+                $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true)
+            }
+            let scope = request["collectionScope"] as? String ?? "current"
+            if scope == "all" {
+                guard let collection = prepared.collection, !collection.items.isEmpty else {
+                    throw HostRequestError.collectionUnavailable
+                }
+                let tasks = try await manager.enqueueYtDlpCollection(
+                    collection.items,
+                    formatID: format.collectionSelector(for: container),
+                    options: options,
+                    collectionURL: prepared.resolvedURL,
+                    collectionTitle: collection.title,
+                    collectionThumbnailURL: collection.thumbnailURL,
+                    estimatedSampleBytes: format.estimatedBytes(for: container),
+                    estimatedSampleComponentBytes: format.estimatedComponentBytes(for: container),
+                    sampleDurationSeconds: prepared.probe.durationSeconds,
+                    destinationDirectory: destination
+                )
+                var rows: [[String: Any]] = []
+                rows.reserveCapacity(tasks.count)
+                for task in tasks {
+                    rows.append(taskJSON(task, progress: await manager.progress(taskID: task.id)))
+                }
+                guard let first = rows.first else { throw HostRequestError.collectionUnavailable }
+                sendJSON(connection, ["id": id, "ok": true, "task": first, "tasks": rows])
+                broadcast(["op": "snapshot", "tasks": await snapshot()])
+            } else {
+                let preferredFilename = request["filename"] as? String
+                let task = try await manager.startYtDlp(
+                    url: prepared.mediaURL,
+                    formatID: format.selector(for: container),
+                    options: options,
+                    pageTitle: prepared.probe.title,
+                    pageURL: prepared.resolvedURL,
+                    thumbnailURL: prepared.probe.thumbnailURL ?? prepared.collection?.thumbnailURL,
+                    estimatedBytes: format.estimatedBytes(for: container),
+                    estimatedComponentBytes: format.estimatedComponentBytes(for: container),
+                    preferredFilename: preferredFilename,
+                    destinationDirectory: destination
+                )
+                let row = taskJSON(task, progress: await manager.progress(taskID: task.id))
+                sendJSON(connection, ["id": id, "ok": true, "task": row, "tasks": [row]])
+                broadcast(["op": "snapshot", "tasks": await snapshot()])
+            }
         case "add":
             guard let url = request["url"] as? String, !url.isEmpty else {
                 throw ManagerError.invalidURL

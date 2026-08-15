@@ -266,7 +266,7 @@ public enum MediaLinkClassifier {
         return path.contains("playlist") || path.contains("collection") || path.contains("series")
     }
 
-    static func hasExplicitSingleMedia(_ raw: String) -> Bool {
+    public static func hasExplicitSingleMedia(_ raw: String) -> Bool {
         guard let url = URL(string: raw), let host = url.host?.lowercased() else { return false }
         let path = url.path.lowercased()
         let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []

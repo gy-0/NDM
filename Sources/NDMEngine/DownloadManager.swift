@@ -281,6 +281,8 @@ public actor DownloadManager {
         formatID: String,
         options: YtDlpDownloadOptions = .init(),
         pageTitle: String?,
+        pageURL: String? = nil,
+        thumbnailURL: String? = nil,
         estimatedBytes: Int64?,
         estimatedComponentBytes: [Int64] = [],
         preferredFilename: String?,
@@ -322,7 +324,9 @@ public actor DownloadManager {
             lastTry: Date(),
             firstTry: Date(),
             resumable: false,
+            pageURL: pageURL,
             pageTitle: pageTitle,
+            thumbnailURL: thumbnailURL,
             hitTitle: formatID,
             mimeType: options.container.mimeType,
             postData: try? JSONEncoder().encode(options),
@@ -369,6 +373,7 @@ public actor DownloadManager {
         options: YtDlpDownloadOptions = .init(),
         collectionURL: String,
         collectionTitle: String?,
+        collectionThumbnailURL: String? = nil,
         estimatedSampleBytes: Int64? = nil,
         estimatedSampleComponentBytes: [Int64] = [],
         sampleDurationSeconds: Double? = nil,
@@ -386,6 +391,7 @@ public actor DownloadManager {
             options: options,
             collectionURL: collectionURL,
             collectionTitle: collectionTitle,
+            collectionThumbnailURL: collectionThumbnailURL,
             destinationDirectory: destinationDirectory
         )
         if runningTasks.isEmpty, let first = inserted.first {
@@ -420,6 +426,7 @@ public actor DownloadManager {
         options: YtDlpDownloadOptions = .init(),
         collectionURL: String,
         collectionTitle: String?,
+        collectionThumbnailURL: String? = nil,
         destinationDirectory: URL? = nil
     ) throws -> [DownloadTask] {
         guard !items.isEmpty else { return [] }
@@ -450,6 +457,7 @@ public actor DownloadManager {
                 resumable: false,
                 pageURL: collectionURL,
                 pageTitle: item.title.isEmpty ? collectionTitle : item.title,
+                thumbnailURL: item.thumbnailURL ?? collectionThumbnailURL,
                 hitTitle: formatID,
                 mimeType: options.container.mimeType,
                 postData: try? JSONEncoder().encode(options),
