@@ -347,10 +347,23 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 throw ManagerError.invalidURL
             }
             do {
-                // Reuse the engine's session cache so reopening the same page is
-                // instant and simultaneous UI/browser probes share one yt-dlp job.
-                let preflight = try await MediaPreflightStore.shared.result(for: url)
-                let probe = preflight.probe
+                let probe: YtDlpProbe
+                if let browser = request["cookieBrowser"] as? String,
+                   ["chrome", "firefox", "safari", "edge", "brave", "chromium"].contains(browser) {
+                    // Browser-cookie access is an explicit retry chosen by the user.
+                    // Keep the default probe private and cacheable; never read a
+                    // browser profile unless this request includes that choice.
+                    let expanded = await ShortLinkExpander.expand(url)
+                    probe = try await YtDlpTool.probe(
+                        url: expanded.resolvedURL,
+                        cookieSource: .browser(browser)
+                    )
+                } else {
+                    // Reuse the engine's session cache so reopening the same page is
+                    // instant and simultaneous UI/browser probes share one yt-dlp job.
+                    let preflight = try await MediaPreflightStore.shared.result(for: url)
+                    probe = preflight.probe
+                }
                 let formats = probe.formats.map { f in
                     [
                         "id": f.id,
@@ -370,7 +383,18 @@ func handle(request: [String: Any], connection: NWConnection) async {
                     "formats": formats
                 ])
             } catch {
-                sendJSON(connection, ["id": id, "ok": false, "error": error.localizedDescription])
+                let errorKind: String
+                switch YtDlpTool.accessIssue(error: error) {
+                case .browserSessionRequired: errorKind = "browserSessionRequired"
+                case .browserDataUnavailable: errorKind = "browserDataUnavailable"
+                case nil: errorKind = "probeFailed"
+                }
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": false,
+                    "error": error.localizedDescription,
+                    "errorKind": errorKind
+                ])
             }
         case "add":
             guard let url = request["url"] as? String, !url.isEmpty else {
