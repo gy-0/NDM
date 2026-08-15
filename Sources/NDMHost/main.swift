@@ -7,7 +7,13 @@ import NDMBridge
 let port = NWEndpoint.Port(rawValue: UInt16(ProcessInfo.processInfo.environment["NDM_HOST_PORT"] ?? "51874") ?? 51874)!
 let queue = DispatchQueue(label: "ndm.host")
 
-let support = DownloadStore.defaultSupportDirectory
+let environment = ProcessInfo.processInfo.environment
+let support: URL
+if let override = environment["NDM_SUPPORT_DIR"], !override.isEmpty {
+    support = URL(fileURLWithPath: override, isDirectory: true)
+} else {
+    support = DownloadStore.defaultSupportDirectory
+}
 let store: DownloadStore
 do {
     store = try DownloadStore(directory: support)
@@ -18,6 +24,9 @@ do {
 }
 
 var currentSettings = SettingsStore.load()
+if let rawBridgePort = environment["NDM_BRIDGE_PORT"], let bridgePort = UInt16(rawBridgePort) {
+    currentSettings.bridgePort = bridgePort
+}
 
 let manager = DownloadManager(
     store: store,
