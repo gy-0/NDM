@@ -385,6 +385,14 @@ func snapshot(activeOnly: Bool = false) async -> [[String: Any]] {
     return rows
 }
 
+func duplicateJSON(for urlStrings: [String]) async -> [String: Any]? {
+    let tasks = (try? await manager.listTasks()) ?? []
+    guard let match = DuplicateDownloadMatcher.bestMatch(for: urlStrings, in: tasks) else {
+        return nil
+    }
+    return taskJSON(match, progress: await manager.progress(taskID: match.id))
+}
+
 func handle(request: [String: Any], connection: NWConnection) async {
     let id = request["id"] as? Int ?? 0
     let op = request["op"] as? String ?? ""
@@ -394,6 +402,15 @@ func handle(request: [String: Any], connection: NWConnection) async {
             sendJSON(connection, ["id": id, "ok": true, "engine": "NDMHost"])
         case "list":
             sendJSON(connection, ["id": id, "ok": true, "tasks": await snapshot()])
+        case "findDuplicate":
+            let urls = (request["urls"] as? [String])
+                ?? (request["url"] as? String).map { [$0] }
+                ?? []
+            var response: [String: Any] = ["id": id, "ok": true]
+            if let duplicate = await duplicateJSON(for: urls) {
+                response["duplicate"] = duplicate
+            }
+            sendJSON(connection, response)
         case "getSettings":
             sendJSON(connection, ["id": id, "ok": true, "settings": settingsJSON(currentSettings)])
         case "updateSettings":
@@ -482,6 +499,20 @@ func handle(request: [String: Any], connection: NWConnection) async {
                         "isTruncated": collection.isTruncated,
                         "thumbnailURL": collection.thumbnailURL ?? ""
                     ] as [String: Any]
+                }
+                if let prepared {
+                    var currentURLs = [prepared.mediaURL]
+                    if prepared.collection == nil
+                        || MediaLinkClassifier.hasExplicitSingleMedia(prepared.resolvedURL) {
+                        currentURLs.append(prepared.resolvedURL)
+                    }
+                    if let duplicate = await duplicateJSON(for: currentURLs) {
+                        response["duplicateCurrent"] = duplicate
+                    }
+                    if prepared.collection != nil,
+                       let duplicate = await duplicateJSON(for: [prepared.resolvedURL]) {
+                        response["duplicateCollection"] = duplicate
+                    }
                 }
                 sendJSON(connection, response)
             } catch {
