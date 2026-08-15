@@ -58,7 +58,8 @@ public final class DownloadStore: @unchecked Sendable {
             errortext TEXT,
             urla TEXT,
             postdata TEXT,
-            folderpath TEXT
+            folderpath TEXT,
+            thumbnailurl TEXT
         );
         CREATE TABLE IF NOT EXISTS auths (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +85,9 @@ public final class DownloadStore: @unchecked Sendable {
         if !hasColumn("startat", in: "downloads") {
             try exec("ALTER TABLE downloads ADD COLUMN startat NUMERIC;")
         }
+        if !hasColumn("thumbnailurl", in: "downloads") {
+            try exec("ALTER TABLE downloads ADD COLUMN thumbnailurl TEXT;")
+        }
     }
 
     public func allDownloads() throws -> [DownloadTask] {
@@ -94,7 +98,7 @@ public final class DownloadStore: @unchecked Sendable {
             id, url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath, deliverynote, startat
+            errortext, urla, postdata, folderpath, deliverynote, startat, thumbnailurl
         FROM downloads
         ORDER BY
             MAX(
@@ -129,8 +133,8 @@ public final class DownloadStore: @unchecked Sendable {
             url, method, filename, ltype, filesize, category, status,
             bandwidthlimit, connections, lasttry, firsttry, completedat,
             useragent, resumable, pageurl, pagetitle, hittitle, mimetype,
-            errortext, urla, postdata, folderpath, deliverynote, startat
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            errortext, urla, postdata, folderpath, deliverynote, startat, thumbnailurl
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -154,7 +158,7 @@ public final class DownloadStore: @unchecked Sendable {
             url=?, method=?, filename=?, ltype=?, filesize=?, category=?, status=?,
             bandwidthlimit=?, connections=?, lasttry=?, firsttry=?, completedat=?,
             useragent=?, resumable=?, pageurl=?, pagetitle=?, hittitle=?, mimetype=?,
-            errortext=?, urla=?, postdata=?, folderpath=?, deliverynote=?, startat=?
+            errortext=?, urla=?, postdata=?, folderpath=?, deliverynote=?, startat=?, thumbnailurl=?
         WHERE id=?;
         """
         var stmt: OpaquePointer?
@@ -163,7 +167,7 @@ public final class DownloadStore: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bind(task, to: stmt, includingID: false)
-        sqlite3_bind_int64(stmt, 25, task.id)
+        sqlite3_bind_int64(stmt, 26, task.id)
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.stepFailed }
         try replaceHeadersUnlocked(id: task.id, headers: task.headers)
     }
@@ -345,6 +349,7 @@ public final class DownloadStore: @unchecked Sendable {
         text(22, task.folderPath)
         text(23, task.deliveryNote)
         if let d = task.startAt { sqlite3_bind_double(stmt, 24, d.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 24) }
+        text(25, task.thumbnailURL)
         _ = includingID
     }
 
@@ -379,6 +384,7 @@ public final class DownloadStore: @unchecked Sendable {
             resumable: sqlite3_column_int(stmt, 14) != 0,
             pageURL: colText(15),
             pageTitle: colText(16),
+            thumbnailURL: colText(25),
             hitTitle: colText(17),
             mimeType: colText(18),
             errorText: colText(19),

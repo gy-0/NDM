@@ -10,6 +10,7 @@ final class DownloadStoreTests: XCTestCase {
         let store = try DownloadStore(directory: directory)
         let first = try store.insert(DownloadTask(
             url: "https://example.com/first",
+            thumbnailURL: "https://img.example.com/first.webp",
             headers: ["Accept: application/json", "X-Request-ID: one"]
         ))
         let second = try store.insert(DownloadTask(url: "https://example.com/second"))
@@ -26,6 +27,7 @@ final class DownloadStoreTests: XCTestCase {
             [],
             ["Accept: application/json", "X-Request-ID: one"],
         ])
+        XCTAssertEqual(downloads.last?.thumbnailURL, "https://img.example.com/first.webp")
     }
 
     func testAllDownloadsOrdersByLatestRetryOrCompletionActivity() throws {

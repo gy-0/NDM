@@ -25,6 +25,9 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
     public var resumable: Bool
     public var pageURL: String?
     public var pageTitle: String?
+    /// Remote preview image discovered during media probing. The desktop shell
+    /// may prefer a local Quick Look thumbnail once the file exists.
+    public var thumbnailURL: String?
     public var hitTitle: String?
     public var mimeType: String?
     public var errorText: String?
@@ -55,6 +58,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         resumable: Bool = false,
         pageURL: String? = nil,
         pageTitle: String? = nil,
+        thumbnailURL: String? = nil,
         hitTitle: String? = nil,
         mimeType: String? = nil,
         errorText: String? = nil,
@@ -82,6 +86,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         self.resumable = resumable
         self.pageURL = pageURL
         self.pageTitle = pageTitle
+        self.thumbnailURL = thumbnailURL
         self.hitTitle = hitTitle
         self.mimeType = mimeType
         self.errorText = errorText

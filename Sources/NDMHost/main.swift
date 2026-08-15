@@ -282,6 +282,7 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         "folderPath": task.folderPath ?? ""
     ]
     if let source { row["source"] = source }
+    if let thumbnailURL = task.thumbnailURL { row["thumbnailURL"] = thumbnailURL }
     if let phase { row["phase"] = phase }
     if let errorText = task.errorText { row["errorText"] = errorText }
     return row
@@ -408,6 +409,7 @@ func handle(request: [String: Any], connection: NWConnection) async {
             let connections = request["connections"] as? Int
             let pageURL = request["pageURL"] as? String
             let pageTitle = request["pageTitle"] as? String
+            let thumbnailURL = request["thumbnailURL"] as? String
             let formatID = request["formatID"] as? String
             var ltype = request["ltype"] as? String ?? "normal"
             if formatID != nil || MediaLinkClassifier.looksLikeMediaPage(url) || url.contains("youtube.com") || url.contains("youtu.be") || url.contains("bilibili.com") {
@@ -425,6 +427,10 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 ltype: ltype,
                 destinationDirectory: destinationDirectory
             )
+            if let thumbnailURL, URL(string: thumbnailURL)?.scheme?.lowercased() == "https" {
+                task.thumbnailURL = thumbnailURL
+                try? store.update(task)
+            }
             if let formatID, !formatID.isEmpty {
                 task.hitTitle = formatID
                 try? store.update(task)
