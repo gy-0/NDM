@@ -394,6 +394,7 @@ func handle(request: [String: Any], connection: NWConnection) async {
                         "label": f.label,
                         "height": f.height,
                         "approximateBytes": NSNumber(value: f.approximateBytes ?? 0),
+                        "componentBytes": f.componentBytes.map { NSNumber(value: $0) },
                         "containerHint": f.containerHint,
                         "isVideo": f.isVideo
                     ] as [String: Any]
@@ -420,6 +421,36 @@ func handle(request: [String: Any], connection: NWConnection) async {
                     "errorKind": errorKind
                 ])
             }
+        case "checkStorage":
+            guard let folderPath = request["folderPath"] as? String, !folderPath.isEmpty else {
+                throw ManagerError.invalidURL
+            }
+            let finalBytes = request["finalBytes"] as? Int64
+                ?? (request["finalBytes"] as? Int).map(Int64.init)
+            let componentBytes = (request["componentBytes"] as? [NSNumber])?.map(\.int64Value) ?? []
+            let budget = StorageBudget.media(
+                sampleFinalBytes: finalBytes,
+                sampleComponentBytes: componentBytes,
+                sampleDurationSeconds: nil
+            )
+            let available = VolumeCapacity.availableBytes(at: URL(fileURLWithPath: folderPath, isDirectory: true))
+            let confidence = StorageConfidence(budget: budget, availableBytes: available)
+            let level: String
+            switch confidence.level {
+            case .unknown: level = "unknown"
+            case .comfortable: level = "comfortable"
+            case .tight: level = "tight"
+            case .insufficient: level = "insufficient"
+            }
+            sendJSON(connection, [
+                "id": id,
+                "ok": true,
+                "level": level,
+                "peakBytes": NSNumber(value: budget.peakBytes ?? 0),
+                "availableBytes": NSNumber(value: available ?? 0),
+                "projectedFreeBytes": NSNumber(value: confidence.projectedFreeBytes ?? 0),
+                "shortfallBytes": NSNumber(value: confidence.shortfallBytes)
+            ])
         case "add":
             guard let url = request["url"] as? String, !url.isEmpty else {
                 throw ManagerError.invalidURL
