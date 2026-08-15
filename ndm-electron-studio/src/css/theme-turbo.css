@@ -1,0 +1,84 @@
+/**
+ * Theme 3: Turbo Matrix (极速多线程机能风 / Cyber Matrix)
+ * Inspired by High-Performance Cyber Dashboards & Multi-Connection Chunk Matrix
+ * Characteristics: Deep pitch obsidian matrix, Neon Emerald (#10b981) & Electric Cyan,
+ * full 32-chunk visualizer grid, glowing speedometer gauge, cyber typography.
+ */
+
+body.theme-turbo {
+  --bg-main: #050807;
+  --bg-header: rgba(5, 10, 8, 0.9);
+  --bg-sidebar: rgba(4, 8, 6, 0.95);
+  --bg-drawer: rgba(6, 12, 9, 0.98);
+  --bg-modal: #0a110d;
+  
+  --bg-card: #09120e;
+  --bg-task-card: #080e0a;
+  --bg-task-hover: #0e1a13;
+  --bg-tabs-wrapper: #060b08;
+  --bg-tab-active: #102419;
+  --bg-nav-hover: #0c1710;
+  --bg-nav-active: #10281b;
+  --bg-control: #0c1711;
+  --bg-control-hover: #14281c;
+  --bg-input: #040805;
+  --bg-badge: #0e1e14;
+  --bg-icon-box: #0b1c12;
+  --bg-track: #0e1f15;
+  --bg-banner: rgba(16, 185, 129, 0.1);
+
+  --text-primary: #ecfdf5;
+  --text-secondary: #6ee7b7;
+  --text-muted: #059669;
+  --text-banner: #34d399;
+
+  --border-subtle: rgba(16, 185, 129, 0.12);
+  --border-card: rgba(16, 185, 129, 0.18);
+  --border-card-hover: rgba(16, 185, 129, 0.45);
+  --border-task-card: rgba(16, 185, 129, 0.12);
+  --border-active-tab: rgba(16, 185, 129, 0.35);
+  --border-input: rgba(16, 185, 129, 0.25);
+  --border-modal: rgba(16, 185, 129, 0.3);
+  --border-banner: rgba(16, 185, 129, 0.3);
+
+  --accent-color: #10b981;
+  --accent-hover: #059669;
+  --accent-subtle: rgba(16, 185, 129, 0.15);
+  --accent-border: rgba(16, 185, 129, 0.4);
+  --accent-glow: rgba(16, 185, 129, 0.45);
+
+  --gradient-progress: linear-gradient(90deg, #06b6d4, #10b981);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.7);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.6);
+  --shadow-tab: 0 2px 8px rgba(16, 185, 129, 0.15);
+  --shadow-modal: rgba(0, 0, 0, 0.9);
+}
+
+/* Turbo Matrix Specific Enhancements */
+body.theme-turbo .task-card {
+  border-left: 3px solid var(--accent-color);
+  border-radius: 6px;
+}
+
+body.theme-turbo .gauge-card {
+  display: flex !important;
+}
+
+body.theme-turbo .dashboard-stats-grid {
+  grid-template-columns: 1.3fr 1.1fr 1fr;
+}
+
+body.theme-turbo .mini-chunk-matrix {
+  opacity: 1;
+  height: 4px;
+}
+
+body.theme-turbo .chunk-fill {
+  box-shadow: 0 0 6px #10b981;
+}
+
+body.theme-turbo .brand-name {
+  color: #10b981;
+  text-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+}

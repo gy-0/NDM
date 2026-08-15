@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NDM Next-Gen Studio</title>
+  
+  <!-- Base Core Styles -->
+  <link rel="stylesheet" href="css/base.css">
+  <!-- Theme Variations -->
+  <link rel="stylesheet" href="css/theme-linear.css">
+  <link rel="stylesheet" href="css/theme-glass.css">
+  <link rel="stylesheet" href="css/theme-turbo.css">
+  <link rel="stylesheet" href="css/theme-bento.css">
+</head>
+<body class="theme-linear">
+  <div id="app" class="app-layout">
+    
+    <!-- Top macOS Drag Region & Studio Theme Toolbar -->
+    <header class="app-header">
+      <div class="drag-zone">
+        <div class="traffic-light-placeholder"></div>
+        <div class="app-brand-title">
+          <span class="brand-logo">⚡</span>
+          <span class="brand-name">NDM</span>
+          <span class="brand-tag">Studio v2.0</span>
+        </div>
+      </div>
+
+      <!-- Live Interactive Theme Selector -->
+      <div class="theme-switcher-wrapper">
+        <span class="switcher-label">设计风格:</span>
+        <div class="theme-tabs">
+          <button class="theme-btn active" data-theme="linear" title="Raycast/Linear 极简暗黑工程风 (Alt+1)">
+            <span class="icon">⚡</span> Linear Dark
+          </button>
+          <button class="theme-btn" data-theme="glass" title="macOS Sequoia / VisionOS 拟物极光毛玻璃 (Alt+2)">
+            <span class="icon">💎</span> Liquid Glass
+          </button>
+          <button class="theme-btn" data-theme="turbo" title="多线程极速机能风 · 赛博矩阵 (Alt+3)">
+            <span class="icon">🚀</span> Turbo Matrix
+          </button>
+          <button class="theme-btn" data-theme="bento" title="包豪斯温润多维卡片风 (Alt+4)">
+            <span class="icon">🍱</span> Bento Studio
+          </button>
+        </div>
+      </div>
+
+      <div class="header-right-tools">
+        <button id="sound-toggle-btn" class="icon-tool-btn" title="触感音效">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        </button>
+        <button id="btn-new-task" class="btn-primary-action" title="新建任务 (⌘N)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>新建下载</span>
+          <kbd class="shortcut-tag">⌘N</kbd>
+        </button>
+      </div>
+    </header>
+
+    <!-- App Body Grid -->
+    <div class="app-body">
+      
+      <!-- Sidebar -->
+      <aside class="app-sidebar">
+        <div class="sidebar-section">
+          <div class="section-title">任务状态</div>
+          <nav class="sidebar-nav">
+            <button class="nav-btn nav-filter-btn active" data-filter="all">
+              <span class="nav-icon">📁</span>
+              <span class="nav-label">全部任务</span>
+              <span class="badge-count" id="count-all">0</span>
+            </button>
+            <button class="nav-btn nav-filter-btn" data-filter="downloading">
+              <span class="nav-icon">⚡</span>
+              <span class="nav-label">正在下载</span>
+              <span class="badge-count highlight" id="count-downloading">0</span>
+            </button>
+            <button class="nav-btn nav-filter-btn" data-filter="completed">
+              <span class="nav-icon">✅</span>
+              <span class="nav-label">已完成</span>
+              <span class="badge-count" id="count-completed">0</span>
+            </button>
+            <button class="nav-btn nav-filter-btn" data-filter="paused">
+              <span class="nav-icon">⏸</span>
+              <span class="nav-label">已暂停</span>
+              <span class="badge-count" id="count-paused">0</span>
+            </button>
+          </nav>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-title">分类筛选</div>
+          <nav class="sidebar-nav">
+            <button class="nav-btn nav-type-btn" data-type="video">
+              <span class="nav-icon">🎬</span>
+              <span class="nav-label">视频媒体</span>
+            </button>
+            <button class="nav-btn nav-type-btn" data-type="audio">
+              <span class="nav-icon">🎵</span>
+              <span class="nav-label">无损音乐</span>
+            </button>
+            <button class="nav-btn nav-type-btn" data-type="archives">
+              <span class="nav-icon">📦</span>
+              <span class="nav-label">压缩归档</span>
+            </button>
+            <button class="nav-btn nav-type-btn" data-type="apps">
+              <span class="nav-icon">💿</span>
+              <span class="nav-label">应用安装包</span>
+            </button>
+            <button class="nav-btn nav-type-btn" data-type="documents">
+              <span class="nav-icon">📄</span>
+              <span class="nav-label">文档报告</span>
+            </button>
+          </nav>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="speed-limiter-box">
+            <div class="limiter-title">
+              <span>带宽速率模式</span>
+              <span class="limiter-icon">🌐</span>
+            </div>
+            <div class="speed-limit-pills">
+              <button class="speed-limit-pill active" data-limit="0">极速</button>
+              <button class="speed-limit-pill" data-limit="50">50M</button>
+              <button class="speed-limit-pill" data-limit="10">10M</button>
+              <button class="speed-limit-pill" data-limit="2">2M</button>
+            </div>
+          </div>
+
+          <div class="storage-meter-box">
+            <div class="meter-info">
+              <span>Macintosh HD</span>
+              <span>384 GB 可用</span>
+            </div>
+            <div class="meter-track">
+              <div class="meter-bar" style="width: 62%;"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Stage -->
+      <main class="app-main-stage">
+        
+        <!-- Live Design Info Pill -->
+        <div class="theme-info-banner" id="theme-info-badge">
+          <strong>⚡ Linear Dark</strong> · <span>Raycast / Linear 极简暗黑工程美学 · 极致信息密度与微发光</span>
+        </div>
+
+        <!-- Dynamic Overview Dashboard Cards -->
+        <div class="dashboard-stats-grid">
+          <div class="stat-card speed-card">
+            <div class="stat-card-header">
+              <span class="stat-label">实时下载总吞吐</span>
+              <span class="pulse-indicator"></span>
+            </div>
+            <div class="stat-value-row" id="stat-global-speed">
+              <span class="stat-num">0.0</span> <span class="stat-unit">MB/s</span>
+            </div>
+            <div class="sparkline-container">
+              <canvas id="global-speed-canvas" class="speed-sparkline-canvas"></canvas>
+            </div>
+          </div>
+
+          <!-- Turbo Gauge Card (Visible primarily in Turbo & Bento themes) -->
+          <div class="stat-card gauge-card">
+            <div class="stat-card-header">
+              <span class="stat-label">并发多线程池</span>
+              <span class="stat-badge">Turbo Boost</span>
+            </div>
+            <div class="gauge-content">
+              <canvas id="cyber-gauge-canvas" class="cyber-gauge-canvas"></canvas>
+              <div class="gauge-meta">
+                <div class="thread-count-large"><span id="stat-active-threads">0</span> <span class="sub">Threads</span></div>
+                <div class="sub-label">智能分块多路连接</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-card summary-card">
+            <div class="stat-card-header">
+              <span class="stat-label">今日传输统计</span>
+              <span class="stat-icon">📊</span>
+            </div>
+            <div class="summary-details">
+              <div class="sum-item">
+                <span class="sum-k">今日完成</span>
+                <span class="sum-v">14.8 GB</span>
+              </div>
+              <div class="sum-item">
+                <span class="sum-k">连接引擎</span>
+                <span class="sum-v color-accent">HTTP/2 多路复用</span>
+              </div>
+              <div class="sum-item">
+                <span class="sum-k">平均延迟</span>
+                <span class="sum-v">12 ms</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div class="tasks-toolbar">
+          <div class="search-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input type="text" id="search-input" placeholder="搜索文件名、服务器域名 (⌘F)...">
+          </div>
+
+          <div class="toolbar-actions">
+            <button id="btn-pause-all" class="tool-btn" title="全部暂停">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect width="4" height="16" x="6" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/></svg>
+              <span>全部暂停</span>
+            </button>
+            <button id="btn-resume-all" class="tool-btn" title="全部开始">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <span>全部开始</span>
+            </button>
+
+            <div class="view-switch-group">
+              <button id="btn-view-list" class="view-btn active" title="列表视图">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              </button>
+              <button id="btn-view-grid" class="view-btn" title="卡片视图">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Task List Container -->
+        <div id="task-list-container" class="task-container list-mode">
+          <!-- Rendered dynamically by app.js -->
+        </div>
+
+      </main>
+
+      <!-- Task Detail Drawer (Slide-in) -->
+      <aside id="task-detail-drawer" class="task-drawer">
+        <div class="drawer-header">
+          <div class="drawer-title-group">
+            <h3>任务详情 & 多线程分块分析</h3>
+            <span class="drawer-subtitle">实时分段协议遥测</span>
+          </div>
+          <button id="drawer-close-btn" class="drawer-close-btn" title="关闭详情 (Esc)">✕</button>
+        </div>
+
+        <div class="drawer-content">
+          <div class="drawer-file-summary">
+            <h4 id="drawer-file-name" class="break-all">File_Name.dmg</h4>
+            <div class="drawer-tags">
+              <span id="drawer-file-domain" class="tag">domain.com</span>
+              <span id="drawer-file-size" class="tag">0 B / 0 B</span>
+            </div>
+          </div>
+
+          <!-- Multi-Thread Chunk Map Visualizer -->
+          <div class="drawer-section">
+            <div class="section-label">
+              <span>⚡ 32-路连接分块矩阵 (Chunk Heatmap)</span>
+              <span id="drawer-file-speed" class="speed-indicator">0 MB/s</span>
+            </div>
+            <div id="drawer-chunk-grid" class="chunk-heatmap-grid">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <!-- Task Speed Curve -->
+          <div class="drawer-section">
+            <div class="section-label">任务独立速率波形</div>
+            <div class="drawer-chart-box">
+              <canvas id="drawer-sparkline-canvas" class="drawer-canvas"></canvas>
+            </div>
+          </div>
+
+          <!-- Protocol & Server Inspection -->
+          <div class="drawer-section">
+            <div class="section-label">网络与系统信息</div>
+            <div class="meta-table">
+              <div class="table-row">
+                <span class="table-k">分段支持</span>
+                <span class="table-v green">Accept-Ranges: bytes</span>
+              </div>
+              <div class="table-row">
+                <span class="table-k">保存路径</span>
+                <span id="drawer-file-path" class="table-v break-all">/Users/Downloads</span>
+              </div>
+              <div class="table-row">
+                <span class="table-k">校验哈希</span>
+                <span id="drawer-file-hash" class="table-v mono break-all">sha256:...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- New Download Modal Dialog -->
+    <div id="modal-new-download" class="modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="modal-icon">⚡</span>
+            <h3>新建下载任务</h3>
+          </div>
+        </div>
+
+        <form id="form-new-download">
+          <div class="form-group">
+            <label for="input-url">下载资源 URL</label>
+            <div class="input-with-action">
+              <input type="url" id="input-url" placeholder="https://..." required>
+            </div>
+          </div>
+
+          <!-- Fast Sample Tags -->
+          <div class="sample-tags-row">
+            <span class="tag-hint">快速测试:</span>
+            <span class="sample-url-tag" data-name="TailwindCSS_Masterclass_4K.mp4" data-cat="video" data-url="https://video.cdn.com/tailwind_4k.mp4">🎬 4K 演示视频</span>
+            <span class="sample-url-tag" data-name="PyTorch_CUDA_2.5_macOS.zip" data-cat="archives" data-url="https://download.pytorch.org/whl/pytorch-2.5-arm64.zip">📦 PyTorch 归档</span>
+            <span class="sample-url-tag" data-name="DeepSeek_Coder_33B_Instruct.gguf" data-cat="apps" data-url="https://huggingface.co/models/deepseek-33b.gguf">🤖 AI 模型权重</span>
+          </div>
+
+          <div class="form-row-2">
+            <div class="form-group">
+              <label for="input-filename">自定义文件名 (可选)</label>
+              <input type="text" id="input-filename" placeholder="自动从 URL 解析">
+            </div>
+            <div class="form-group">
+              <label for="select-category">文件分类</label>
+              <select id="select-category">
+                <option value="video">视频媒体 (Video)</option>
+                <option value="audio">无损音乐 (Audio)</option>
+                <option value="archives">压缩归档 (Archives)</option>
+                <option value="apps">应用程序 (Apps)</option>
+                <option value="documents">文档书籍 (Documents)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="slider-label-row">
+              <label for="input-threads">并发下载线程数</label>
+              <span id="threads-val" class="highlight-val">16 线程</span>
+            </div>
+            <input type="range" id="input-threads" min="1" max="32" value="16" oninput="document.getElementById('threads-val').textContent = this.value + ' 线程'">
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" id="btn-modal-cancel" class="btn-secondary">取消</button>
+            <button type="submit" class="btn-primary">开始高速下载</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/audio.js"></script>
+  <script src="js/mock-engine.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

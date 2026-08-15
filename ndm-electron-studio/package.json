@@ -1,0 +1,20 @@
+{
+  "name": "ndm-electron-studio",
+  "version": "1.0.0",
+  "description": "NDM Next-Gen Download Manager Design Studio & Prototype",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "download-manager",
+    "electron",
+    "ui-design",
+    "prototype"
+  ],
+  "author": "NDM Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}

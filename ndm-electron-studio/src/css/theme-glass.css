@@ -1,0 +1,75 @@
+/**
+ * Theme 2: Liquid Glass (macOS Sequoia / VisionOS 苹果液态毛玻璃与拟物微光)
+ * Characteristics: Ultra-thin frosted glass, high-specular edge reflections,
+ * liquid cyan/violet gradients, organic spring physics, luminous cards.
+ */
+
+body.theme-glass {
+  --bg-main: radial-gradient(circle at 10% 20%, #151a30 0%, #0b0e1b 60%, #060810 100%);
+  --bg-header: rgba(18, 24, 46, 0.45);
+  --bg-sidebar: rgba(15, 20, 38, 0.55);
+  --bg-drawer: rgba(15, 20, 42, 0.75);
+  --bg-modal: rgba(20, 28, 55, 0.8);
+  
+  --bg-card: rgba(255, 255, 255, 0.04);
+  --bg-task-card: rgba(255, 255, 255, 0.035);
+  --bg-task-hover: rgba(255, 255, 255, 0.07);
+  --bg-tabs-wrapper: rgba(0, 0, 0, 0.25);
+  --bg-tab-active: rgba(255, 255, 255, 0.12);
+  --bg-nav-hover: rgba(255, 255, 255, 0.06);
+  --bg-nav-active: rgba(56, 189, 248, 0.15);
+  --bg-control: rgba(255, 255, 255, 0.05);
+  --bg-control-hover: rgba(255, 255, 255, 0.1);
+  --bg-input: rgba(0, 0, 0, 0.35);
+  --bg-badge: rgba(255, 255, 255, 0.06);
+  --bg-icon-box: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(129, 140, 248, 0.1));
+  --bg-track: rgba(255, 255, 255, 0.06);
+  --bg-banner: rgba(56, 189, 248, 0.1);
+
+  --text-primary: #ffffff;
+  --text-secondary: #cbd5e1;
+  --text-muted: #818cf8;
+  --text-banner: #7dd3fc;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-card: rgba(255, 255, 255, 0.1);
+  --border-card-hover: rgba(56, 189, 248, 0.35);
+  --border-task-card: rgba(255, 255, 255, 0.08);
+  --border-active-tab: rgba(255, 255, 255, 0.2);
+  --border-input: rgba(255, 255, 255, 0.12);
+  --border-modal: rgba(255, 255, 255, 0.18);
+  --border-banner: rgba(56, 189, 248, 0.25);
+
+  --accent-color: #38bdf8;
+  --accent-hover: #0ea5e9;
+  --accent-subtle: rgba(56, 189, 248, 0.15);
+  --accent-border: rgba(56, 189, 248, 0.35);
+  --accent-glow: rgba(56, 189, 248, 0.4);
+
+  --gradient-progress: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
+
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --shadow-tab: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-modal: rgba(0, 0, 0, 0.6);
+}
+
+/* Glass-Specific Accents */
+body.theme-glass .task-card {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 14px;
+}
+
+body.theme-glass .stat-card {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+body.theme-glass .gauge-card {
+  display: none;
+}
+
+body.theme-glass .dashboard-stats-grid {
+  grid-template-columns: 1.8fr 1fr;
+}

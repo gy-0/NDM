@@ -1,0 +1,75 @@
+/**
+ * Theme 4: Bento Studio (包豪斯温润多维卡片工作室)
+ * Inspired by Apple Bento Layouts & Craft Design
+ * Characteristics: Rounded bento cards, indigo/violet accent,
+ * calm slate surfaces, balanced typography, elegant card hierarchy.
+ */
+
+body.theme-bento {
+  --bg-main: #0f1117;
+  --bg-header: rgba(18, 21, 29, 0.9);
+  --bg-sidebar: rgba(15, 17, 23, 0.95);
+  --bg-drawer: rgba(18, 21, 31, 0.98);
+  --bg-modal: #161922;
+  
+  --bg-card: #161923;
+  --bg-task-card: #141720;
+  --bg-task-hover: #1b202c;
+  --bg-tabs-wrapper: #12141c;
+  --bg-tab-active: #242938;
+  --bg-nav-hover: #1b1e29;
+  --bg-nav-active: #242938;
+  --bg-control: #1a1e2a;
+  --bg-control-hover: #262c3d;
+  --bg-input: #0f1118;
+  --bg-badge: #202534;
+  --bg-icon-box: #1d2232;
+  --bg-track: #1e2230;
+  --bg-banner: rgba(99, 102, 241, 0.1);
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-banner: #a5b4fc;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-card: rgba(255, 255, 255, 0.08);
+  --border-card-hover: rgba(99, 102, 241, 0.3);
+  --border-task-card: rgba(255, 255, 255, 0.07);
+  --border-active-tab: rgba(255, 255, 255, 0.15);
+  --border-input: rgba(255, 255, 255, 0.12);
+  --border-modal: rgba(255, 255, 255, 0.14);
+  --border-banner: rgba(99, 102, 241, 0.25);
+
+  --accent-color: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-subtle: rgba(99, 102, 241, 0.15);
+  --accent-border: rgba(99, 102, 241, 0.35);
+  --accent-glow: rgba(99, 102, 241, 0.35);
+
+  --gradient-progress: linear-gradient(90deg, #6366f1, #a855f7);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-tab: 0 2px 6px rgba(0, 0, 0, 0.2);
+  --shadow-modal: rgba(0, 0, 0, 0.7);
+}
+
+/* Bento-Specific Styles */
+body.theme-bento .task-card {
+  border-radius: 16px;
+  padding: 14px 18px;
+}
+
+body.theme-bento .stat-card {
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+
+body.theme-bento .gauge-card {
+  display: flex !important;
+}
+
+body.theme-bento .dashboard-stats-grid {
+  grid-template-columns: 1.3fr 1.1fr 1fr;
+}
