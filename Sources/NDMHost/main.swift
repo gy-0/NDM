@@ -309,6 +309,14 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
             "container": options.container.rawValue,
             "subtitleLanguage": options.subtitleLanguage ?? ""
         ] as [String: Any]
+        if let collectionID = options.collectionID, !collectionID.isEmpty {
+            row["collection"] = [
+                "id": collectionID,
+                "title": options.collectionTitle ?? "",
+                "index": options.collectionIndex ?? 0,
+                "count": options.collectionCount ?? 0
+            ] as [String: Any]
+        }
     }
     if let errorText = task.errorText {
         row["errorText"] = errorText
@@ -718,6 +726,25 @@ func handle(request: [String: Any], connection: NWConnection) async {
             }
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "pauseCollection":
+            guard let collectionID = request["collectionID"] as? String, !collectionID.isEmpty else {
+                throw ManagerError.taskNotFound
+            }
+            let tasks = ((try? await manager.listTasks()) ?? []).filter { task in
+                guard let data = task.postData,
+                      let options = try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: data) else { return false }
+                return options.collectionID == collectionID
+            }
+            guard !tasks.isEmpty else { throw ManagerError.taskNotFound }
+            for var task in tasks where task.status == .waiting || task.status == .incomplete {
+                task.status = .paused
+                try? await manager.updateTask(task)
+            }
+            for task in tasks where task.status == .downloading {
+                await manager.pause(taskID: task.id)
+            }
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "resume":
             guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
                 throw ManagerError.taskNotFound
@@ -729,6 +756,31 @@ func handle(request: [String: Any], connection: NWConnection) async {
             let tasks = (try? await manager.listTasks()) ?? []
             for task in tasks where task.status == .paused || task.status == .waiting || task.status == .incomplete {
                 try? await manager.start(taskID: task.id)
+            }
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "resumeCollection":
+            guard let collectionID = request["collectionID"] as? String, !collectionID.isEmpty else {
+                throw ManagerError.taskNotFound
+            }
+            var tasks = ((try? await manager.listTasks()) ?? []).filter { task in
+                guard let data = task.postData,
+                      let options = try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: data) else { return false }
+                return options.collectionID == collectionID
+            }
+            guard !tasks.isEmpty else { throw ManagerError.taskNotFound }
+            for index in tasks.indices where tasks[index].status == .paused
+                || tasks[index].status == .incomplete
+                || tasks[index].status == .error {
+                tasks[index].status = .waiting
+                tasks[index].errorText = nil
+                try? await manager.updateTask(tasks[index])
+            }
+            if !(await manager.hasActiveDownloads()),
+               let first = tasks
+                .filter({ $0.status == .waiting })
+                .min(by: { $0.id < $1.id }) {
+                try? await manager.start(taskID: first.id)
             }
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])

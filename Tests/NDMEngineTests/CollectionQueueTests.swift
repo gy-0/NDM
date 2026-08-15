@@ -39,12 +39,15 @@ final class CollectionQueueTests: XCTestCase {
         XCTAssertTrue(tasks.allSatisfy { $0.status == .waiting })
         XCTAssertTrue(tasks.allSatisfy { $0.pageURL == "https://example.com/playlist/1" })
         XCTAssertTrue(tasks.allSatisfy { $0.connections == 16 })
-        XCTAssertEqual(
-            tasks.first?.postData.flatMap {
-                try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: $0)
-            },
-            options
-        )
+        let persistedOptions = tasks.compactMap { task in
+            task.postData.flatMap { try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: $0) }
+        }
+        XCTAssertEqual(persistedOptions.map(\.container), [.compatibleMP4, .compatibleMP4])
+        XCTAssertEqual(persistedOptions.map(\.subtitleLanguage), ["zh-Hans", "zh-Hans"])
+        XCTAssertEqual(Set(persistedOptions.compactMap(\.collectionID)).count, 1)
+        XCTAssertEqual(persistedOptions.map(\.collectionTitle), ["Course", "Course"])
+        XCTAssertEqual(persistedOptions.map(\.collectionIndex), [1, 2])
+        XCTAssertEqual(persistedOptions.map(\.collectionCount), [2, 2])
     }
 
     func testQueueCandidateOnlySelectsCollectionBackedMediaTask() {
@@ -56,9 +59,10 @@ final class CollectionQueueTests: XCTestCase {
         )
         let singleVideo = DownloadTask(
             id: 2,
-            url: "https://example.com/watch/1",
+            url: "https://www.youtube.com/watch?v=single123",
             linkType: "ytdlp",
-            status: .waiting
+            status: .waiting,
+            pageURL: "https://www.youtube.com/watch?v=single123&list=PL123"
         )
         let collectionVideo = DownloadTask(
             id: 3,

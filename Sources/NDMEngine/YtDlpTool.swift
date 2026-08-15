@@ -192,15 +192,30 @@ public struct YtDlpDownloadOptions: Codable, Sendable, Equatable {
     public var container: YtDlpContainerPreference
     public var subtitleLanguage: String?
     public var cookieSource: YtDlpCookieSource?
+    /// Present only for entries created by one collection enqueue operation.
+    /// A generated batch id deliberately keeps two explicit downloads of the
+    /// same playlist separate in the desktop presentation.
+    public var collectionID: String?
+    public var collectionTitle: String?
+    public var collectionIndex: Int?
+    public var collectionCount: Int?
 
     public init(
         container: YtDlpContainerPreference = .compatibleMP4,
         subtitleLanguage: String? = nil,
-        cookieSource: YtDlpCookieSource? = nil
+        cookieSource: YtDlpCookieSource? = nil,
+        collectionID: String? = nil,
+        collectionTitle: String? = nil,
+        collectionIndex: Int? = nil,
+        collectionCount: Int? = nil
     ) {
         self.container = container
         self.subtitleLanguage = subtitleLanguage
         self.cookieSource = cookieSource
+        self.collectionID = collectionID
+        self.collectionTitle = collectionTitle
+        self.collectionIndex = collectionIndex
+        self.collectionCount = collectionCount
     }
 }
 

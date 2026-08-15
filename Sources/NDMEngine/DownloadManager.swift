@@ -431,6 +431,7 @@ public actor DownloadManager {
     ) throws -> [DownloadTask] {
         guard !items.isEmpty else { return [] }
         let width = max(2, String(items.count).count)
+        let collectionID = UUID().uuidString.lowercased()
         var inserted: [DownloadTask] = []
         inserted.reserveCapacity(items.count)
 
@@ -445,6 +446,11 @@ public actor DownloadManager {
                 category: .video,
                 organizeByCategory: settings.useCategoryFolders
             )
+            var itemOptions = options
+            itemOptions.collectionID = collectionID
+            itemOptions.collectionTitle = collectionTitle
+            itemOptions.collectionIndex = offset + 1
+            itemOptions.collectionCount = items.count
             var task = DownloadTask(
                 url: item.url,
                 filename: "\(stem).\(ext)",
@@ -460,7 +466,7 @@ public actor DownloadManager {
                 thumbnailURL: item.thumbnailURL ?? collectionThumbnailURL,
                 hitTitle: formatID,
                 mimeType: options.container.mimeType,
-                postData: try? JSONEncoder().encode(options),
+                postData: try? JSONEncoder().encode(itemOptions),
                 folderPath: dest.path
             )
             task = try store.insert(task)
@@ -1162,19 +1168,39 @@ public actor DownloadManager {
             .filter {
                 $0.status == .waiting
                     && $0.linkType.lowercased() == "ytdlp"
-                    && ($0.pageURL?.isEmpty == false)
+                    && isCollectionEntry($0)
             }
             .min { $0.id < $1.id }
     }
 
+    private static func isCollectionEntry(_ task: DownloadTask) -> Bool {
+        if let data = task.postData,
+           let options = try? JSONDecoder().decode(YtDlpDownloadOptions.self, from: data),
+           options.collectionID?.isEmpty == false {
+            return true
+        }
+        // Keep pre-metadata queues recoverable without letting an ordinary
+        // single-video task with a pageURL masquerade as a playlist entry.
+        guard let pageURL = task.pageURL else { return false }
+        return MediaLinkClassifier.looksLikeCollectionURL(pageURL)
+            && !MediaLinkClassifier.hasExplicitSingleMedia(pageURL)
+    }
+
     public func pause(taskID: Int64) async {
+        let runningTask = runningTasks[taskID]
         // Soft-stop sockets; partial `seg.xN` kept for resume on next start().
         await engines[taskID]?.pause()
         await hlsEngines[taskID]?.pause()
         await ftpEngines[taskID]?.pause()
         await mkvEngines[taskID]?.pause()
         await ytDlpEngines[taskID]?.pause()
-        // Let the engine task finish with EngineError.paused and update DB.
+        // Do not acknowledge the command while the persisted row still says
+        // `downloading`. The host broadcasts immediately after this returns; if
+        // we return early, the renderer can remain stuck on a stale active state
+        // even though the engine has already stopped.
+        if let runningTask {
+            await runningTask.value
+        }
     }
 
     /// A06 — apply new connection count to a running/paused task (persisted + engine replan).
