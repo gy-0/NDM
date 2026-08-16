@@ -136,7 +136,7 @@ if let persisted = try? store.allDownloads() {
 }
 
 Task {
-    await manager.setCompletionHandler { _ in
+    await manager.setTaskSettledHandler { _ in
         Task {
             broadcast(["op": "snapshot", "tasks": await snapshot()])
         }

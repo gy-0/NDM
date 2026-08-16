@@ -33,6 +33,9 @@ public actor DownloadManager {
     private var presentationSpeeds: [Int64: Double] = [:]
     /// Optional UI hook when a download completes successfully.
     public var onTaskCompleted: (@Sendable (DownloadTask) -> Void)?
+    /// Fires after any engine-backed task persists a terminal state. Unlike
+    /// `onTaskCompleted`, this includes fast failures, pauses, and cancellations.
+    public var onTaskSettled: (@Sendable (DownloadTask) -> Void)?
     /// Optional UI hook when settings change (for ShowPanel push).
     public var onSettingsChanged: (@Sendable (AppSettings) -> Void)?
 
@@ -67,6 +70,10 @@ public actor DownloadManager {
 
     public func setCompletionHandler(_ handler: (@Sendable (DownloadTask) -> Void)?) {
         onTaskCompleted = handler
+    }
+
+    public func setTaskSettledHandler(_ handler: (@Sendable (DownloadTask) -> Void)?) {
+        onTaskSettled = handler
     }
 
     public func setSettingsChangedHandler(_ handler: (@Sendable (AppSettings) -> Void)?) {
@@ -272,6 +279,7 @@ public actor DownloadManager {
         )
         task = try store.insert(task)
         onTaskCompleted?(task)
+        onTaskSettled?(task)
         return task
     }
 
@@ -905,6 +913,7 @@ public actor DownloadManager {
             // still be found by what it is called.
             indexMetadata(for: done)
             onComplete?(done)
+            onTaskSettled?(done)
         } catch {
             var failed = (try? store.allDownloads().first { $0.id == taskID }) ?? task
             if case .paused = error as? EngineError {
@@ -922,6 +931,7 @@ public actor DownloadManager {
                 failed.errorText = error.localizedDescription
             }
             try? store.update(failed)
+            onTaskSettled?(failed)
         }
         clearRunning(taskID)
     }

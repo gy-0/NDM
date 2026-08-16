@@ -256,6 +256,12 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         let settings = AppSettings(downloadDirectory: dest, maxConnections: 4, useCategoryFolders: false)
         let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
         let task = try await manager.addURL(server.baseURL.absoluteString, connections: 4)
+        let settled = expectation(description: "terminal failure is reported")
+        await manager.setTaskSettledHandler { terminal in
+            if terminal.id == task.id, terminal.status == .error {
+                settled.fulfill()
+            }
+        }
 
         do {
             try await manager.startAndWait(taskID: task.id)
@@ -267,6 +273,7 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         let tasks = try await manager.listTasks()
         let failed = try XCTUnwrap(tasks.first { $0.id == task.id })
         XCTAssertEqual(failed.status, .error)
+        await fulfillment(of: [settled], timeout: 2)
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: dest.appendingPathComponent(failed.filename).path
         ))
