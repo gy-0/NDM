@@ -180,7 +180,8 @@ public enum SegmentFileFormat {
         activeConnections: Int,
         remainingBytesBySegment: [Int64],
         bytesPerSecond: Double,
-        connectionSetupSeconds: Double = 0.75
+        connectionSetupSeconds: Double = 0.75,
+        useSetupPayback: Bool = true
     ) -> TailRebalancePlan? {
         let target = max(1, min(targetConnections, 32))
         guard target > 1,
@@ -196,11 +197,13 @@ public enum SegmentFileFormat {
         // sockets. Cancelling a small 4-worker round after the first completion
         // is disproportionately expensive, so pools below 16 wait until half
         // their workers are idle before considering a new round.
-        let idleThreshold = max(
-            1,
-            target >= 16 ? target * 3 / 4 : target / 2
-        )
-        guard activeConnections <= idleThreshold else { return nil }
+        if useSetupPayback {
+            let idleThreshold = max(
+                1,
+                target >= 16 ? target * 3 / 4 : target / 2
+            )
+            guard activeConnections <= idleThreshold else { return nil }
+        }
 
         let totalRemaining = positive.reduce(Int64(0), +)
         let largestRemaining = positive.max() ?? 0
@@ -208,29 +211,36 @@ public enum SegmentFileFormat {
         let speed = max(0, bytesPerSecond)
         let estimatedSeconds = speed > 0 ? Double(totalRemaining) / speed : nil
 
-        // Cancelling healthy requests and reconnecting cannot win if the whole
-        // tail is already expected to finish within roughly two setup cycles.
-        if let estimatedSeconds, estimatedSeconds <= setupSeconds * 2 {
-            return nil
-        }
+        let minimumUsefulBytes: Int64
+        if useSetupPayback {
+            // Cancelling healthy requests and reconnecting cannot win if the whole
+            // tail is already expected to finish within roughly two setup cycles.
+            if let estimatedSeconds, estimatedSeconds <= setupSeconds * 2 {
+                return nil
+            }
 
-        // Without a stable speed sample, require at least 1 MiB per worker.
-        // This deliberately favors finishing the current tail over speculative
-        // reconnects during the first sub-second progress window.
-        let conservativeUnknownSpeedFloor = minSegmentBytes * 4
-        let perActiveConnectionSpeed = speed > 0
-            ? speed / Double(max(1, activeConnections))
-            : 0
-        let speedPaybackBytes = Int64(
-            min(
-                Double(Int64.max / 2),
-                ceil(perActiveConnectionSpeed * setupSeconds * 2)
+            // Without a stable speed sample, require at least 1 MiB per worker.
+            // This deliberately favors finishing the current tail over speculative
+            // reconnects during the first sub-second progress window.
+            let conservativeUnknownSpeedFloor = minSegmentBytes * 4
+            let perActiveConnectionSpeed = speed > 0
+                ? speed / Double(max(1, activeConnections))
+                : 0
+            let speedPaybackBytes = Int64(
+                min(
+                    Double(Int64.max / 2),
+                    ceil(perActiveConnectionSpeed * setupSeconds * 2)
+                )
             )
-        )
-        let minimumUsefulBytes = max(
-            conservativeUnknownSpeedFloor,
-            speedPaybackBytes
-        )
+            minimumUsefulBytes = max(
+                conservativeUnknownSpeedFloor,
+                speedPaybackBytes
+            )
+        } else {
+            // Original NDM: steal any leftover larger than the 0x32000 parent
+            // split threshold. Do not refuse because TLS setup might not pay back.
+            minimumUsefulBytes = originalHTTPSplitThresholdBytes
+        }
         guard minimumUsefulBytes > 0 else { return nil }
 
         // Aggregate bytes alone are not enough to choose a worker count. For

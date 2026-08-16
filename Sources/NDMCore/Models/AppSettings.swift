@@ -94,9 +94,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var customAccentHex: String?
     /// UI language: System (default) / English / 简体中文.
     public var languageMode: AppLanguageMode
-    /// Smart connection tuning: start low, double while it pays off, explain why.
-    /// Optional for backward-compatible decoding of older settings files —
-    /// read through `smartConnectionsEnabled` (default on).
+    /// Smart connection tuning: start low, double while it pays off.
+    /// Optional for older settings files. Default off — original NDM filled
+    /// MaxAllowedConnection as soon as Range was confirmed.
     public var smartConnections: Bool?
     /// First-run onboarding shown? Optional for backward-compatible decoding.
     public var onboardingCompleted: Bool?
@@ -128,7 +128,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// settings toggle); it never defaults on.
     public var installerAutoAcceptLicense: Bool?
 
-    public var smartConnectionsEnabled: Bool { smartConnections ?? true }
+    public var smartConnectionsEnabled: Bool { smartConnections ?? false }
     public var needsOnboarding: Bool { !(onboardingCompleted ?? false) }
     public var clipboardWatchEnabled: Bool { clipboardWatch ?? true }
     public var mediaQualityPreference: MediaQualityPreference { mediaQuality ?? .highest }
@@ -156,7 +156,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
 
     public init(
         downloadDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0],
-        maxConnections: Int = 8,
+        maxConnections: Int = 32,
         downloadAllAtOnce: Bool = true,
         showCompletionDialog: Bool = true,
         launchAtLogin: Bool = false,
@@ -177,7 +177,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         accentTheme: AccentTheme = .classicBlue,
         customAccentHex: String? = nil,
         languageMode: AppLanguageMode = .system,
-        smartConnections: Bool? = true,
+        smartConnections: Bool? = false,
         mediaQuality: MediaQualityPreference? = nil,
         transcriptionScope: TranscriptionScope? = nil,
         transcriptionLanguage: String? = nil,

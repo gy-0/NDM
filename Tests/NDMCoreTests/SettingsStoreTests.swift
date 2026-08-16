@@ -7,7 +7,8 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(settings.appearanceMode, .system)
         XCTAssertEqual(settings.accentTheme, .classicBlue)
         XCTAssertEqual(settings.languageMode, .system)
-        XCTAssertTrue(settings.smartConnectionsEnabled)
+        XCTAssertFalse(settings.smartConnectionsEnabled)
+        XCTAssertEqual(settings.maxConnections, 32)
         XCTAssertTrue(settings.clipboardWatchEnabled)
         XCTAssertFalse(settings.useCategoryFolders)
         XCTAssertEqual(

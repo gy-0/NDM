@@ -75,7 +75,7 @@ public enum SettingsStore {
             accentTheme: AccentTheme(rawValue: disk.accentTheme ?? "") ?? .classicBlue,
             customAccentHex: disk.customAccentHex,
             languageMode: AppLanguageMode(rawValue: disk.languageMode ?? "") ?? .system,
-            smartConnections: disk.smartConnections ?? true
+            smartConnections: disk.smartConnections ?? false
         )
         settings.onboardingCompleted = disk.onboardingCompleted
         settings.clipboardWatch = disk.clipboardWatch

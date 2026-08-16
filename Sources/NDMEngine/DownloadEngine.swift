@@ -246,9 +246,10 @@ public actor DownloadEngine {
                 if let existing = try loadSegmentsForResume(total: total) {
                     segments = existing
                 } else if currentConnections > 1 {
-                    // The original starts Range 0-, lets socket 1 make progress, then socket 2
-                    // steals half of the remaining tail. A bounded bootstrap makes that timing
-                    // dependent boundary deterministic and append-safe under URLSession.
+                    // The original starts Range 0-, lets socket 1 make progress, then
+                    // fills MaxAllowedConnection. URLSession cannot mid-flight shorten
+                    // socket 1, so a short closed prefix stands in for that first
+                    // socket; the remaining pool opens immediately afterwards.
                     let bootstrapBytes = dynamicBootstrapBytes(total: total)
                     let bootstrap = SegmentRecord(
                         order: 0,
@@ -872,7 +873,8 @@ public actor DownloadEngine {
                     } else if allowTailRebalance, let plan = tailRebalancePlan(
                         segments,
                         activeConnections: active,
-                        targetConnections: maxConcurrent
+                        targetConnections: maxConcurrent,
+                        useSetupPayback: autoTune
                     ) {
                         pendingTailConnectionTarget = plan.desiredConnections
                         let eta = plan.estimatedSecondsRemaining.map {
@@ -910,7 +912,8 @@ public actor DownloadEngine {
     private func tailRebalancePlan(
         _ segments: [SegmentRecord],
         activeConnections: Int,
-        targetConnections: Int
+        targetConnections: Int,
+        useSetupPayback: Bool
     ) -> TailRebalancePlan? {
         let remaining = segments.map { segment in
             let have = SegmentFileFormat.existingByteCount(for: segment, in: workDirectory)
@@ -921,7 +924,8 @@ public actor DownloadEngine {
             activeConnections: activeConnections,
             remainingBytesBySegment: remaining,
             bytesPerSecond: progress.bytesPerSecond,
-            connectionSetupSeconds: estimatedConnectionSetupSeconds
+            connectionSetupSeconds: estimatedConnectionSetupSeconds,
+            useSetupPayback: useSetupPayback
         )
     }
 

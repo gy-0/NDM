@@ -215,7 +215,12 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
 
         let store = try DownloadStore(directory: support)
-        let settings = AppSettings(downloadDirectory: dest, maxConnections: 4, useCategoryFolders: false)
+        let settings = AppSettings(
+            downloadDirectory: dest,
+            maxConnections: 4,
+            useCategoryFolders: false,
+            smartConnections: true
+        )
         let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
         let task = try await manager.addURL(server.baseURL.absoluteString, connections: 4)
 
@@ -285,7 +290,12 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
 
         let store = try DownloadStore(directory: support)
-        let settings = AppSettings(downloadDirectory: dest, maxConnections: 2, useCategoryFolders: false)
+        let settings = AppSettings(
+            downloadDirectory: dest,
+            maxConnections: 2,
+            useCategoryFolders: false,
+            smartConnections: true
+        )
         let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
         let task = try await manager.addURL(server.baseURL.absoluteString, connections: 2)
 
@@ -343,7 +353,7 @@ final class DownloadEngineIntegrationTests: XCTestCase {
             downloadDirectory: dest,
             maxConnections: 4,
             useCategoryFolders: false,
-            smartConnections: false
+            smartConnections: true
         )
         let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
         let task = try await manager.addURL(server.baseURL.absoluteString, connections: 4)
@@ -407,7 +417,6 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         let log = try String(contentsOf: work.appendingPathComponent("LogFile.txt"), encoding: .utf8)
         XCTAssertTrue(log.contains("active of 4; targeting 4"))
         XCTAssertTrue(log.contains("ActiveTarget = 4"))
-        XCTAssertTrue(log.contains("setup "))
 
         let tasks = try await manager.listTasks()
         let done = try XCTUnwrap(tasks.first { $0.id == task.id })
@@ -422,10 +431,10 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         )
     }
 
-    func testAutomaticTailSplitCollapsesAllRejectedChildrenWithoutLooping() async throws {
+    func testAutomaticTailSplitStopsAfterFirstRejectedChildWithoutLooping() async throws {
         try await assertAutomaticTail416Recovery(
             failureLimit: .max,
-            minimumRollbackCount: 2
+            minimumRollbackCount: 1
         )
     }
 

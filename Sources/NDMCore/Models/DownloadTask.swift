@@ -49,7 +49,7 @@ public struct DownloadTask: Identifiable, Codable, Sendable, Equatable {
         category: DownloadCategory = .misc,
         status: DownloadStatus = .incomplete,
         bandwidthLimit: Int64 = 0,
-        connections: Int = 8,
+        connections: Int = 32,
         lastTry: Date? = nil,
         firstTry: Date? = nil,
         completedAt: Date? = nil,
