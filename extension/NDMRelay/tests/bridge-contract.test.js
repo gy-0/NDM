@@ -24,7 +24,14 @@ test("extension targets the NDM-specific bridge contract", () => {
 test("NDM Relay has its own name and Yuan Gao author identity", () => {
     assert.equal(Object.hasOwn(manifest, "key"), false);
     assert.equal(Object.hasOwn(manifest, "homepage_url"), false);
-    assert.equal(manifest.name, "NDM Relay");
+    // The name is localized; both locales must still resolve to NDM Relay.
+    assert.equal(manifest.name, "__MSG_extName__");
+    for (const locale of ["zh_CN", "en"]) {
+        const messages = JSON.parse(
+            fs.readFileSync(path.join(extensionRoot, "_locales", locale, "messages.json"), "utf8")
+        );
+        assert.equal(messages.extName.message, "NDM Relay");
+    }
     assert.equal(manifest.author, "Yuan Gao");
     assert.doesNotMatch(background, /Download by NeatDownloadManager/);
     assert.doesNotMatch(

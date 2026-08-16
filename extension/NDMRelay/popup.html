@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <span class="wordmark">NDM</span>
+        <span class="sub" data-i18n="popupRelay">Relay</span>
+      </div>
+      <div class="status" id="status" data-state="checking">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="status-text" id="status-text" data-i18n="popupChecking">正在检查…</span>
+      </div>
+    </header>
+
+    <section class="card" id="media-card" hidden>
+      <div class="card-main">
+        <div class="card-title" data-i18n="popupMediaTitle">本页检测到媒体</div>
+        <div class="card-sub" id="media-count-line"></div>
+      </div>
+      <button type="button" class="btn btn-accent" id="show-panel" data-i18n="popupShowControls">显示下载控件</button>
+    </section>
+
+    <section class="card row">
+      <div class="card-main">
+        <div class="card-title" data-i18n="popupCatcherTitle">接管浏览器下载</div>
+        <div class="card-sub" data-i18n="popupCatcherSub">普通下载自动交给 NDM 加速</div>
+      </div>
+      <button type="button" class="switch" id="catcher" role="switch" aria-checked="true" aria-label="接管浏览器下载">
+        <span class="knob"></span>
+      </button>
+    </section>
+
+    <section class="hint" id="offline-hint" hidden>
+      <span data-i18n="popupOfflineHint">NDM 应用未在运行。打开应用后,下载会自动接力。</span>
+    </section>
+
+    <footer class="foot">
+      <span data-i18n="popupContextHint">右键任意链接或图片 → “使用 NDM 下载”</span>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -218,20 +218,23 @@ function V() {
     this.ga = 1;
     this.forwardedDownloadURLs = Object.create(null);
     this.blockedDownloadURLs = Object.create(null);
+    // Items waiting for the bridge socket. A single slot used to drop every
+    // request but the last one when NDM was still launching.
+    this.pendingRelayQueue = [];
     this.C = !1;
     chrome.contextMenus.removeAll(function() {
         chrome.contextMenus.create({
-            title: "Download with NDM",
+            title: chrome.i18n.getMessage("ctxDownload") || "Download with NDM",
             id: "NDM_CtxMenu",
             contexts: ["link", "image"]
         });
         chrome.contextMenus.create({
-            title: "Show video download controls",
+            title: chrome.i18n.getMessage("ctxShowPanel") || "Show video download controls",
             id: "NDM_ShowMediaPanel",
             contexts: ["action"]
         });
         chrome.contextMenus.create({
-            title: "Catch browser downloads",
+            title: chrome.i18n.getMessage("ctxToggleCatcher") || "Catch browser downloads",
             id: "NDM_ToggleCatcher",
             contexts: ["action"],
             type: "checkbox",
@@ -263,7 +266,7 @@ function V() {
     chrome.action.onClicked.addListener(this.N);
     this.v = !0;
     chrome.action.setBadgeBackgroundColor({
-        color: "#FF3333"
+        color: "#D08A3A"
     });
     var c = this;
     this.F = !0;
@@ -281,7 +284,9 @@ var W = V.prototype;
 W.updateActionState = function() {
     var a = this.v ? "" : "Off";
     chrome.action.setTitle({
-        title: this.v ? "Show video download controls" : "Show video download controls\r\nDownload catcher is off"
+        title: this.v
+            ? (chrome.i18n.getMessage("actionTitleOn") || "NDM Relay")
+            : (chrome.i18n.getMessage("actionTitleOff") || "NDM Relay\r\nDownload catcher is off")
     });
     chrome.action.setBadgeText({
         text: a
@@ -386,9 +391,11 @@ W.I = async function(a) {
             });
             f.ok && (a["8"] = a["8"] || f.headers.get("content-type") || "", a["7"] = a["7"] || f.headers.get("Content-Length") || 0, b += "8:" + a["8"] + "\r\n", b += "7:" + a["7"] + "\r\n", this.G.send(b), this.i = null)
         } catch (f) {}
-    } else this.i = a, this.M()
+    } else this.pendingRelayQueue.push(a), this.M()
 };
 W.M = function() {
+    // Never stack sockets: CONNECTING/OPEN already serves the queue.
+    if (this.G && (0 == this.G.readyState || 1 == this.G.readyState)) return;
     var a = new WebSocket("ws://127.0.0.1:51873/ndm/download", "ndm.open.v1");
     a.onopen = this.fa;
     a.onclose = this.ca;
@@ -398,11 +405,15 @@ W.M = function() {
 };
 W.fa = function() {
     this.D = !0;
+    var a = this.pendingRelayQueue;
+    this.pendingRelayQueue = [];
+    for (var b = 0; b < a.length; b++) this.I(a[b]);
     this.i && this.I(this.i)
 };
 W.ca = function() {
     this.D = !1;
-    this.i = null
+    this.i = null;
+    this.pendingRelayQueue = []
 };
 W.ea = function(a) {
     a = a.data;
@@ -412,7 +423,7 @@ W.ea = function(a) {
 };
 W.da = function() {
     this.D = !1;
-    if (this.i) {
+    if (this.i || this.pendingRelayQueue.length) {
         var a = this;
         chrome.tabs.query({
             currentWindow: !0,
@@ -421,7 +432,8 @@ W.da = function() {
             b && b.length && (b = a.g[[b[0].id, 0]]) && b.postMessage([15])
         })
     }
-    this.i = null
+    this.i = null;
+    this.pendingRelayQueue = []
 };
 W.J = function(a) {
     if (this.i) {
@@ -971,4 +983,29 @@ W.ha = function(a) {
         c;
     for (c in b) b[c].postMessage(a)
 };
-new V;
+var NDM_BG = new V;
+
+// Popup contract: fresh per-tab state, catcher toggle, and media panel reveal.
+chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+    if (!message || "object" != typeof message) return;
+    if ("relay:getState" == message.type) {
+        var mediaCount = 0;
+        for (var key in NDM_BG.H) {
+            var port = NDM_BG.H[key];
+            port && port.tabId == message.tabId && (mediaCount += Number(port.mediaCount || 0))
+        }
+        sendResponse({
+            catcherEnabled: NDM_BG.v,
+            mediaCount: mediaCount
+        });
+        return
+    }
+    if ("relay:toggleCatcher" == message.type) {
+        NDM_BG.toggleCatcher("boolean" == typeof message.enabled ? message.enabled : void 0);
+        sendResponse({
+            catcherEnabled: NDM_BG.v
+        });
+        return
+    }
+    "relay:showMediaPanel" == message.type && 0 <= message.tabId && (NDM_BG.ma(message.tabId, [17]), sendResponse({}))
+});

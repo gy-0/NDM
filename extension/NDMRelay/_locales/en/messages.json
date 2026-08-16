@@ -1,0 +1,23 @@
+{
+  "extName": { "message": "NDM Relay" },
+  "extDescription": { "message": "Relays browser downloads, media choices, and useful page resources to NDM" },
+  "ctxDownload": { "message": "Download with NDM" },
+  "ctxShowPanel": { "message": "Show video download controls" },
+  "ctxToggleCatcher": { "message": "Catch browser downloads" },
+  "actionTitleOn": { "message": "NDM Relay" },
+  "actionTitleOff": { "message": "NDM Relay — download catching is off" },
+  "popupRelay": { "message": "Relay" },
+  "popupChecking": { "message": "Checking…" },
+  "popupConnected": { "message": "Connected to NDM" },
+  "popupOffline": { "message": "Not connected" },
+  "popupMediaTitle": { "message": "Media detected on this page" },
+  "popupMediaCount": {
+    "message": "$COUNT$ downloadable",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "popupShowControls": { "message": "Show download controls" },
+  "popupCatcherTitle": { "message": "Catch browser downloads" },
+  "popupCatcherSub": { "message": "Ordinary downloads hand off to NDM" },
+  "popupOfflineHint": { "message": "The NDM app is not running. Downloads relay automatically once it opens." },
+  "popupContextHint": { "message": "Right-click any link or image → \"Download with NDM\"" }
+}

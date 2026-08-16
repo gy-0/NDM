@@ -1,0 +1,23 @@
+{
+  "extName": { "message": "NDM Relay" },
+  "extDescription": { "message": "把浏览器下载、网页视频与页面资源接力给 NDM 高速下载" },
+  "ctxDownload": { "message": "使用 NDM 下载" },
+  "ctxShowPanel": { "message": "显示视频下载控件" },
+  "ctxToggleCatcher": { "message": "接管浏览器下载" },
+  "actionTitleOn": { "message": "NDM Relay" },
+  "actionTitleOff": { "message": "NDM Relay — 下载接管已关闭" },
+  "popupRelay": { "message": "Relay" },
+  "popupChecking": { "message": "正在检查…" },
+  "popupConnected": { "message": "已连接 NDM" },
+  "popupOffline": { "message": "未连接" },
+  "popupMediaTitle": { "message": "本页检测到媒体" },
+  "popupMediaCount": {
+    "message": "$COUNT$ 项可下载",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "popupShowControls": { "message": "显示下载控件" },
+  "popupCatcherTitle": { "message": "接管浏览器下载" },
+  "popupCatcherSub": { "message": "普通下载自动交给 NDM 加速" },
+  "popupOfflineHint": { "message": "NDM 应用未在运行。打开应用后,下载会自动接力。" },
+  "popupContextHint": { "message": "右键任意链接或图片 → “使用 NDM 下载”" }
+}

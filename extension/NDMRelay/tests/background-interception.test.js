@@ -49,7 +49,11 @@ function loadBackground() {
         },
         runtime: {
             lastError: null,
-            onConnect: event("runtimeConnect")
+            onConnect: event("runtimeConnect"),
+            onMessage: event("runtimeMessage")
+        },
+        i18n: {
+            getMessage() { return ""; }
         },
         storage: {
             local: {
