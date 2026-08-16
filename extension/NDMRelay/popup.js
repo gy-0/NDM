@@ -6,6 +6,17 @@
 
     var BRIDGE_URL = "ws://127.0.0.1:51873/ndm/download";
     var BRIDGE_PROTOCOL = "ndm.open.v1";
+    // The live probe outranks the worker's cached flag, which can describe a
+    // socket that died while the worker was suspended.
+    var probeSettled = false;
+
+    function message(key, substitutions, fallback) {
+        var text = "";
+        try {
+            text = chrome.i18n.getMessage(key, substitutions) || "";
+        } catch (error) { /* an untranslated key is not worth failing over */ }
+        return text || fallback || "";
+    }
 
     function localize() {
         var nodes = document.querySelectorAll("[data-i18n]");
@@ -19,10 +30,14 @@
     function setStatus(state) {
         var status = document.getElementById("status");
         var text = document.getElementById("status-text");
+        // "checking" is the honest answer until either the cached background
+        // flag or our own probe lands; never paint a false offline.
         status.dataset.state = state;
-        text.textContent = chrome.i18n.getMessage(
-            state === "connected" ? "popupConnected" : "popupOffline"
-        ) || (state === "connected" ? "已连接 NDM" : "未连接");
+        text.textContent = state === "connected"
+            ? message("popupConnected", null, "已连接 NDM")
+            : state === "offline"
+                ? message("popupOffline", null, "未连接")
+                : message("popupChecking", null, "正在检查…");
         document.getElementById("offline-hint").hidden = state !== "offline";
     }
 
@@ -32,6 +47,7 @@
         function settle(state) {
             if (settled) return;
             settled = true;
+            probeSettled = true;
             setStatus(state);
             try {
                 if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
@@ -54,6 +70,19 @@
         });
     }
 
+    function describeMedia(count, sample) {
+        var title = sample && sample.title ? String(sample.title).trim() : "";
+        var host = sample && sample.host ? String(sample.host).replace(/^www\./, "") : "";
+        if (title) {
+            // The count is already on the badge; here the page's own name is
+            // the more useful thing to say.
+            return host
+                ? message("popupMediaSampleHost", [title, host], title + " · " + host)
+                : message("popupMediaSample", [title], title);
+        }
+        return message("popupMediaCount", [String(count)], count + " 项可下载");
+    }
+
     function refreshState(tab) {
         chrome.runtime.sendMessage(
             { type: "relay:getState", tabId: tab ? tab.id : -1 },
@@ -61,12 +90,15 @@
                 if (chrome.runtime.lastError || !reply) return;
                 var catcher = document.getElementById("catcher");
                 catcher.setAttribute("aria-checked", reply.catcherEnabled ? "true" : "false");
+                // Seed from the worker's cached socket state so a known-live
+                // bridge reads "connected" immediately; probeBridge still has
+                // the final word a moment later.
+                if (reply.connected && !probeSettled) setStatus("connected");
                 var count = Number(reply.mediaCount || 0);
-                var card = document.getElementById("media-card");
                 if (count > 0) {
-                    card.hidden = false;
+                    document.getElementById("media-card").hidden = false;
                     document.getElementById("media-count-line").textContent =
-                        (chrome.i18n.getMessage("popupMediaCount", [String(count)]) || count + " 项可下载");
+                        describeMedia(count, reply.mediaSample);
                 }
             }
         );
@@ -87,7 +119,39 @@
         });
     });
 
+    document.getElementById("open-app").addEventListener("click", function () {
+        // The worker re-dials the bridge and asks NDM to come forward. Its
+        // reply is only the cached flag, and a reconnect it just started is
+        // still pending, so re-probe rather than trust a falsy answer — that
+        // race is exactly how a running NDM would get reported offline.
+        setStatus("checking");
+        chrome.runtime.sendMessage({ type: "relay:openApp" }, function (reply) {
+            if (chrome.runtime.lastError) return;
+            if (reply && reply.connected) {
+                setStatus("connected");
+                return;
+            }
+            probeSettled = false;
+            probeBridge();
+        });
+    });
+
+    function renderVersion() {
+        // popupVersion takes a substitution, so localize() cannot fill it in;
+        // read the real number from the manifest instead of hardcoding it twice
+        // in the locale files where it would silently drift on every bump.
+        var version = "";
+        try {
+            version = (chrome.runtime.getManifest() || {}).version || "";
+        } catch (error) { /* fall back to the bare wordmark */ }
+        document.getElementById("foot-note").textContent = version
+            ? message("popupVersion", [version], "NDM Relay · v" + version)
+            : "NDM Relay";
+    }
+
     localize();
+    renderVersion();
+    setStatus("checking");
     probeBridge();
     activeTab(refreshState);
 })();

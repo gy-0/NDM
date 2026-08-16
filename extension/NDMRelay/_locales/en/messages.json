@@ -15,9 +15,25 @@
     "message": "$COUNT$ downloadable",
     "placeholders": { "count": { "content": "$1" } }
   },
+  "popupMediaSample": {
+    "message": "Downloadable here · $TITLE$",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+  "popupMediaSampleHost": {
+    "message": "Downloadable here · $TITLE$ · $HOST$",
+    "placeholders": {
+      "title": { "content": "$1" },
+      "host": { "content": "$2" }
+    }
+  },
   "popupShowControls": { "message": "Show download controls" },
   "popupCatcherTitle": { "message": "Catch browser downloads" },
   "popupCatcherSub": { "message": "Ordinary downloads hand off to NDM" },
   "popupOfflineHint": { "message": "The NDM app is not running. Downloads relay automatically once it opens." },
-  "popupContextHint": { "message": "Right-click any link or image → \"Download with NDM\"" }
+  "popupContextHint": { "message": "Right-click any link or image → \"Download with NDM\"" },
+  "popupOpenApp": { "message": "Open NDM" },
+  "popupVersion": {
+    "message": "NDM Relay · v$VERSION$",
+    "placeholders": { "version": { "content": "$1" } }
+  }
 }

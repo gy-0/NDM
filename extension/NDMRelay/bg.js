@@ -403,6 +403,18 @@ W.M = function() {
     a.onerror = this.da;
     this.G = a
 };
+W.requestAppFocus = function() {
+    // Re-dial first: a socket that died while the worker slept is the common
+    // reason "open NDM" feels dead, and M() is a no-op when one is alive.
+    this.M();
+    // The host has no raise/focus verb yet. BridgeMessageParser drops any line
+    // without field 2, so this control line is inert on today's NDM and
+    // forward-compatible with a build that learns to answer it.
+    if (this.D && this.G && 1 == this.G.readyState) try {
+        this.G.send("NDMControl: focus\r\n")
+    } catch (a) {}
+    return this.D
+};
 W.fa = function() {
     this.D = !0;
     var a = this.pendingRelayQueue;
@@ -964,7 +976,12 @@ W.ba = function(a, b) {
             break;
         case 21:
             a.mediaCount = Math.max(0, Number(b[1]) || 0);
-            this.updateMediaBadge(a.tabId)
+            this.updateMediaBadge(a.tabId);
+            break;
+        case 22:
+            // One representative item ({title, host}) so the toolbar popup can
+            // name what the page offers instead of only counting it.
+            a.mediaSample = b[1] && "object" == typeof b[1] ? b[1] : null
     }
 };
 W.aa = function(a) {
@@ -989,14 +1006,27 @@ var NDM_BG = new V;
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     if (!message || "object" != typeof message) return;
     if ("relay:getState" == message.type) {
-        var mediaCount = 0;
-        for (var key in NDM_BG.H) {
-            var port = NDM_BG.H[key];
-            port && port.tabId == message.tabId && (mediaCount += Number(port.mediaCount || 0))
-        }
+        var mediaCount = 0,
+            mediaSample = null;
+        Object.values(NDM_BG.H).forEach(function(port) {
+            if (!port || port.tabId != message.tabId) return;
+            mediaCount += Number(port.mediaCount || 0);
+            // Top frame wins; a subframe sample only fills an empty slot.
+            if (port.mediaSample && (!mediaSample || port.ja)) mediaSample = port.mediaSample
+        });
         sendResponse({
             catcherEnabled: NDM_BG.v,
-            mediaCount: mediaCount
+            mediaCount: mediaCount,
+            mediaSample: mediaSample,
+            // Cached bridge state, so the popup can paint "connected" at once
+            // instead of flashing offline while its own probe dials.
+            connected: !!NDM_BG.D
+        });
+        return
+    }
+    if ("relay:openApp" == message.type) {
+        sendResponse({
+            connected: NDM_BG.requestAppFocus()
         });
         return
     }

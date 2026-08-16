@@ -479,14 +479,38 @@ if (!window.o) {
     };
     O.updateMediaCount = function() {
         // Do not badge adapted tabs where the in-page action already owns download.
-        var count = 0;
+        var count = 0,
+            ids = [];
         for (var key in this.i) {
             var panel = this.i[key];
             if (!panel || !panel.items || !panel.items.length) continue;
             if (panel.siteHasInlineUI && panel.siteHasInlineUI()) continue;
-            count += panel.items.length
+            count += panel.items.length;
+            ids = ids.concat(panel.items)
         }
-        this.port.postMessage([21, Math.min(99, count)])
+        this.port.postMessage([21, Math.min(99, count)]);
+        // A representative item lets the toolbar popup say what the page holds
+        // rather than only how many things it found. Prefer the document title:
+        // the best-scoring candidate is usually the page resolver, whose label
+        // is generic UI copy ("推荐 · 选择画质并下载"), not the video's name — so
+        // only fall back to item labels on the rare untitled document.
+        var label = count ? this.getTitle() || this.bestItemLabel(ids) : "";
+        this.port.postMessage([22, label ? {
+            title: label.slice(0, 120),
+            host: window.location.host || ""
+        } : null])
+    };
+    O.bestItemLabel = function(ids) {
+        var best = "",
+            bestScore = -Infinity,
+            d = this;
+        (ids || []).forEach(function(id) {
+            var item = d.N(id);
+            if (!item || !item["4"]) return;
+            var score = NDMRelayPolicy ? NDMRelayPolicy.candidateScore(item) : 0;
+            if (score > bestScore) bestScore = score, best = String(item["4"])
+        });
+        return best
     };
     O.downloadSitePage = function(a) {
         if (!a || !a.url) return;
