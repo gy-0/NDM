@@ -19,6 +19,8 @@ test("extension targets the NDM-specific bridge contract", () => {
     assert.match(swiftConstants, /port: UInt16 = 51_873/);
     assert.match(swiftConstants, /path = "\/ndm\/download"/);
     assert.match(swiftConstants, /subprotocol = "ndm\.open\.v1"/);
+    assert.match(swiftConstants, /focusApp = "NDMControl: focus"/);
+    assert.match(background, /NDMControl: focus/);
 });
 
 test("NDM Relay has its own name and Yuan Gao author identity", () => {

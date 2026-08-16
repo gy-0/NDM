@@ -161,6 +161,10 @@ body {
   transform: scale(0.96);
 }
 
+.btn:disabled {
+  opacity: 0.55;
+}
+
 .btn-accent {
   background: var(--accent);
   color: var(--on-accent);

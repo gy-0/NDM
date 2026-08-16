@@ -31,6 +31,8 @@ test("popup speaks the background contract and probes the bridge itself", () => 
     assert.match(popup, /relay:showMediaPanel/);
     assert.match(popup, /ws:\/\/127\.0\.0\.1:51873\/ndm\/download/);
     assert.match(popup, /ndm\.open\.v1/);
+    assert.match(popup, /ndm:\/\/open\/relay/);
+    assert.match(popup, /chrome\.tabs\.create/);
 });
 
 test("background answers every popup message type", () => {

@@ -23,6 +23,7 @@ public enum BridgeConstants {
     public static let showPanelFoxOff = "ShowPanelFox=0"
     public static let showPanelEdgeOn = "ShowPanelEdge=1"
     public static let showPanelEdgeOff = "ShowPanelEdge=0"
+    public static let focusApp = "NDMControl: focus"
 
     /// Push media-panel visibility to all browser clients (Chrome/Firefox/Edge).
     public static func showPanelMessages(enabled: Bool) -> [String] {

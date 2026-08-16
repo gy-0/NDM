@@ -6,6 +6,7 @@
 
     var BRIDGE_URL = "ws://127.0.0.1:51873/ndm/download";
     var BRIDGE_PROTOCOL = "ndm.open.v1";
+    var APP_URL = "ndm://open/relay";
     // The live probe outranks the worker's cached flag, which can describe a
     // socket that died while the worker was suspended.
     var probeSettled = false;
@@ -30,28 +31,40 @@
     function setStatus(state) {
         var status = document.getElementById("status");
         var text = document.getElementById("status-text");
+        var openApp = document.getElementById("open-app");
         // "checking" is the honest answer until either the cached background
         // flag or our own probe lands; never paint a false offline.
         status.dataset.state = state;
         text.textContent = state === "connected"
             ? message("popupConnected", null, "已连接 NDM")
+            : state === "starting"
+                ? message("popupOpening", null, "正在打开…")
             : state === "offline"
                 ? message("popupOffline", null, "未连接")
                 : message("popupChecking", null, "正在检查…");
         document.getElementById("offline-hint").hidden = state !== "offline";
+        openApp.textContent = state === "connected"
+            ? message("popupShowApp", null, "显示 NDM")
+            : message("popupOpenApp", null, "打开 NDM");
+        openApp.disabled = state === "starting";
     }
 
-    function probeBridge() {
+    function probeBridge(retries) {
+        retries = Number(retries || 0);
         var settled = false;
         var socket;
         function settle(state) {
             if (settled) return;
             settled = true;
-            probeSettled = true;
-            setStatus(state);
             try {
                 if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
             } catch (error) { /* the probe socket is disposable */ }
+            if (state === "offline" && retries > 0) {
+                setTimeout(function () { probeBridge(retries - 1); }, 550);
+                return;
+            }
+            probeSettled = true;
+            setStatus(state);
         }
         try {
             socket = new WebSocket(BRIDGE_URL, BRIDGE_PROTOCOL);
@@ -62,6 +75,22 @@
         socket.onopen = function () { settle("connected"); };
         socket.onerror = function () { settle("offline"); };
         setTimeout(function () { settle("offline"); }, 1500);
+    }
+
+    function launchApp() {
+        setStatus("starting");
+        try {
+            chrome.tabs.create({ url: APP_URL }, function () {
+                if (chrome.runtime.lastError) {
+                    setStatus("offline");
+                    return;
+                }
+                probeSettled = false;
+                probeBridge(10);
+            });
+        } catch (error) {
+            setStatus("offline");
+        }
     }
 
     function activeTab(callback) {
@@ -126,13 +155,15 @@
         // race is exactly how a running NDM would get reported offline.
         setStatus("checking");
         chrome.runtime.sendMessage({ type: "relay:openApp" }, function (reply) {
-            if (chrome.runtime.lastError) return;
+            if (chrome.runtime.lastError) {
+                launchApp();
+                return;
+            }
             if (reply && reply.connected) {
                 setStatus("connected");
                 return;
             }
-            probeSettled = false;
-            probeBridge();
+            launchApp();
         });
     });
 

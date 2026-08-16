@@ -407,9 +407,8 @@ W.requestAppFocus = function() {
     // Re-dial first: a socket that died while the worker slept is the common
     // reason "open NDM" feels dead, and M() is a no-op when one is alive.
     this.M();
-    // The host has no raise/focus verb yet. BridgeMessageParser drops any line
-    // without field 2, so this control line is inert on today's NDM and
-    // forward-compatible with a build that learns to answer it.
+    // A live host forwards this control line to the Electron shell. When the
+    // bridge is offline, the popup launches the registered ndm:// URL instead.
     if (this.D && this.G && 1 == this.G.readyState) try {
         this.G.send("NDMControl: focus\r\n")
     } catch (a) {}

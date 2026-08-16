@@ -118,6 +118,29 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         socket.cancel()
     }
 
+    func testFocusControlMessageReachesHostWithoutBecomingDownload() async throws {
+        let bridge = BrowserBridge(port: 0)
+        let focused = expectation(description: "focus request")
+        let unexpectedDownload = expectation(description: "download message")
+        unexpectedDownload.isInverted = true
+        bridge.onFocusRequest = { focused.fulfill() }
+        bridge.onDownloadMessage = { _ in unexpectedDownload.fulfill() }
+        try bridge.start()
+        defer { bridge.stop() }
+
+        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)\(BridgeConstants.path)")!
+        var request = URLRequest(url: url)
+        request.setValue(BridgeConstants.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: request)
+        socket.resume()
+        try await socket.send(.string(BridgeConstants.focusApp + "\r\n"))
+
+        await fulfillment(of: [focused, unexpectedDownload], timeout: 1)
+        socket.cancel()
+        session.invalidateAndCancel()
+    }
+
     func testConcurrentBroadcastAndStopIsSerialized() throws {
         let bridge = BrowserBridge(port: 0)
         try bridge.start()

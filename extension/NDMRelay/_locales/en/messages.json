@@ -9,6 +9,7 @@
   "popupRelay": { "message": "Relay" },
   "popupChecking": { "message": "Checking…" },
   "popupConnected": { "message": "Connected to NDM" },
+  "popupOpening": { "message": "Opening…" },
   "popupOffline": { "message": "Not connected" },
   "popupMediaTitle": { "message": "Media detected on this page" },
   "popupMediaCount": {
@@ -29,9 +30,10 @@
   "popupShowControls": { "message": "Show download controls" },
   "popupCatcherTitle": { "message": "Catch browser downloads" },
   "popupCatcherSub": { "message": "Ordinary downloads hand off to NDM" },
-  "popupOfflineHint": { "message": "The NDM app is not running. Downloads relay automatically once it opens." },
+  "popupOfflineHint": { "message": "NDM is not running. The current download stays in the browser; try handing it off again after NDM opens." },
   "popupContextHint": { "message": "Right-click any link or image → \"Download with NDM\"" },
   "popupOpenApp": { "message": "Open NDM" },
+  "popupShowApp": { "message": "Show NDM" },
   "popupVersion": {
     "message": "NDM Relay · v$VERSION$",
     "placeholders": { "version": { "content": "$1" } }

@@ -9,6 +9,7 @@
   "popupRelay": { "message": "Relay" },
   "popupChecking": { "message": "正在检查…" },
   "popupConnected": { "message": "已连接 NDM" },
+  "popupOpening": { "message": "正在打开…" },
   "popupOffline": { "message": "未连接" },
   "popupMediaTitle": { "message": "本页检测到媒体" },
   "popupMediaCount": {
@@ -29,9 +30,10 @@
   "popupShowControls": { "message": "显示下载控件" },
   "popupCatcherTitle": { "message": "接管浏览器下载" },
   "popupCatcherSub": { "message": "普通下载自动交给 NDM 加速" },
-  "popupOfflineHint": { "message": "NDM 应用未在运行。打开应用后,下载会自动接力。" },
+  "popupOfflineHint": { "message": "NDM 未在运行。当前下载会留在浏览器；打开 NDM 后可再次交接。" },
   "popupContextHint": { "message": "右键任意链接或图片 → “使用 NDM 下载”" },
   "popupOpenApp": { "message": "打开 NDM" },
+  "popupShowApp": { "message": "显示 NDM" },
   "popupVersion": {
     "message": "NDM Relay · v$VERSION$",
     "placeholders": { "version": { "content": "$1" } }

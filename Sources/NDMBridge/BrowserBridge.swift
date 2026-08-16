@@ -6,6 +6,7 @@ import NDMCore
 /// Local browser bridge using NDM's own endpoint and WebSocket subprotocol.
 public final class BrowserBridge: @unchecked Sendable {
     public var onDownloadMessage: (@Sendable (ParsedBridgeMessage) -> Void)?
+    public var onFocusRequest: (@Sendable () -> Void)?
     public var onClientCountChanged: (@Sendable (Int) -> Void)?
 
     private let requestedPort: NWEndpoint.Port
@@ -174,6 +175,10 @@ public final class BrowserBridge: @unchecked Sendable {
             }
             while let (message, rest) = WebSocketFraming.decodeTextFrame(from: buf) {
                 buf = rest
+                if message.trimmingCharacters(in: .whitespacesAndNewlines) == BridgeConstants.focusApp {
+                    self.onFocusRequest?()
+                    continue
+                }
                 if let parsed = try? BridgeMessageParser.parse(message) {
                     self.onDownloadMessage?(parsed)
                 }

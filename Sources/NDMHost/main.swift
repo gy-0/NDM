@@ -193,6 +193,9 @@ bridge.onDownloadMessage = { msg in
         }
     }
 }
+bridge.onFocusRequest = {
+    broadcast(["op": "focusApp"])
+}
 bridge.onClientCountChanged = { count in
     guard count > 0 else { return }
     for message in BridgeConstants.showPanelMessages(enabled: currentSettings.showBrowserMediaPanel) {
@@ -210,6 +213,7 @@ var legacyBridge: BrowserBridge? = nil
 if currentSettings.bridgePort != BridgeConstants.legacyNeatPort {
     let leg = BrowserBridge(port: BridgeConstants.legacyNeatPort)
     leg.onDownloadMessage = bridge.onDownloadMessage
+    leg.onFocusRequest = bridge.onFocusRequest
     leg.onClientCountChanged = bridge.onClientCountChanged
     do {
         try leg.start()
