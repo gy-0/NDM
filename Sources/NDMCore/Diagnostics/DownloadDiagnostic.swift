@@ -253,7 +253,7 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .mergeFailed:
             return L10n.t("Merge failed · retry re-runs the merge only", "合并失败 · 重试只重新合并")
         case .generic:
-            return L10n.t("Failed · retry, details in Inspector", "下载失败 · 可重试，详情见右侧")
+            return L10n.t("Failed · retry available", "下载失败 · 可重试")
         }
     }
 

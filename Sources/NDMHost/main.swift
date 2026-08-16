@@ -381,12 +381,14 @@ func snapshot(activeOnly: Bool = false) async -> [[String: Any]] {
     for task in newest {
         let progress = await manager.progress(taskID: task.id)
         if activeOnly {
-            // A newly-created task may still be persisted as `.waiting` while
-            // its in-memory engine is already transferring. Filter by the live
-            // status when it exists so the 4 Hz partial stream never strands
-            // the renderer on the stale queued row.
-            let status = progress?.status ?? task.status
-            guard status == .downloading || status == .waiting else { continue }
+            // Filter on the persisted status, matching taskJSON's rule that
+            // terminal states are authoritative: a failed task can retain a
+            // stale in-memory progress object that still claims .downloading,
+            // and honouring it here would keep the task in the active set
+            // forever — the departure broadcast below would never fire. The
+            // startup race (persisted .waiting while the engine already
+            // transfers) is covered because .waiting is part of the set.
+            guard task.status == .downloading || task.status == .waiting else { continue }
         }
         rows.append(taskJSON(task, progress: progress))
     }
@@ -819,6 +821,22 @@ func handle(request: [String: Any], connection: NWConnection) async {
             try await manager.remove(taskID: taskID, deleteFile: deleteFile)
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "removeMany":
+            // Batch removal broadcasts once at the end; per-task ops would
+            // rebroadcast the full library for every row and freeze the shell.
+            let taskIDs: [Int64] = (request["taskIDs"] as? [Any])?.compactMap { value in
+                (value as? NSNumber)?.int64Value ?? (value as? Int).map(Int64.init)
+            } ?? []
+            guard !taskIDs.isEmpty else { throw ManagerError.taskNotFound }
+            let deleteFiles = request["deleteFile"] as? Bool ?? false
+            var removed = 0
+            for taskID in taskIDs {
+                if (try? await manager.remove(taskID: taskID, deleteFile: deleteFiles)) != nil {
+                    removed += 1
+                }
+            }
+            sendJSON(connection, ["id": id, "ok": true, "removed": removed])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
         default:
             sendJSON(connection, ["id": id, "ok": false, "error": "unknown op"])
         }
@@ -874,11 +892,24 @@ listener.start(queue: queue)
 FileHandle.standardOutput.write(Data("NDMHost ready 127.0.0.1:\(port)\n".utf8))
 
 Task {
+    // Tasks that fail (or otherwise stop) on their own never flow through an
+    // op response, and the partial stream only carries downloading/waiting
+    // rows. Track the active set between ticks: whenever a task leaves it,
+    // broadcast the authoritative full snapshot so terminal states (error,
+    // paused, incomplete, complete) always reach the shell.
+    var previousActiveIDs = Set<Int64>()
     while true {
         try? await Task.sleep(nanoseconds: 250_000_000)
-        if await manager.hasActiveDownloads() {
-            broadcast(["op": "snapshot", "partial": true, "tasks": await snapshot(activeOnly: true)])
+        let active = await manager.hasActiveDownloads()
+        guard active || !previousActiveIDs.isEmpty else { continue }
+        let rows = await snapshot(activeOnly: true)
+        let currentIDs = Set(rows.compactMap { ($0["id"] as? NSNumber)?.int64Value })
+        if !previousActiveIDs.subtracting(currentIDs).isEmpty {
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        } else if active {
+            broadcast(["op": "snapshot", "partial": true, "tasks": rows])
         }
+        previousActiveIDs = currentIDs
     }
 }
 
