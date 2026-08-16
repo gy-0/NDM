@@ -52,6 +52,9 @@ for executable in "$APP/Contents/MacOS/NDM" "$TOOLS/yt-dlp" "$TOOLS/ffmpeg" "$TO
   done < <(minimum_versions "$executable")
 done
 
+[[ -d "$TOOLS/_internal" ]] \
+  || fail "yt-dlp is missing its unpackaged runtime (_internal); onefile builds pay ~25s per launch"
+
 for name in yt-dlp ffmpeg deno; do
   tool="$TOOLS/$name"
   [[ -x "$tool" ]] || fail "missing executable $name"

@@ -217,6 +217,84 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertTrue(args.contains(where: { $0.hasPrefix("postprocess:NDM_POST|") }))
     }
 
+    func testDownloadArgumentsSkipAria2cForSmallTransfers() {
+        let args = YtDlpTool.downloadArguments(
+            url: "https://example.com/watch/1",
+            formatID: "ba",
+            outputTemplate: "/tmp/audio.%(ext)s",
+            connections: 16,
+            forceOverwrite: false,
+            aria2cPath: "/opt/homebrew/bin/aria2c",
+            estimatedBytes: 3 * 1024 * 1024
+        )
+        XCTAssertTrue(args.contains("--concurrent-fragments"))
+        XCTAssertFalse(args.contains("--downloader"))
+        XCTAssertFalse(args.contains("/opt/homebrew/bin/aria2c"))
+    }
+
+    func testDownloadArgumentsSkipAria2cForYouTubeEvenWhenLarge() {
+        let args = YtDlpTool.downloadArguments(
+            url: "https://www.youtube.com/watch?v=sAE7DU-g7VM",
+            formatID: "136+140",
+            outputTemplate: "/tmp/video.%(ext)s",
+            connections: 16,
+            forceOverwrite: false,
+            aria2cPath: "/opt/homebrew/bin/aria2c",
+            estimatedBytes: 68 * 1024 * 1024
+        )
+        XCTAssertTrue(args.contains("--concurrent-fragments"))
+        XCTAssertFalse(args.contains("--downloader"))
+        XCTAssertFalse(args.contains("/opt/homebrew/bin/aria2c"))
+    }
+
+    func testDownloadArgumentsKeepAria2cForLargeTransfers() {
+        let args = YtDlpTool.downloadArguments(
+            url: "https://example.com/watch/1",
+            formatID: "bv+ba/b",
+            outputTemplate: "/tmp/video.%(ext)s",
+            connections: 16,
+            forceOverwrite: false,
+            aria2cPath: "/opt/homebrew/bin/aria2c",
+            estimatedBytes: YtDlpTool.aria2MinimumBytes
+        )
+        XCTAssertTrue(args.contains("/opt/homebrew/bin/aria2c"))
+    }
+
+    func testDownloadArgumentsReplayFreshProbeInsteadOfTheURL() {
+        let args = YtDlpTool.downloadArguments(
+            url: "https://example.com/watch/1",
+            formatID: "bv+ba/b",
+            outputTemplate: "/tmp/video.%(ext)s",
+            connections: 1,
+            forceOverwrite: false,
+            aria2cPath: nil,
+            infoJSONPath: "/tmp/probe.info.json"
+        )
+        XCTAssertEqual(args[args.firstIndex(of: "--load-info-json")! + 1], "/tmp/probe.info.json")
+        XCTAssertFalse(args.contains("https://example.com/watch/1"))
+    }
+
+    func testFreshInfoJSONPathRejectsMissingAndStaleFiles() throws {
+        XCTAssertNil(YtDlpTool.freshInfoJSONPath(nil))
+        XCTAssertNil(YtDlpTool.freshInfoJSONPath("/tmp/ndm-missing-probe.info.json"))
+
+        let fresh = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-fresh-\(UUID().uuidString).info.json")
+        try Data("{}".utf8).write(to: fresh)
+        defer { try? FileManager.default.removeItem(at: fresh) }
+        XCTAssertEqual(YtDlpTool.freshInfoJSONPath(fresh.path), fresh.path)
+
+        let stale = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-stale-\(UUID().uuidString).info.json")
+        try Data("{}".utf8).write(to: stale)
+        defer { try? FileManager.default.removeItem(at: stale) }
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-(YtDlpTool.infoJSONFreshness + 60))],
+            ofItemAtPath: stale.path
+        )
+        XCTAssertNil(YtDlpTool.freshInfoJSONPath(stale.path))
+    }
+
     func testCompactContainerAndSubtitleArgumentsAreApplied() {
         let args = YtDlpTool.downloadArguments(
             url: "https://example.com/watch/1",

@@ -82,6 +82,7 @@ public actor YtDlpEngine {
                 connections: connections,
                 forceOverwrite: forceOverwrite,
                 options: options,
+                estimatedBytes: estimatedTotalBytes,
                 cancelToken: token
             ) { report in
                 Task { await self.apply(report: report) }

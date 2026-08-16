@@ -27,14 +27,20 @@ esac
 
 mkdir -p "$DEST" "$LICENSES"
 
-print "Preparing official yt-dlp $YTDLP_VERSION…"
+print "Preparing official yt-dlp $YTDLP_VERSION (unpackaged macOS runtime)…"
 ytdlp_base="https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP_VERSION"
-curl -fL "$ytdlp_base/yt-dlp_macos" -o "$WORK/yt-dlp"
+# The onefile `yt-dlp_macos` re-extracts and re-scans on every launch (~25s).
+# The unpackaged zip keeps Python next to the launcher so later launches are
+# ~0.2s after Gatekeeper's one-time assessment.
+curl -fL "$ytdlp_base/yt-dlp_macos.zip" -o "$WORK/yt-dlp.zip"
 curl -fL "$ytdlp_base/SHA2-256SUMS" -o "$WORK/yt-dlp-sums"
-ytdlp_sha="$(awk '$2 == "yt-dlp_macos" {print $1}' "$WORK/yt-dlp-sums")"
+ytdlp_sha="$(awk '$2 == "yt-dlp_macos.zip" {print $1}' "$WORK/yt-dlp-sums")"
 [[ -n "$ytdlp_sha" ]] || { print -u2 "yt-dlp checksum missing"; exit 1; }
-[[ "$(shasum -a 256 "$WORK/yt-dlp" | awk '{print $1}')" == "$ytdlp_sha" ]] \
+[[ "$(shasum -a 256 "$WORK/yt-dlp.zip" | awk '{print $1}')" == "$ytdlp_sha" ]] \
   || { print -u2 "yt-dlp checksum mismatch"; exit 1; }
+unzip -q "$WORK/yt-dlp.zip" -d "$WORK/yt-dlp-onedir"
+[[ -x "$WORK/yt-dlp-onedir/yt-dlp_macos" && -d "$WORK/yt-dlp-onedir/_internal" ]] \
+  || { print -u2 "yt-dlp zip is missing the unpackaged runtime"; exit 1; }
 curl -fL "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/LICENSE" \
   -o "$LICENSES/yt-dlp-Unlicense.txt"
 curl -fL "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/THIRD_PARTY_LICENSES.txt" \
@@ -87,10 +93,15 @@ tar -xJf "$WORK/ffmpeg.tar.xz" -C "$WORK/ffmpeg-source" --strip-components=1
 cp "$WORK/ffmpeg-source/ffmpeg" "$WORK/ffmpeg"
 cp "$WORK/ffmpeg-source/COPYING.LGPLv2.1" "$LICENSES/ffmpeg-LGPL-2.1.txt"
 
-cp "$WORK/yt-dlp" "$DEST/yt-dlp"
+rm -rf "$DEST/_internal"
+cp -R "$WORK/yt-dlp-onedir/_internal" "$DEST/_internal"
+cp "$WORK/yt-dlp-onedir/yt-dlp_macos" "$DEST/yt-dlp"
 cp "$WORK/ffmpeg" "$DEST/ffmpeg"
 cp "$WORK/deno-unpacked/deno" "$DEST/deno"
 chmod 755 "$DEST/yt-dlp" "$DEST/ffmpeg" "$DEST/deno"
+# Downloaded zip members carry quarantine; strip it so the first local launch
+# is not another 25s Gatekeeper scan of every nested library.
+xattr -cr "$DEST/yt-dlp" "$DEST/_internal" 2>/dev/null || true
 
 for tool in yt-dlp ffmpeg deno; do
   # Universal Mach-O files include an extra per-architecture header in otool's

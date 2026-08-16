@@ -3,7 +3,7 @@
 Release builds must contain these standalone executables in
 `NDM.app/Contents/Resources/Tools/`:
 
-- `yt-dlp` — official macOS standalone release
+- `yt-dlp` — official unpackaged macOS runtime (`yt-dlp_macos.zip`, launcher plus `_internal/`). The onefile `yt-dlp_macos` binary is not used: it re-extracts on every launch and spends ~25s under Gatekeeper.
 - `ffmpeg` — redistributable macOS build with the required license notices
 - `deno` — standalone JavaScript runtime used locally by modern video extractors
 

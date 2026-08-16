@@ -199,6 +199,10 @@ public struct YtDlpDownloadOptions: Codable, Sendable, Equatable {
     public var collectionTitle: String?
     public var collectionIndex: Int?
     public var collectionCount: Int?
+    /// Probe-captured info JSON to feed through `--load-info-json`. Only
+    /// honored while fresh (signed media URLs expire); stale paths fall back
+    /// to normal URL extraction automatically.
+    public var infoJSONPath: String?
 
     public init(
         container: YtDlpContainerPreference = .compatibleMP4,
@@ -207,7 +211,8 @@ public struct YtDlpDownloadOptions: Codable, Sendable, Equatable {
         collectionID: String? = nil,
         collectionTitle: String? = nil,
         collectionIndex: Int? = nil,
-        collectionCount: Int? = nil
+        collectionCount: Int? = nil,
+        infoJSONPath: String? = nil
     ) {
         self.container = container
         self.subtitleLanguage = subtitleLanguage
@@ -216,6 +221,7 @@ public struct YtDlpDownloadOptions: Codable, Sendable, Equatable {
         self.collectionTitle = collectionTitle
         self.collectionIndex = collectionIndex
         self.collectionCount = collectionCount
+        self.infoJSONPath = infoJSONPath
     }
 }
 
@@ -226,19 +232,25 @@ public struct YtDlpProbe: Equatable, Sendable {
     /// Best available remote cover (YouTube / site thumbnail).
     public var thumbnailURL: String?
     public var subtitleTracks: [YtDlpSubtitleTrack]
+    /// Raw yt-dlp info JSON captured by this probe. Feeding it back through
+    /// `--load-info-json` lets the download skip the whole extraction round
+    /// trip that the probe already paid for.
+    public var infoJSONPath: String?
 
     public init(
         title: String,
         durationSeconds: Double?,
         formats: [YtDlpFormat],
         thumbnailURL: String? = nil,
-        subtitleTracks: [YtDlpSubtitleTrack] = []
+        subtitleTracks: [YtDlpSubtitleTrack] = [],
+        infoJSONPath: String? = nil
     ) {
         self.title = title
         self.durationSeconds = durationSeconds
         self.formats = formats
         self.thumbnailURL = thumbnailURL
         self.subtitleTracks = subtitleTracks
+        self.infoJSONPath = infoJSONPath
     }
 }
 
@@ -285,6 +297,13 @@ public enum YtDlpTool {
     }
 
     public static var isAvailable: Bool { find() != nil }
+
+    /// Pay Gatekeeper's one-time scan of the unpackaged yt-dlp runtime in the
+    /// background so the first user-visible probe does not sit on a 25s launch.
+    public static func warm() {
+        guard let bin = find() else { return }
+        _ = ToolVersionProbe.run(toolAt: URL(fileURLWithPath: bin), arguments: ["--version"])
+    }
 
     /// Load only plugins reviewed and shipped inside NDM's signed app bundle.
     /// yt-dlp otherwise searches user-writable default locations and imports
@@ -368,8 +387,71 @@ public enum YtDlpTool {
             durationSeconds: duration,
             formats: tiers,
             thumbnailURL: pickThumbnailURL(from: json),
-            subtitleTracks: subtitleTracks(from: json)
+            subtitleTracks: subtitleTracks(from: json),
+            infoJSONPath: cacheInfoJSON(jsonText, forURL: url)
         )
+    }
+
+    /// The probe already carried the full extraction (signed media URLs
+    /// included). Persist it so the actual download can start transferring
+    /// immediately through `--load-info-json` instead of re-extracting.
+    static let infoJSONFreshness: TimeInterval = 30 * 60
+    /// Below this size, aria2c's per-piece ramp-up is slower than yt-dlp's
+    /// native downloader (measured ~10s vs ~1s on a 3 MB audio stream).
+    static let aria2MinimumBytes: Int64 = 48 * 1024 * 1024
+
+    static func isYouTubeMediaURL(_ url: String) -> Bool {
+        let lowered = url.lowercased()
+        return lowered.contains("youtube.com")
+            || lowered.contains("youtu.be")
+            || lowered.contains("youtube-nocookie.com")
+            || lowered.contains("googlevideo.com")
+    }
+
+    private static func infoJSONCacheDirectory() -> URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base
+            .appendingPathComponent("dev.ndm.open", isDirectory: true)
+            .appendingPathComponent("Preflight", isDirectory: true)
+    }
+
+    private static func cacheInfoJSON(_ jsonText: String, forURL url: String) -> String? {
+        let directory = infoJSONCacheDirectory()
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Opportunistic pruning keeps the cache bounded without a scheduler.
+        if let siblings = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) {
+            let cutoff = Date().addingTimeInterval(-24 * 3600)
+            for sibling in siblings {
+                let modified = (try? sibling.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                if modified < cutoff { try? fileManager.removeItem(at: sibling) }
+            }
+        }
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in url.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        let destination = directory.appendingPathComponent(String(format: "%016llx.info.json", hash))
+        guard (try? jsonText.write(to: destination, atomically: true, encoding: .utf8)) != nil else {
+            return nil
+        }
+        return destination.path
+    }
+
+    static func freshInfoJSONPath(_ path: String?) -> String? {
+        guard let path, FileManager.default.fileExists(atPath: path),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let modified = attrs[.modificationDate] as? Date,
+              Date().timeIntervalSince(modified) < infoJSONFreshness else {
+            return nil
+        }
+        return path
     }
 
     /// Fetch a lightweight collection index without resolving formats for
@@ -914,6 +996,7 @@ public enum YtDlpTool {
         connections: Int = 1,
         forceOverwrite: Bool = false,
         options: YtDlpDownloadOptions = .init(),
+        estimatedBytes: Int64 = 0,
         cancelToken: CancelToken? = nil,
         onProgress: (@Sendable (ProgressReport) -> Void)? = nil
     ) async throws -> URL {
@@ -935,26 +1018,45 @@ public enum YtDlpTool {
         } else {
             template = directory.appendingPathComponent("%(title)s.%(ext)s").path
         }
-        let args = pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + downloadArguments(
-            url: url,
-            formatID: formatID,
-            outputTemplate: template,
-            connections: connections,
-            forceOverwrite: forceOverwrite,
-            aria2cPath: findAria2c(),
-            options: options
-        )
-        let output = try await runStreaming(
-            bin,
-            args,
-            timeoutSeconds: 60 * 30,
-            cancelToken: cancelToken,
-            onLine: { line in
-                if let report = parseProgressLine(line) {
-                    onProgress?(report)
+        func attempt(infoJSONPath: String?) async throws -> String {
+            let args = pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + downloadArguments(
+                url: url,
+                formatID: formatID,
+                outputTemplate: template,
+                connections: connections,
+                forceOverwrite: forceOverwrite,
+                aria2cPath: findAria2c(),
+                options: options,
+                estimatedBytes: estimatedBytes,
+                infoJSONPath: infoJSONPath
+            )
+            return try await runStreaming(
+                bin,
+                args,
+                timeoutSeconds: 60 * 30,
+                cancelToken: cancelToken,
+                onLine: { line in
+                    if let report = parseProgressLine(line) {
+                        onProgress?(report)
+                    }
                 }
+            )
+        }
+        var output: String
+        if let freshInfoJSON = freshInfoJSONPath(options.infoJSONPath) {
+            do {
+                output = try await attempt(infoJSONPath: freshInfoJSON)
+            } catch {
+                if cancelToken?.isPaused == true { throw EngineError.paused }
+                if cancelToken?.isCancelled == true { throw EngineError.cancelled }
+                // Signed media URLs inside the replayed probe can expire or be
+                // bound to another network path. One clean re-extraction keeps
+                // the fast path an optimization, never a new failure mode.
+                output = try await attempt(infoJSONPath: nil)
             }
-        )
+        } else {
+            output = try await attempt(infoJSONPath: nil)
+        }
         if cancelToken?.isPaused == true { throw EngineError.paused }
         if cancelToken?.isCancelled == true { throw EngineError.cancelled }
         if let pathLine = output.split(whereSeparator: \.isNewline)
@@ -1082,7 +1184,9 @@ public enum YtDlpTool {
         connections: Int,
         forceOverwrite: Bool,
         aria2cPath: String?,
-        options: YtDlpDownloadOptions = .init()
+        options: YtDlpDownloadOptions = .init(),
+        estimatedBytes: Int64 = 0,
+        infoJSONPath: String? = nil
     ) -> [String] {
         let n = max(1, min(32, connections))
         let progressTemplate =
@@ -1115,11 +1219,18 @@ public enum YtDlpTool {
             ])
         }
         args.append(contentsOf: cookieArguments(options.cookieSource))
+        // Range-parallel aria2c is a large win on big generic HTTP files
+        // (16 connections beat a single-stream throttle), but:
+        // - small transfers never finish their ramp-up (~10s vs ~1s on 3 MB)
+        // - YouTube signed googlevideo URLs regularly answer 403 to aria2c
+        //   (exit 22). Retry then works because a fresh extraction gets a
+        //   new URL. Keep YouTube on yt-dlp's native downloader.
+        let largeEnoughForAria2 = estimatedBytes <= 0 || estimatedBytes >= aria2MinimumBytes
         if n > 1 {
             // Native yt-dlp concurrency for DASH/HLS fragments.
             args.append(contentsOf: ["--concurrent-fragments", "\(n)"])
             // For ordinary HTTP media, aria2c supplies real range connections.
-            if let aria2cPath {
+            if let aria2cPath, largeEnoughForAria2, !isYouTubeMediaURL(url) {
                 // aria2c hard-caps --max-connection-per-server at 16 and exits
                 // with code 28 for anything higher, before downloading a byte.
                 let a = min(n, 16)
@@ -1130,7 +1241,13 @@ public enum YtDlpTool {
                 ])
             }
         }
-        args.append(url)
+        if let infoJSONPath {
+            // The probe's extraction is replayed instead of re-fetched; the
+            // positional URL must stay away or yt-dlp would download twice.
+            args.append(contentsOf: ["--load-info-json", infoJSONPath])
+        } else {
+            args.append(url)
+        }
         return args
     }
 

@@ -227,15 +227,43 @@ final class MediaPreflightTests: XCTestCase {
             ltype: "media",
             pageURL: bilibiliPage
         ))
-        XCTAssertTrue(MediaLinkClassifier.shouldPreferPageResolver(
-            url: bilibiliPage,
-            ltype: "media-page",
-            pageURL: bilibiliPage
-        ))
-        XCTAssertTrue(MediaLinkClassifier.shouldPreferPageResolver(
-            url: bilibiliPage,
-            ltype: "normal",
-            pageURL: bilibiliPage
-        ))
+    }
+
+    func testOrdinaryFileDownloadsStayOnTheNeatEngine() {
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(url: "https://example.com/app.dmg"),
+            "normal"
+        )
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(url: "https://cdn.example.com/payload?id=9"),
+            "normal"
+        )
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(
+                url: "https://dl.hdslb.com/mobile/fixed/pc_electron_mac/bili_mac.dmg"
+            ),
+            "normal"
+        )
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(url: "https://www.youtube.com/watch?v=sAE7DU-g7VM"),
+            "normal"
+        )
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(
+                url: "https://www.youtube.com/watch?v=sAE7DU-g7VM",
+                requestedType: "ytdlp"
+            ),
+            "ytdlp"
+        )
+        XCTAssertEqual(
+            MediaLinkClassifier.engineLinkType(
+                url: "https://cdn.example.com/opaque",
+                formatID: "136+140"
+            ),
+            "ytdlp"
+        )
+        XCTAssertFalse(MediaLinkClassifier.looksLikeVideoSitePage("https://github.com/foo/bar/releases/tag/v1"))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeVideoSitePage("https://www.youtube.com/watch?v=1"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeVideoSitePage("https://www.bilibili.com/app.dmg"))
     }
 }

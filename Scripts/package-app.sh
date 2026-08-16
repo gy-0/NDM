@@ -28,6 +28,11 @@ for tool in "$YTDLP_BIN" "$FFMPEG_BIN" "$DENO_BIN"; do
     exit 1
   fi
 done
+if [[ ! -d "$(dirname "$YTDLP_BIN")/_internal" ]]; then
+  print -u2 "Missing yt-dlp unpackaged runtime: $(dirname "$YTDLP_BIN")/_internal"
+  print -u2 "Run Scripts/prepare-media-tools.sh before release packaging."
+  exit 1
+fi
 for notice in "${required_licenses[@]}"; do
   if [[ ! -s "$notice" ]]; then
     print -u2 "Missing third-party notice: $notice"
@@ -78,6 +83,11 @@ mkdir -p "$APP/Contents/MacOS" "$TOOLS" "$LICENSES"
 cp "$ROOT/.build/$CONFIGURATION/NDM" "$APP/Contents/MacOS/NDM"
 cp "$APP_ICON" "$APP/Contents/Resources/NDM.icns"
 cp -L "$YTDLP_BIN" "$TOOLS/yt-dlp"
+ytdlp_runtime="$(dirname "$YTDLP_BIN")/_internal"
+if [[ -d "$ytdlp_runtime" ]]; then
+  rm -rf "$TOOLS/_internal"
+  cp -R "$ytdlp_runtime" "$TOOLS/_internal"
+fi
 cp -L "$FFMPEG_BIN" "$TOOLS/ffmpeg"
 cp -L "$DENO_BIN" "$TOOLS/deno"
 cp "$SOURCE_LICENSES"/*.txt "$LICENSES/"

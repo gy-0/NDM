@@ -188,6 +188,42 @@ public enum MediaLinkClassifier {
         "aac", "ogg", "opus", "avi", "flv", "ts", "m3u8", "m3u",
     ]
 
+    /// Hosts whose *page* URLs need yt-dlp. Ordinary files on these hosts
+    /// (a `.dmg` on bilibili CDN) stay on the Neat HTTP engine.
+    private static let videoSiteHostMarkers = [
+        "youtube.com", "youtu.be", "youtube-nocookie.com",
+        "bilibili.com", "b23.tv",
+        "douyin.com", "iesdouyin.com",
+        "tiktok.com",
+        "xiaohongshu.com", "xhslink.com",
+        "instagram.com",
+        "twitter.com", "x.com",
+        "vimeo.com",
+    ]
+
+    public static func looksLikeVideoSitePage(_ raw: String) -> Bool {
+        guard !looksLikeOrdinaryFileDownload(raw) else { return false }
+        guard let host = URL(string: raw)?.host?.lowercased() else { return false }
+        return videoSiteHostMarkers.contains { marker in
+            host == marker || host.hasSuffix("." + marker)
+        }
+    }
+
+    /// Which download engine should own this URL.
+    /// Ordinary files always stay on the Neat HTTP engine. yt-dlp is only
+    /// the extra page-resolver the product added on top of original NDM.
+    public static func engineLinkType(
+        url: String,
+        requestedType: String = "normal",
+        formatID: String? = nil
+    ) -> String {
+        if looksLikeOrdinaryFileDownload(url) { return "normal" }
+        if let formatID, !formatID.isEmpty { return "ytdlp" }
+        let requested = requestedType.lowercased()
+        if requested == "ytdlp" || requested == "media-page" { return "ytdlp" }
+        return requested.isEmpty ? "normal" : requested
+    }
+
     public static func looksLikeMediaPage(_ raw: String) -> Bool {
         guard let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),

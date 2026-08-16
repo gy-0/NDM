@@ -8,6 +8,7 @@ DerivedData/
 *.log
 dist/
 Vendor/Tools/yt-dlp
+Vendor/Tools/_internal/
 Vendor/Tools/ffmpeg
 Vendor/Tools/deno
 
