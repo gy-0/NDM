@@ -38,6 +38,10 @@ let manager = DownloadManager(
     }
 )
 
+Task.detached(priority: .utility) {
+    YtDlpTool.warm()
+}
+
 enum HostRequestError: LocalizedError {
     case collectionUnavailable
 
@@ -273,7 +277,10 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     let segments = (progress?.segmentStates ?? []).map { segment in
         [
             "id": segment.id,
-            "fraction": segment.fractionCompleted as Double
+            "fraction": segment.fractionCompleted as Double,
+            "start": NSNumber(value: segment.start),
+            "end": NSNumber(value: segment.end),
+            "completed": NSNumber(value: segment.completed)
         ] as [String: Any]
     }
     let source = URL(string: task.pageURL ?? task.url)?.host
@@ -296,6 +303,7 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         "progressFraction": progress?.fractionCompleted ?? (task.status == .complete ? 1 : 0),
         "bytesPerSecond": speed,
         "connections": connections,
+        "bandwidthLimit": NSNumber(value: task.bandwidthLimit),
         "segments": segments,
         "folderPath": task.folderPath ?? ""
     ]
@@ -317,6 +325,9 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
                 "count": options.collectionCount ?? 0
             ] as [String: Any]
         }
+    }
+    if let startAt = task.startAt {
+        row["startAt"] = startAt.timeIntervalSince1970 * 1000
     }
     if let errorText = task.errorText {
         row["errorText"] = errorText
@@ -613,15 +624,19 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 ? .compactMKV
                 : .compatibleMP4
             let subtitleLanguage = (request["subtitleLanguage"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let scope = request["collectionScope"] as? String ?? "current"
             let options = YtDlpDownloadOptions(
                 container: container,
                 subtitleLanguage: subtitleLanguage,
-                cookieSource: cookieBrowser.map { .browser($0) }
+                cookieSource: cookieBrowser.map { .browser($0) },
+                // Replaying the probe's extraction skips a full network round
+                // trip before the first byte. Collections resolve per entry,
+                // so the sample probe only applies to the single-video path.
+                infoJSONPath: scope == "all" ? nil : prepared.probe.infoJSONPath
             )
             let destination = (request["folderPath"] as? String).flatMap {
                 $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true)
             }
-            let scope = request["collectionScope"] as? String ?? "current"
             if scope == "all" {
                 guard let collection = prepared.collection, !collection.items.isEmpty else {
                     throw HostRequestError.collectionUnavailable
@@ -673,19 +688,28 @@ func handle(request: [String: Any], connection: NWConnection) async {
             let pageTitle = request["pageTitle"] as? String
             let thumbnailURL = request["thumbnailURL"] as? String
             let formatID = request["formatID"] as? String
-            var ltype = request["ltype"] as? String ?? "normal"
-            if formatID != nil || MediaLinkClassifier.looksLikeMediaPage(url) || url.contains("youtube.com") || url.contains("youtu.be") || url.contains("bilibili.com") {
-                ltype = "ytdlp"
-            }
+            let ltype = MediaLinkClassifier.engineLinkType(
+                url: url,
+                requestedType: request["ltype"] as? String ?? "normal",
+                formatID: formatID
+            )
             var destinationDirectory: URL? = nil
             if let folderPath = request["folderPath"] as? String, !folderPath.isEmpty {
                 destinationDirectory = URL(fileURLWithPath: folderPath)
             }
+            let method = (request["method"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "GET"
+            let postData: Data? = {
+                if let raw = request["body"] as? String { return Data(raw.utf8) }
+                if let b64 = request["postData"] as? String { return Data(base64Encoded: b64) }
+                return nil
+            }()
             var task = try await manager.addURL(
                 url,
                 connections: connections,
                 pageURL: pageURL,
                 pageTitle: pageTitle,
+                method: method,
+                postData: postData,
                 ltype: ltype,
                 destinationDirectory: destinationDirectory
             )
@@ -713,6 +737,41 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 }
             }
             sendJSON(connection, ["id": id, "ok": true, "task": taskJSON(task, progress: nil)])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "schedule":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            let startAt: Date?
+            if request["startAt"] == nil || request["startAt"] is NSNull {
+                startAt = nil
+            } else if let millis = request["startAt"] as? Double {
+                startAt = Date(timeIntervalSince1970: millis / 1000)
+            } else if let millis = request["startAt"] as? Int {
+                startAt = Date(timeIntervalSince1970: Double(millis) / 1000)
+            } else {
+                throw ManagerError.invalidURL
+            }
+            try await manager.schedule(taskID: taskID, at: startAt)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "setConnections":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            let count = request["connections"] as? Int ?? 1
+            try await manager.applyConnections(taskID: taskID, count: count)
+            sendJSON(connection, ["id": id, "ok": true])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "setBandwidth":
+            guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
+                throw ManagerError.taskNotFound
+            }
+            let bytes = request["bandwidthLimit"] as? Int64
+                ?? (request["bandwidthLimit"] as? Int).map(Int64.init)
+                ?? 0
+            try await manager.applyBandwidth(taskID: taskID, bytesPerSecond: bytes)
+            sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "pause":
             guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init) else {
@@ -900,7 +959,11 @@ Task {
     var previousActiveIDs = Set<Int64>()
     while true {
         try? await Task.sleep(nanoseconds: 250_000_000)
+        let started = await manager.startDueScheduledTasks()
         let active = await manager.hasActiveDownloads()
+        if !started.isEmpty {
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
+        }
         guard active || !previousActiveIDs.isEmpty else { continue }
         let rows = await snapshot(activeOnly: true)
         let currentIDs = Set(rows.compactMap { ($0["id"] as? NSNumber)?.int64Value })

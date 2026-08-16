@@ -197,6 +197,7 @@ public actor DownloadManager {
         pageTitle: String? = nil,
         headers: [String] = [],
         method: String = "GET",
+        postData: Data? = nil,
         ltype: String = "normal",
         destinationDirectory: URL? = nil
     ) async throws -> DownloadTask {
@@ -227,6 +228,7 @@ public actor DownloadManager {
             userAgent: settings.useCustomUserAgent ? settings.customUserAgent : nil,
             pageURL: pageURL,
             pageTitle: pageTitle,
+            postData: postData,
             folderPath: nil,
             headers: headers
         )
@@ -1210,6 +1212,14 @@ public actor DownloadManager {
         task.connections = n
         try store.update(task)
         try await engines[taskID]?.applyConnectionsCount(n)
+    }
+
+    /// Persist a per-task cap. Live HTTP engines pick this up on the next
+    /// start; a running transfer keeps its current limiter until then.
+    public func applyBandwidth(taskID: Int64, bytesPerSecond: Int64) throws {
+        guard var task = try task(id: taskID) else { throw ManagerError.taskNotFound }
+        task.bandwidthLimit = max(0, bytesPerSecond)
+        try store.update(task)
     }
 
     /// A08 — renew expired URL while keeping task id / partial segments.
