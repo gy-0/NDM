@@ -106,11 +106,6 @@ its source files.
 ## Tests
 
 ```sh
-node --test tests/*.test.js
-node --check bg.js
-node --check ct.js
-node --check media-policy.js
-node --check resource-policy.js
-node --check resource-shelf.js
-node --check site-adapters.js
+npm test          # run all contract tests (node --test tests/*.test.js)
+npm run check     # syntax-check every script, then run all tests
 ```
