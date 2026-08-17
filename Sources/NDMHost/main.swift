@@ -263,6 +263,35 @@ func settingsJSON(_ s: AppSettings) -> [String: Any] {
     return dict
 }
 
+func completionArtifactKind(_ kind: CompletionArtifact.Kind) -> String {
+    switch kind {
+    case .primary: return "primary"
+    case .subtitle: return "subtitle"
+    case .cover: return "cover"
+    case .audio: return "audio"
+    case .metadata: return "metadata"
+    case .other: return "other"
+    }
+}
+
+func completionStackJSON(for task: DownloadTask) -> [[String: Any]] {
+    guard task.status == .complete,
+          let folderPath = task.folderPath,
+          !folderPath.isEmpty,
+          !task.filename.isEmpty else { return [] }
+    let primaryURL = URL(fileURLWithPath: folderPath, isDirectory: true)
+        .appendingPathComponent(task.filename)
+    guard let stack = SmartFinalize.completionStack(primary: primaryURL) else { return [] }
+    return stack.artifacts.map { artifact in
+        [
+            "kind": completionArtifactKind(artifact.kind),
+            "name": artifact.url.lastPathComponent,
+            "path": artifact.url.path,
+            "byteCount": NSNumber(value: artifact.byteCount)
+        ]
+    }
+}
+
 func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any] {
     let completed = progress?.completedBytes ?? (task.status == .complete ? task.fileSize : 0)
     let speed = progress?.bytesPerSecond ?? 0
@@ -427,6 +456,17 @@ func handle(request: [String: Any], connection: NWConnection) async {
             sendJSON(connection, ["id": id, "ok": true, "engine": "NDMHost"])
         case "list":
             sendJSON(connection, ["id": id, "ok": true, "tasks": await snapshot()])
+        case "completionStack":
+            guard let taskID = request["taskID"] as? Int64
+                ?? (request["taskID"] as? Int).map(Int64.init),
+                  let task = try await manager.task(id: taskID) else {
+                throw ManagerError.taskNotFound
+            }
+            sendJSON(connection, [
+                "id": id,
+                "ok": true,
+                "artifacts": completionStackJSON(for: task)
+            ])
         case "findDuplicate":
             let urls = (request["urls"] as? [String])
                 ?? (request["url"] as? String).map { [$0] }
