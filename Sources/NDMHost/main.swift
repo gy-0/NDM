@@ -25,7 +25,9 @@ do {
 
 var currentSettings = SettingsStore.load()
 if let rawBridgePort = environment["NDM_BRIDGE_PORT"], let bridgePort = UInt16(rawBridgePort) {
-    currentSettings.bridgePort = bridgePort
+    // Port 0 ("unset") must never become an ephemeral bind: the extension
+    // dials the contract port by name, so an ephemeral bridge is unreachable.
+    currentSettings.bridgePort = bridgePort == 0 ? BridgeConstants.port : bridgePort
 }
 
 let manager = DownloadManager(
