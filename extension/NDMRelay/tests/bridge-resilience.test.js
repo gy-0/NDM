@@ -73,3 +73,15 @@ test("popup contract still pins the bridge endpoint and protocol", () => {
     assert.match(popup, /ws:\/\/127\.0\.0\.1:51873\/ndm\/download/);
     assert.match(popup, /"ndm\.open\.v1"/);
 });
+
+test("extension falls back to the legacy bridge port when the primary drifts", () => {
+    const background = source("bg.js");
+    const popup = source("popup.js");
+    // Both sides know both addresses; the worker rotates on a failed dial with
+    // pending intent and persists whichever endpoint answered.
+    assert.match(background, /"ws:\/\/127\.0\.0\.1:51873\/ndm\/download", "ws:\/\/127\.0\.0\.1:10007\/ndm\/download"/);
+    assert.match(background, /bridgeEndpointIndex = \(this\.bridgeEndpointIndex \+ 1\) % this\.bridgeEndpoints\.length/);
+    assert.match(background, /chrome\.storage\.local\.set\(\{ bridgeEndpoint: chosen \}/);
+    assert.match(popup, /BRIDGE_URL_FALLBACK = "ws:\/\/127\.0\.0\.1:10007\/ndm\/download"/);
+    assert.match(popup, /probeBridge\(retries - 1, Number\(endpointIndex \|\| 0\) \+ 1\)/);
+});

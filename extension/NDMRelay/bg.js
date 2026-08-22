@@ -228,6 +228,17 @@ function V() {
     // Tab created for the ndm:// protocol handoff; closed once the bridge is
     // live so no dead error page lingers in the tab strip.
     this.handoffTabId = -1;
+    // Primary contract port first, legacy 10007 as the standing fallback.
+    this.bridgeEndpoints = ["ws://127.0.0.1:51873/ndm/download", "ws://127.0.0.1:10007/ndm/download"];
+    this.bridgeEndpointIndex = 0;
+    var self = this;
+    chrome.storage.local.get(["bridgeEndpoint"], function(d) {
+        var i = self.bridgeEndpoints.indexOf(d.bridgeEndpoint);
+        if (i >= 0 && i != self.bridgeEndpointIndex) {
+            self.bridgeEndpointIndex = i;
+            if (!self.D && (self.i || self.pendingRelayQueue.length)) self.M()
+        }
+    });
     this.C = !1;
     chrome.contextMenus.removeAll(function() {
         chrome.contextMenus.create({
@@ -403,7 +414,10 @@ W.I = async function(a) {
 W.M = function() {
     // Never stack sockets: CONNECTING/OPEN already serves the queue.
     if (this.G && (0 == this.G.readyState || 1 == this.G.readyState)) return;
-    var a = new WebSocket("ws://127.0.0.1:51873/ndm/download", "ndm.open.v1");
+    // Endpoint fallback: the host binds its configured bridge port AND the
+    // legacy 10007, so if the primary drifted (custom port, restored profile),
+    // the very next dial tries the other address instead of dying forever.
+    var a = new WebSocket(this.bridgeEndpoints[this.bridgeEndpointIndex], "ndm.open.v1");
     a.onopen = this.fa;
     a.onclose = this.ca;
     a.onmessage = this.ea;
@@ -429,6 +443,10 @@ W.fa = function() {
         this.bridgeRetryTimer = null
     }
     this.bridgeRetryMs = 0;
+    // Remember the address that actually answered, so the next cold worker
+    // starts on the working endpoint instead of rediscovering it.
+    var chosen = this.bridgeEndpoints[this.bridgeEndpointIndex];
+    chrome.storage.local.set({ bridgeEndpoint: chosen }, function() {});
     // The popup may have closed right after asking for an ndm:// launch; its
     // handoff tab has served its purpose the moment this socket went live.
     if (this.handoffTabId >= 0) {
@@ -448,7 +466,12 @@ W.ca = function() {
     this.i = null;
     // Keep queued clicks: they represent explicit user intent and NDM may
     // simply still be launching. A bounded retry dials until the queue drains.
-    this.pendingRelayQueue.length && this.scheduleBridgeRetry()
+    if (this.pendingRelayQueue.length) {
+        // The endpoint we just lost failed while work was pending — give the
+        // alternate address a chance on the next dial.
+        this.bridgeEndpointIndex = (this.bridgeEndpointIndex + 1) % this.bridgeEndpoints.length;
+        this.scheduleBridgeRetry()
+    }
 };
 W.scheduleBridgeRetry = function() {
     if (this.bridgeRetryTimer) return;

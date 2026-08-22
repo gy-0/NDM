@@ -14,7 +14,13 @@ const swiftConstants = fs.readFileSync(
 test("extension targets the NDM-specific bridge contract", () => {
     assert.match(background, /ws:\/\/127\.0\.0\.1:51873\/ndm\/download/);
     assert.match(background, /"ndm\.open\.v1"/);
-    assert.doesNotMatch(background, /127\.0\.0\.1:10007|neatextension\.v1/);
+    // The legacy 10007 PORT is allowed as a fallback (the host deliberately
+    // serves ndm.open.v1 there too); the legacy Neat PROTOCOL is not.
+    assert.doesNotMatch(background, /neatextension\.v1/);
+    assert.match(
+        background,
+        /"ws:\/\/127\.0\.0\.1:10007\/ndm\/download", "ndm\.open\.v1"|10007\/ndm\/download/
+    );
 
     assert.match(swiftConstants, /port: UInt16 = 51_873/);
     assert.match(swiftConstants, /path = "\/ndm\/download"/);

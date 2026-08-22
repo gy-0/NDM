@@ -5,6 +5,9 @@
     "use strict";
 
     var BRIDGE_URL = "ws://127.0.0.1:51873/ndm/download";
+    // The host also serves the bridge on the legacy port, so a drifted or
+    // custom primary port never leaves the popup permanently blind.
+    var BRIDGE_URL_FALLBACK = "ws://127.0.0.1:10007/ndm/download";
     var BRIDGE_PROTOCOL = "ndm.open.v1";
     var APP_URL = "ndm://open/relay";
     // The live probe outranks the worker's cached flag, which can describe a
@@ -49,8 +52,10 @@
         openApp.disabled = state === "starting";
     }
 
-    function probeBridge(retries) {
+    function probeBridge(retries, endpointIndex) {
         retries = Number(retries || 0);
+        var endpoints = [BRIDGE_URL, BRIDGE_URL_FALLBACK];
+        var endpoint = endpoints[Number(endpointIndex || 0) % endpoints.length];
         var settled = false;
         var socket;
         function settle(state) {
@@ -60,7 +65,9 @@
                 if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
             } catch (error) { /* the probe socket is disposable */ }
             if (state === "offline" && retries > 0) {
-                setTimeout(function () { probeBridge(retries - 1); }, 550);
+                // Each retry also rotates the address, so one quiet pass covers
+                // both the contract port and the legacy fallback.
+                setTimeout(function () { probeBridge(retries - 1, Number(endpointIndex || 0) + 1); }, 550);
                 return;
             }
             probeSettled = true;
@@ -69,7 +76,7 @@
             if (state === "connected") closeHandoffTab();
         }
         try {
-            socket = new WebSocket(BRIDGE_URL, BRIDGE_PROTOCOL);
+            socket = new WebSocket(endpoint, BRIDGE_PROTOCOL);
         } catch (error) {
             settle("offline");
             return;
