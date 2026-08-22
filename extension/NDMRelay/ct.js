@@ -370,12 +370,9 @@ if (!window.o) {
         this.l = null;
         this.H = !0;
         this.ja = [];
-        this.port = chrome.runtime.connect({
-            name: "neat"
-        });
+        this.portRetries = 0;
         this.ga = Math.ceil(2E6 * Math.random());
-        this.port.onMessage.addListener(this.aa.bind(this));
-        this.port.onDisconnect.addListener(this.ca.bind(this));
+        this.connectPort();
         if (D()) {
             var a = this;
             this.sa = new window.MutationObserver(function(b) {
@@ -982,6 +979,110 @@ if (!window.o) {
             }
         })
     };
+    O.showBridgeNotice = function() {
+        if (window.top !== window) return;
+        var zh = String(navigator.language || "").toLowerCase().indexOf("zh") === 0;
+        var text = {
+            title: zh ? "无法连接到 NDM" : "Can't reach NDM",
+            body: zh ? "NDM 可能没有在运行。你的点击已暂存，连接恢复后会自动发送。" : "NDM may not be running. Your click is queued and will be sent once reconnected.",
+            open: zh ? "打开 NDM" : "Open NDM",
+            dismiss: zh ? "知道了" : "Dismiss",
+            opened: zh ? "已通知 NDM" : "NDM notified",
+            offline: zh ? "仍未连接，请启动 NDM 后重试" : "Still offline — start NDM and try again"
+        };
+        var host = document.getElementById("ndm-relay-bridge-toast");
+        if (host && host.remove) host.remove();
+        host = document.createElement("div");
+        host.id = "ndm-relay-bridge-toast";
+        // Isolated shadow root: page CSS can never restyle this notice, and the
+        // notice can never leak styles into the page.
+        var shadow = host.attachShadow ? host.attachShadow({ mode: "open" }) : host;
+        var style = document.createElement("style");
+        style.textContent = [
+            ":host{all:initial}",
+            "*{box-sizing:border-box}",
+            ".wrap{position:fixed;left:50%;bottom:22px;transform:translate(-50%,14px);opacity:0;z-index:2147483647;transition:transform .28s cubic-bezier(.22,1,.36,1),opacity .28s cubic-bezier(.22,1,.36,1);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
+            ".wrap.in{transform:translate(-50%,0);opacity:1}",
+            "@media(prefers-reduced-motion:reduce){.wrap{transition:none}}",
+            ".card{display:flex;align-items:flex-start;gap:11px;width:min(400px,calc(100vw - 32px));padding:13px 14px;border:1px solid rgba(60,60,67,.24);border-radius:12px;background:#f7f7f8;color:#1d1d1f;box-shadow:0 10px 30px rgba(0,0,0,.2)}",
+            ".dot{flex:none;width:8px;height:8px;border-radius:50%;background:#d16b4b;margin-top:5px}",
+            ".body{min-width:0;flex:1}",
+            ".title{font-size:13px;font-weight:700;line-height:1.3}",
+            ".msg{margin-top:3px;font-size:12px;line-height:1.45;color:#6e6e73}",
+            ".row{display:flex;align-items:center;gap:8px;margin-top:9px}",
+            ".open{appearance:none;border:0;border-radius:7px;background:#3478f6;color:#fff;height:28px;padding:0 12px;cursor:pointer;font:650 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
+            ".open:hover,.open:focus-visible{background:#2167e8;outline:2px solid rgba(52,120,246,.35);outline-offset:2px}",
+            ".close{appearance:none;border:0;border-radius:7px;background:transparent;color:#6e6e73;height:28px;padding:0 10px;cursor:pointer;font:550 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
+            ".close:hover,.close:focus-visible{background:rgba(120,120,128,.12);outline:none}",
+            "@media(prefers-color-scheme:dark){.card{background:#262628;color:#f5f5f6;border-color:rgba(235,235,245,.16)}.msg{color:#aaaab0}.close{color:#aaaab0}.close:hover{background:rgba(235,235,245,.12)}}"
+        ].join("");
+        shadow.appendChild(style);
+        var wrap = document.createElement("div");
+        wrap.className = "wrap";
+        var card = document.createElement("div");
+        card.className = "card";
+        var dot = document.createElement("span");
+        dot.className = "dot";
+        var bodyEl = document.createElement("div");
+        bodyEl.className = "body";
+        var title = document.createElement("div");
+        title.className = "title";
+        title.textContent = text.title;
+        var msg = document.createElement("div");
+        msg.className = "msg";
+        msg.textContent = text.body;
+        var row = document.createElement("div");
+        row.className = "row";
+        var openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.className = "open";
+        openBtn.textContent = text.open;
+        var closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "close";
+        closeBtn.textContent = text.dismiss;
+        row.appendChild(openBtn);
+        row.appendChild(closeBtn);
+        bodyEl.appendChild(title);
+        bodyEl.appendChild(msg);
+        bodyEl.appendChild(row);
+        card.appendChild(dot);
+        card.appendChild(bodyEl);
+        wrap.appendChild(card);
+        shadow.appendChild(wrap);
+
+        function hide() {
+            wrap.classList.remove("in");
+            setTimeout(function() {
+                if (host && host.remove) host.remove()
+            }, 300)
+        }
+        var timer = setTimeout(hide, 9000);
+        closeBtn.addEventListener("click", function() {
+            clearTimeout(timer);
+            hide()
+        });
+        openBtn.addEventListener("click", function() {
+            try {
+                chrome.runtime.sendMessage({ type: "relay:openApp" }, function(reply) {
+                    if (!reply || !reply.connected) {
+                        msg.textContent = text.offline;
+                        return
+                    }
+                    openBtn.textContent = text.opened;
+                    openBtn.disabled = true;
+                    clearTimeout(timer);
+                    timer = setTimeout(hide, 1800)
+                })
+            } catch (e) {}
+        });
+        (document.body || document.documentElement).appendChild(host);
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                wrap.classList.add("in")
+            })
+        })
+    };
     O.aa = function(a) {
         var b = this;
         switch (a[0]) {
@@ -1032,7 +1133,7 @@ if (!window.o) {
                 b.resourceShelf && b.resourceShelf.add(a[1]);
                 break;
             case 15:
-                alert("The browser extension can't connect to NDM. You can: \r\n1- Check that NDM is running.\r\n2- Hold down Delete and click the download link.\r\n3- Temporarily disable the NDM browser extension.")
+                b.showBridgeNotice()
         }
     };
     O.o = function(a) {
@@ -1065,9 +1166,30 @@ if (!window.o) {
         } catch (c) {}
     };
     O.ca = function() {
-        this.port = chrome.runtime.connect({
-            name: "neat"
-        });
+        // After the extension reloads or updates, chrome.runtime.connect throws
+        // "Extension context invalidated" in old pages. Retry a few times, then
+        // stop quietly instead of throwing in page context forever.
+        if (this.portRetries === undefined) this.portRetries = 0;
+        var b = this;
+        try {
+            this.port = chrome.runtime.connect({
+                name: "neat"
+            });
+            this.portRetries = 0
+        } catch (a) {
+            if (3 <= ++this.portRetries) return;
+            setTimeout(function() {
+                b.ca()
+            }, 3000);
+            return
+        }
+        this.wirePort()
+    };
+    O.connectPort = function() {
+        this.portRetries = 0;
+        this.ca()
+    };
+    O.wirePort = function() {
         this.port.onMessage.addListener(this.aa.bind(this));
         this.port.onDisconnect.addListener(this.ca.bind(this))
     };

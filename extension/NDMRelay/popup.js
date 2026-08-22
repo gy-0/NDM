@@ -65,6 +65,8 @@
             }
             probeSettled = true;
             setStatus(state);
+            // NDM answered: the handoff tab has done its job.
+            if (state === "connected") closeHandoffTab();
         }
         try {
             socket = new WebSocket(BRIDGE_URL, BRIDGE_PROTOCOL);
@@ -77,14 +79,30 @@
         setTimeout(function () { settle("offline"); }, 1500);
     }
 
+    // Tab created only to hand the ndm:// URL to the OS. Once the bridge is
+    // live (or the popup closes and the worker takes over) it must not linger
+    // as a dead error page in the tab strip.
+    var handoffTabId = -1;
+
+    function closeHandoffTab() {
+        if (handoffTabId < 0) return;
+        var id = handoffTabId;
+        handoffTabId = -1;
+        try {
+            chrome.tabs.remove(id, function () { void chrome.runtime.lastError; });
+        } catch (error) { /* the popup is closing anyway */ }
+    }
+
     function launchApp() {
         setStatus("starting");
         try {
-            chrome.tabs.create({ url: APP_URL }, function () {
+            chrome.tabs.create({ url: APP_URL }, function (tab) {
                 if (chrome.runtime.lastError) {
                     setStatus("offline");
                     return;
                 }
+                handoffTabId = tab && tab.id >= 0 ? tab.id : -1;
+                chrome.runtime.sendMessage({ type: "relay:handoff", tabId: handoffTabId });
                 probeSettled = false;
                 probeBridge(10);
             });

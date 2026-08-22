@@ -221,6 +221,13 @@ function V() {
     // Items waiting for the bridge socket. A single slot used to drop every
     // request but the last one when NDM was still launching.
     this.pendingRelayQueue = [];
+    // Bridge retry clock: exponential 1s→15s while clicks wait, reset on open.
+    this.bridgeRetryMs = 0;
+    this.bridgeRetryTimer = null;
+    this.lastBridgeNoticeAt = 0;
+    // Tab created for the ndm:// protocol handoff; closed once the bridge is
+    // live so no dead error page lingers in the tab strip.
+    this.handoffTabId = -1;
     this.C = !1;
     chrome.contextMenus.removeAll(function() {
         chrome.contextMenus.create({
@@ -391,7 +398,7 @@ W.I = async function(a) {
             });
             f.ok && (a["8"] = a["8"] || f.headers.get("content-type") || "", a["7"] = a["7"] || f.headers.get("Content-Length") || 0, b += "8:" + a["8"] + "\r\n", b += "7:" + a["7"] + "\r\n", this.G.send(b), this.i = null)
         } catch (f) {}
-    } else this.pendingRelayQueue.push(a), this.M()
+    } else (20 < this.pendingRelayQueue.length && this.pendingRelayQueue.shift(), this.pendingRelayQueue.push(a), this.M())
 };
 W.M = function() {
     // Never stack sockets: CONNECTING/OPEN already serves the queue.
@@ -416,6 +423,21 @@ W.requestAppFocus = function() {
 };
 W.fa = function() {
     this.D = !0;
+    // Fresh connection: drop the retry clock and let the next drop start at 1s.
+    if (this.bridgeRetryTimer) {
+        clearTimeout(this.bridgeRetryTimer);
+        this.bridgeRetryTimer = null
+    }
+    this.bridgeRetryMs = 0;
+    // The popup may have closed right after asking for an ndm:// launch; its
+    // handoff tab has served its purpose the moment this socket went live.
+    if (this.handoffTabId >= 0) {
+        var c = this.handoffTabId;
+        this.handoffTabId = -1;
+        chrome.tabs.remove(c, function() {
+            void chrome.runtime.lastError
+        })
+    }
     var a = this.pendingRelayQueue;
     this.pendingRelayQueue = [];
     for (var b = 0; b < a.length; b++) this.I(a[b]);
@@ -424,7 +446,18 @@ W.fa = function() {
 W.ca = function() {
     this.D = !1;
     this.i = null;
-    this.pendingRelayQueue = []
+    // Keep queued clicks: they represent explicit user intent and NDM may
+    // simply still be launching. A bounded retry dials until the queue drains.
+    this.pendingRelayQueue.length && this.scheduleBridgeRetry()
+};
+W.scheduleBridgeRetry = function() {
+    if (this.bridgeRetryTimer) return;
+    var a = this;
+    this.bridgeRetryMs = this.bridgeRetryMs ? Math.min(2 * this.bridgeRetryMs, 15000) : 1000;
+    this.bridgeRetryTimer = setTimeout(function() {
+        a.bridgeRetryTimer = null;
+        a.M()
+    }, this.bridgeRetryMs)
 };
 W.ea = function(a) {
     a = a.data;
@@ -434,7 +467,10 @@ W.ea = function(a) {
 };
 W.da = function() {
     this.D = !1;
-    if (this.i || this.pendingRelayQueue.length) {
+    // Tell the page once per episode (not once per failed request) that the
+    // bridge is down, so the page can show a calm inline notice.
+    if ((this.i || this.pendingRelayQueue.length) && Date.now() - this.lastBridgeNoticeAt > 8000) {
+        this.lastBridgeNoticeAt = Date.now();
         var a = this;
         chrome.tabs.query({
             currentWindow: !0,
@@ -444,7 +480,7 @@ W.da = function() {
         })
     }
     this.i = null;
-    this.pendingRelayQueue = []
+    this.pendingRelayQueue.length && this.scheduleBridgeRetry()
 };
 W.J = function(a) {
     if (this.i) {
@@ -1034,6 +1070,11 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
         sendResponse({
             catcherEnabled: NDM_BG.v
         });
+        return
+    }
+    if ("relay:handoff" == message.type) {
+        NDM_BG.handoffTabId = "number" == typeof message.tabId && 0 <= message.tabId ? message.tabId : -1;
+        sendResponse({});
         return
     }
     "relay:showMediaPanel" == message.type && 0 <= message.tabId && (NDM_BG.ma(message.tabId, [17]), sendResponse({}))
