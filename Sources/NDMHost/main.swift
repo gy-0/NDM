@@ -902,6 +902,29 @@ func handle(request: [String: Any], connection: NWConnection) async {
             }
             sendJSON(connection, ["id": id, "ok": true])
             broadcast(["op": "snapshot", "tasks": await snapshot()])
+        case "restartMany":
+            // Library cleanup retries whole failure buckets in one op instead of
+            // broadcasting a full snapshot per row.
+            guard let ids = request["taskIDs"] as? [Int64]
+                ?? (request["taskIDs"] as? [Int]).map({ $0.map(Int64.init) }) else {
+                throw ManagerError.taskNotFound
+            }
+            var restarted = 0
+            for taskID in ids {
+                if var task = try await manager.task(id: taskID) {
+                    await manager.pause(taskID: taskID)
+                    task.status = .waiting
+                    task.errorText = nil
+                    try? store.update(task)
+                    // Same semantics as the single restart: reset rows actually
+                    // begin again. A busy one-at-a-time queue leaves them
+                    // waiting for the normal completion pump.
+                    try? await manager.start(taskID: taskID)
+                    restarted += 1
+                }
+            }
+            sendJSON(connection, ["id": id, "ok": true, "count": restarted])
+            broadcast(["op": "snapshot", "tasks": await snapshot()])
         case "renew":
             guard let taskID = request["taskID"] as? Int64 ?? (request["taskID"] as? Int).map(Int64.init),
                   let newURL = request["url"] as? String, !newURL.isEmpty else {

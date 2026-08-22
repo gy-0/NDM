@@ -39,8 +39,25 @@ public enum SettingsStore {
         var installerAutoAcceptLicense: Bool?
     }
 
+    /// QA, preview, and packaged-QA launches redirect the support directory via
+    /// NDM_SUPPORT_DIR. Settings must follow: writing them to the process's
+    /// standard domain is exactly how an isolated run once leaked a QA bridge
+    /// port into the user's real preferences.
+    public static func activeDefaults() -> UserDefaults {
+        if let dir = ProcessInfo.processInfo.environment["NDM_SUPPORT_DIR"], !dir.isEmpty {
+            // Stable per-path suite keeps one isolated root readable across
+            // restarts while never touching dev.ndm.open / NDMHost domains.
+            var hash: UInt64 = 0xcbf29ce484222325
+            for byte in dir.utf8 {
+                hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+            }
+            return UserDefaults(suiteName: "ndm.support.\(String(hash, radix: 16))") ?? .standard
+        }
+        return .standard
+    }
+
     public static func load() -> AppSettings {
-        load(defaults: .standard)
+        load(defaults: activeDefaults())
     }
 
     /// Internal injection point keeps tests out of the production preferences domain.
@@ -92,7 +109,7 @@ public enum SettingsStore {
     }
 
     public static func save(_ settings: AppSettings) {
-        save(settings, defaults: .standard)
+        save(settings, defaults: activeDefaults())
     }
 
     /// Internal injection point keeps tests out of the production preferences domain.
