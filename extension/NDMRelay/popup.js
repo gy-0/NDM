@@ -208,6 +208,8 @@
     localize();
     renderVersion();
     setStatus("checking");
-    probeBridge();
+    // A few retries let the probe rotate onto the legacy fallback when the
+    // contract port is not the one this host bound.
+    probeBridge(3);
     activeTab(refreshState);
 })();

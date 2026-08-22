@@ -231,6 +231,8 @@ function V() {
     // Primary contract port first, legacy 10007 as the standing fallback.
     this.bridgeEndpoints = ["ws://127.0.0.1:51873/ndm/download", "ws://127.0.0.1:10007/ndm/download"];
     this.bridgeEndpointIndex = 0;
+    this.everConnected = !1;
+    this.coldProbes = 0;
     var self = this;
     chrome.storage.local.get(["bridgeEndpoint"], function(d) {
         var i = self.bridgeEndpoints.indexOf(d.bridgeEndpoint);
@@ -437,6 +439,8 @@ W.requestAppFocus = function() {
 };
 W.fa = function() {
     this.D = !0;
+    this.everConnected = !0;
+    this.coldProbes = 0;
     // Fresh connection: drop the retry clock and let the next drop start at 1s.
     if (this.bridgeRetryTimer) {
         clearTimeout(this.bridgeRetryTimer);
@@ -464,13 +468,16 @@ W.fa = function() {
 W.ca = function() {
     this.D = !1;
     this.i = null;
-    // Keep queued clicks: they represent explicit user intent and NDM may
-    // simply still be launching. A bounded retry dials until the queue drains.
-    if (this.pendingRelayQueue.length) {
-        // The endpoint we just lost failed while work was pending — give the
-        // alternate address a chance on the next dial.
+    // The address we just lost failed — give the alternate a chance on the
+    // next dial, whether or not clicks are waiting. With no pending intent we
+    // still probe a bounded number of times so a cold worker that started
+    // against a not-yet-listening host finds the bridge once it appears.
+    if (this.pendingRelayQueue.length || !this.everConnected) {
         this.bridgeEndpointIndex = (this.bridgeEndpointIndex + 1) % this.bridgeEndpoints.length;
-        this.scheduleBridgeRetry()
+        if (this.pendingRelayQueue.length || this.coldProbes < 4) {
+            if (!this.pendingRelayQueue.length) this.coldProbes++;
+            this.scheduleBridgeRetry()
+        }
     }
 };
 W.scheduleBridgeRetry = function() {
