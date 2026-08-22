@@ -82,6 +82,10 @@
             return;
         }
         socket.onopen = function () { settle("connected"); };
+        // A clean server close is just as decisive as an error — settling on
+        // onclose keeps the offline verdict fast instead of burning the
+        // full 1500ms watchdog per attempt.
+        socket.onclose = function () { settle("offline"); };
         socket.onerror = function () { settle("offline"); };
         setTimeout(function () { settle("offline"); }, 1500);
     }
