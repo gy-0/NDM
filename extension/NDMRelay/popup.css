@@ -1,4 +1,12 @@
 /* NDM Relay popup — mirrors the app's walnut (dark) / dawn (light) language. */
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/instrument-serif-latin-400-normal.woff2") format("woff2");
+}
+
 :root {
   --ink: #f4efe6;
   --panel: #ece5d7;
@@ -68,8 +76,8 @@ body {
 }
 
 .wordmark {
-  font-family: Georgia, "Songti SC", serif;
-  font-size: 21px;
+  font-family: "Instrument Serif", Georgia, "Songti SC", serif;
+  font-size: 22px;
   letter-spacing: -0.02em;
 }
 
@@ -93,6 +101,16 @@ body {
   height: 7px;
   border-radius: 999px;
   background: var(--mist);
+}
+
+/* While probing, the dot breathes — honest "working on it" without a spinner. */
+.status[data-state="checking"] .dot {
+  animation: dot-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes dot-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
 .status[data-state="connected"] .dot {
@@ -215,6 +233,7 @@ body {
   height: 16px;
   border-radius: 999px;
   background: var(--raised);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.22);
   transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
@@ -260,4 +279,19 @@ body {
   font-size: 10px;
   letter-spacing: 0.02em;
   color: color-mix(in srgb, var(--mist) 70%, transparent);
+}
+
+/* Keyboard reachability is part of the design, not an afterthought. */
+.btn:focus-visible,
+.switch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
