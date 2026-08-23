@@ -46,13 +46,44 @@ Task.detached(priority: .utility) {
 
 enum HostRequestError: LocalizedError {
     case collectionUnavailable
+    case invalidProxyPort
 
     var errorDescription: String? {
         switch self {
         case .collectionUnavailable:
             return "没有可加入队列的合集条目，请重新解析后再试"
+        case .invalidProxyPort:
+            return "代理端口必须是 1–65535 之间的整数"
         }
     }
+}
+
+func validatedProxyPort(
+    in request: [String: Any],
+    key: String,
+    default defaultPort: UInt16
+) throws -> UInt16 {
+    guard let raw = request[key] else { return defaultPort }
+    guard let integer = raw as? Int,
+          let port = SettingsInputValidation.port(integer) else {
+        throw HostRequestError.invalidProxyPort
+    }
+    return port
+}
+
+func validatedProxyUpdate(
+    in request: [String: Any],
+    hostKey: String,
+    portKey: String,
+    enabledKey: String,
+    defaultPort: UInt16
+) throws -> (host: String, port: UInt16, enabled: Bool)? {
+    guard let rawHost = request[hostKey] as? String else { return nil }
+    let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+    let port = host.isEmpty
+        ? defaultPort
+        : try validatedProxyPort(in: request, key: portKey, default: defaultPort)
+    return (host, port, request[enabledKey] as? Bool ?? true)
 }
 
 final class Hub: @unchecked Sendable {
@@ -481,6 +512,23 @@ func handle(request: [String: Any], connection: NWConnection) async {
         case "getSettings":
             sendJSON(connection, ["id": id, "ok": true, "settings": settingsJSON(currentSettings)])
         case "updateSettings":
+            // Validate every supplied proxy endpoint before mutating any
+            // setting. A rejected request must neither crash on UInt16
+            // conversion nor leave unrelated fields partially applied.
+            let httpProxyUpdate = try validatedProxyUpdate(
+                in: request,
+                hostKey: "httpProxyHost",
+                portKey: "httpProxyPort",
+                enabledKey: "httpProxyEnabled",
+                defaultPort: 8080
+            )
+            let socksProxyUpdate = try validatedProxyUpdate(
+                in: request,
+                hostKey: "socksProxyHost",
+                portKey: "socksProxyPort",
+                enabledKey: "socksProxyEnabled",
+                defaultPort: 1080
+            )
             if let dir = request["downloadDirectory"] as? String, !dir.isEmpty {
                 currentSettings.downloadDirectory = URL(fileURLWithPath: dir)
             }
@@ -493,15 +541,15 @@ func handle(request: [String: Any], connection: NWConnection) async {
             if let catFolders = request["useCategoryFolders"] as? Bool {
                 currentSettings.useCategoryFolders = catFolders
             }
-            if let httpHost = request["httpProxyHost"] as? String {
-                let port = UInt16(request["httpProxyPort"] as? Int ?? 8080)
-                let enabled = request["httpProxyEnabled"] as? Bool ?? true
-                currentSettings.httpProxy = httpHost.isEmpty ? nil : ProxySettings(host: httpHost, port: port, enabled: enabled)
+            if let update = httpProxyUpdate {
+                currentSettings.httpProxy = update.host.isEmpty
+                    ? nil
+                    : ProxySettings(host: update.host, port: update.port, enabled: update.enabled)
             }
-            if let socksHost = request["socksProxyHost"] as? String {
-                let port = UInt16(request["socksProxyPort"] as? Int ?? 1080)
-                let enabled = request["socksProxyEnabled"] as? Bool ?? true
-                currentSettings.socksProxy = socksHost.isEmpty ? nil : SocksProxySettings(host: socksHost, port: port, version: .v5, enabled: enabled)
+            if let update = socksProxyUpdate {
+                currentSettings.socksProxy = update.host.isEmpty
+                    ? nil
+                    : SocksProxySettings(host: update.host, port: update.port, version: .v5, enabled: update.enabled)
             }
             SettingsStore.save(currentSettings)
             await manager.updateSettings(currentSettings)

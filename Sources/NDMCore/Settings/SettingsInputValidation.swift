@@ -33,6 +33,11 @@ public enum SettingsInputValidation {
         return value
     }
 
+    public static func port(_ raw: Int) -> UInt16? {
+        guard let value = UInt16(exactly: raw), value > 0 else { return nil }
+        return value
+    }
+
     public static func nonEmptyText(_ raw: String) -> String? {
         let value = trim(raw)
         return value.isEmpty ? nil : value

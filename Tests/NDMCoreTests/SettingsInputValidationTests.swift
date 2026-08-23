@@ -36,6 +36,14 @@ final class SettingsInputValidationTests: XCTestCase {
         XCTAssertNil(SettingsInputValidation.port("auto"))
     }
 
+    func testIntegerPortRejectsValuesThatWouldTrapUInt16Conversion() {
+        XCTAssertEqual(SettingsInputValidation.port(8_080), 8_080)
+        XCTAssertEqual(SettingsInputValidation.port(65_535), 65_535)
+        XCTAssertNil(SettingsInputValidation.port(0))
+        XCTAssertNil(SettingsInputValidation.port(-1))
+        XCTAssertNil(SettingsInputValidation.port(65_536))
+    }
+
     func testNonEmptyTextTrimsBeforeValidation() {
         XCTAssertEqual(SettingsInputValidation.nonEmptyText("  proxy.example  "), "proxy.example")
         XCTAssertNil(SettingsInputValidation.nonEmptyText(" \n\t "))
