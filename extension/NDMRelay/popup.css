@@ -8,36 +8,36 @@
 }
 
 :root {
-  --ink: #f4efe6;
-  --panel: #ece5d7;
-  --raised: #fffaf2;
-  --line: rgb(42 32 20 / 0.11);
-  --line-strong: rgb(42 32 20 / 0.17);
-  --fog: rgb(42 32 20 / 0.66);
-  --mist: rgb(42 32 20 / 0.42);
-  --paper: #2a2218;
-  --accent: #c47d2e;
-  --accent-label: #8f5418;
-  --on-accent: #fffaf2;
-  --ok: #5b734c;
-  --bad: #b24a32;
+  --ink: #f4f6f8;
+  --panel: #eef1f5;
+  --raised: #ffffff;
+  --line: rgb(15 23 42 / 0.09);
+  --line-strong: rgb(15 23 42 / 0.16);
+  --fog: #475467;
+  --mist: #667085;
+  --paper: #171a21;
+  --accent: #365fd9;
+  --accent-label: #2f52c7;
+  --on-accent: #ffffff;
+  --ok: #18864b;
+  --bad: #d14343;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #141210;
-    --panel: #1b1814;
-    --raised: #232017;
-    --line: rgb(255 248 235 / 0.09);
-    --line-strong: rgb(255 248 235 / 0.15);
-    --fog: rgb(244 232 214 / 0.6);
-    --mist: rgb(244 232 214 / 0.36);
-    --paper: #f4e8d6;
-    --accent: #d08a3a;
-    --accent-label: #e3a45f;
-    --on-accent: #141210;
-    --ok: #8aa073;
-    --bad: #c45c3e;
+    --ink: #0f1115;
+    --panel: #12151a;
+    --raised: #171a20;
+    --line: rgb(255 255 255 / 0.08);
+    --line-strong: rgb(255 255 255 / 0.15);
+    --fog: #cbd2dc;
+    --mist: #b4bcc8;
+    --paper: #f4f6fa;
+    --accent: #97acff;
+    --accent-label: #a9baff;
+    --on-accent: #09111f;
+    --ok: #62c48b;
+    --bad: #ff7b72;
   }
 }
 
@@ -398,7 +398,7 @@ body {
   border-top: 1px solid var(--line);
   font-size: 10px;
   letter-spacing: 0.02em;
-  color: color-mix(in srgb, var(--mist) 70%, transparent);
+  color: var(--mist);
 }
 
 /* Keyboard reachability is part of the design, not an afterthought. */
