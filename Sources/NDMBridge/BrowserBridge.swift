@@ -14,18 +14,26 @@ public final class BrowserBridge: @unchecked Sendable {
     /// fixed port that the OS may legitimately be using as an ephemeral
     /// outbound source port. Actual listening is covered with port 0.
     var configuredPort: UInt16 { requestedPort.rawValue }
+    private let handshakeTimeout: TimeInterval
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "dev.ndm.bridge", qos: .userInitiated)
     private let queueKey = DispatchSpecificKey<UInt8>()
+    private var pendingConnections: [ObjectIdentifier: NWConnection] = [:]
     private var connections: [ObjectIdentifier: NWConnection] = [:]
+    var pendingHandshakeCount: Int { syncOnQueue { pendingConnections.count } }
+    var connectedClientCount: Int { syncOnQueue { connections.count } }
     /// Actual bound port (useful when `port == 0` for tests).
     private var _boundPort: UInt16 = 0
     public var boundPort: UInt16 { syncOnQueue { _boundPort } }
 
-    public init(port: UInt16 = BridgeConstants.port) {
+    public init(
+        port: UInt16 = BridgeConstants.port,
+        handshakeTimeout: TimeInterval = 3
+    ) {
         // `0` means ephemeral — used by integration tests.
         self.requestedPort = NWEndpoint.Port(rawValue: port)
             ?? NWEndpoint.Port(rawValue: BridgeConstants.port)!
+        self.handshakeTimeout = max(0.05, handshakeTimeout)
         queue.setSpecific(key: queueKey, value: 1)
     }
 
@@ -72,6 +80,8 @@ public final class BrowserBridge: @unchecked Sendable {
         syncOnQueue {
             listener?.cancel()
             listener = nil
+            pendingConnections.values.forEach { $0.cancel() }
+            pendingConnections.removeAll()
             connections.values.forEach { $0.cancel() }
             connections.removeAll()
             _boundPort = 0
@@ -90,19 +100,38 @@ public final class BrowserBridge: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         let id = ObjectIdentifier(connection)
-        connections[id] = connection
+        pendingConnections[id] = connection
         connection.stateUpdateHandler = { [weak self] state in
-            if case .failed = state {
-                self?.connections[id] = nil
-                self?.onClientCountChanged?(self?.connections.count ?? 0)
-            }
-            if case .cancelled = state {
-                self?.connections[id] = nil
-                self?.onClientCountChanged?(self?.connections.count ?? 0)
-            }
+            if case .failed = state { self?.removeConnection(id: id) }
+            if case .cancelled = state { self?.removeConnection(id: id) }
+        }
+        queue.asyncAfter(deadline: .now() + handshakeTimeout) { [weak self, weak connection] in
+            guard let self,
+                  let connection,
+                  self.pendingConnections.removeValue(forKey: id) != nil
+            else { return }
+            connection.cancel()
         }
         connection.start(queue: queue)
         receiveHTTPUpgrade(on: connection, buffer: Data())
+    }
+
+    private func removeConnection(id: ObjectIdentifier) {
+        pendingConnections[id] = nil
+        if connections.removeValue(forKey: id) != nil {
+            onClientCountChanged?(connections.count)
+        }
+    }
+
+    private func promoteConnection(_ connection: NWConnection) -> Bool {
+        let id = ObjectIdentifier(connection)
+        guard pendingConnections.removeValue(forKey: id) != nil else {
+            connection.cancel()
+            return false
+        }
+        connections[id] = connection
+        onClientCountChanged?(connections.count)
+        return true
     }
 
     private func receiveHTTPUpgrade(on connection: NWConnection, buffer: Data) {
@@ -159,7 +188,7 @@ public final class BrowserBridge: @unchecked Sendable {
                     connection.cancel()
                     return
                 }
-                self.onClientCountChanged?(self.connections.count)
+                guard self.promoteConnection(connection) else { return }
                 self.receiveFrames(on: connection, buffer: remainder)
             })
         }

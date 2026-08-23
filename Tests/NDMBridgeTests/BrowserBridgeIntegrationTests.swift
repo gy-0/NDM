@@ -3,6 +3,26 @@ import XCTest
 @testable import NDMCore
 @testable import NDMEngine
 import Foundation
+import Network
+
+private final class FirstPositiveCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int?
+
+    func record(_ count: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard count > 0, value == nil else { return false }
+        value = count
+        return true
+    }
+
+    func read() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
 
 final class BrowserBridgeIntegrationTests: XCTestCase {
     func testWaitingNowaitingAndTaskCreated() async throws {
@@ -201,6 +221,70 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         await fulfillment(of: [connected], timeout: 3)
         socket.cancel()
         session.invalidateAndCancel()
+    }
+
+    func testIncompleteHandshakeDoesNotCountAsAWebSocketClient() async throws {
+        let bridge = BrowserBridge(port: 0)
+        let observedCount = expectation(description: "one upgraded websocket client")
+        let firstPositiveCount = FirstPositiveCount()
+        bridge.onClientCountChanged = { count in
+            if firstPositiveCount.record(count) { observedCount.fulfill() }
+        }
+        try bridge.start()
+        defer { bridge.stop() }
+
+        let rawReady = expectation(description: "raw TCP connection ready")
+        let raw = NWConnection(
+            host: NWEndpoint.Host(BridgeConstants.host),
+            port: NWEndpoint.Port(rawValue: bridge.boundPort)!,
+            using: .tcp
+        )
+        raw.stateUpdateHandler = { state in
+            if case .ready = state { rawReady.fulfill() }
+        }
+        raw.start(queue: .global())
+        await fulfillment(of: [rawReady], timeout: 2)
+
+        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)\(BridgeConstants.path)")!
+        var request = URLRequest(url: url)
+        request.setValue(BridgeConstants.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        request.setValue("chrome-extension://abcdefghijklmnop", forHTTPHeaderField: "Origin")
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: request)
+        socket.resume()
+
+        await fulfillment(of: [observedCount], timeout: 3)
+        XCTAssertEqual(firstPositiveCount.read(), 1)
+        raw.cancel()
+        socket.cancel()
+        session.invalidateAndCancel()
+    }
+
+    func testIncompleteHandshakeIsEvictedAfterTimeout() async throws {
+        let bridge = BrowserBridge(port: 0, handshakeTimeout: 1)
+        try bridge.start()
+        defer { bridge.stop() }
+
+        let rawReady = expectation(description: "raw TCP connection ready")
+        let raw = NWConnection(
+            host: NWEndpoint.Host(BridgeConstants.host),
+            port: NWEndpoint.Port(rawValue: bridge.boundPort)!,
+            using: .tcp
+        )
+        raw.stateUpdateHandler = { state in
+            if case .ready = state { rawReady.fulfill() }
+        }
+        raw.start(queue: .global())
+        await fulfillment(of: [rawReady], timeout: 2)
+        for _ in 0..<50 where bridge.pendingHandshakeCount == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(bridge.pendingHandshakeCount, 1)
+
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertEqual(bridge.pendingHandshakeCount, 0)
+        XCTAssertEqual(bridge.connectedClientCount, 0)
+        raw.cancel()
     }
 
     func testOriginPolicyAllowsExtensionsAndNativeClients() {
