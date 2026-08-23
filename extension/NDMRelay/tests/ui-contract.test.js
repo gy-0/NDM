@@ -7,19 +7,14 @@ function source(name) {
     return fs.readFileSync(path.join(__dirname, "..", name), "utf8");
 }
 
-test("resource shelf uses a solid restrained surface instead of decorative glass", () => {
-    const shelf = source("resource-shelf.js");
-    assert.doesNotMatch(shelf, /backdrop-filter|linear-gradient/i);
-    assert.doesNotMatch(shelf, /border-radius:\s*999/i);
-    assert.match(shelf, /badge-brand[^\n]+NDM|"badge-brand", "NDM"/);
-    assert.match(shelf, /可下载资源/);
-});
-
-test("resource shelf mounts under body lazily and never under html", () => {
-    const shelf = source("resource-shelf.js");
-    assert.match(shelf, /document\.body\.appendChild/);
-    assert.doesNotMatch(shelf, /documentElement \|\| document\)\.appendChild/);
-    assert.match(shelf, /Defer DOM insertion|documentElement mounts broke/);
+test("page resources live in the toolbar popup instead of an injected overlay", () => {
+    const manifest = JSON.parse(source("manifest.json"));
+    const scripts = manifest.content_scripts.flatMap(entry => entry.js || []);
+    const popup = source("popup.html");
+    assert.equal(scripts.includes("resource-shelf.js"), false);
+    assert.equal(scripts.includes("resource-policy.js"), false);
+    assert.match(popup, /id="resource-card"/);
+    assert.match(popup, /id="resource-list"/);
 });
 
 test("generic media control gets out of the way and remains toolbar-recoverable", () => {

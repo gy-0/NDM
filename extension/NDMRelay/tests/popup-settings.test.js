@@ -38,6 +38,9 @@ function loadPopupWithFailedToggle() {
         "show-panel": element(),
         "media-card": element(),
         "media-count-line": element(),
+        "resource-card": element(),
+        "resource-list": element(),
+        "resource-total": element(),
         "foot-note": element()
     };
     const messages = {
@@ -52,7 +55,7 @@ function loadPopupWithFailedToggle() {
         },
         runtime: {
             lastError: null,
-            getManifest() { return { version: "1.4.0" }; },
+            getManifest() { return { version: "1.4.1" }; },
             sendMessage(request, callback) {
                 if (request.type === "relay:getState") {
                     callback({ catcherEnabled: true, mediaCount: 0, connected: false });

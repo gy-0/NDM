@@ -17,6 +17,7 @@
   --mist: rgb(42 32 20 / 0.42);
   --paper: #2a2218;
   --accent: #c47d2e;
+  --accent-label: #8f5418;
   --on-accent: #fffaf2;
   --ok: #5b734c;
   --bad: #b24a32;
@@ -33,6 +34,7 @@
     --mist: rgb(244 232 214 / 0.36);
     --paper: #f4e8d6;
     --accent: #d08a3a;
+    --accent-label: #e3a45f;
     --on-accent: #141210;
     --ok: #8aa073;
     --bad: #c45c3e;
@@ -181,6 +183,89 @@ body {
   overflow-wrap: anywhere;
 }
 
+.resource-card {
+  overflow: hidden;
+  background: var(--raised);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--line);
+  margin-bottom: 8px;
+}
+
+.resource-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.resource-total,
+.resource-meta {
+  color: var(--mist);
+  font-size: 10.5px;
+}
+
+.resource-list {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.resource-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.resource-row:last-child {
+  border-bottom: 0;
+}
+
+.resource-info {
+  min-width: 0;
+}
+
+.resource-name,
+.resource-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-name {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.resource-meta {
+  margin-top: 2px;
+}
+
+.resource-download {
+  min-width: 52px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-label);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: default;
+  transition: background 140ms, transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.resource-download:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.resource-download:active {
+  transform: scale(0.96);
+}
+
 .btn {
   border: 0;
   border-radius: 999px;
@@ -318,7 +403,8 @@ body {
 
 /* Keyboard reachability is part of the design, not an afterthought. */
 .btn:focus-visible,
-.switch:focus-visible {
+.switch:focus-visible,
+.resource-download:focus-visible {
   outline: revert;
   outline-offset: 3px;
 }

@@ -151,6 +151,62 @@
         return message("popupMediaCount", [String(count)], count + " 项可下载");
     }
 
+    function describeResource(item) {
+        var type = item.resourceTypeLabel || String(item.fEx || "").toUpperCase();
+        var size = Number(item.fS || item[7] || 0);
+        var sizeText = "";
+        if (size > 0) {
+            var units = ["B", "KB", "MB", "GB"];
+            var unit = 0;
+            while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+            sizeText = (size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)) + " " + units[unit];
+        }
+        return [type, sizeText, item.resourceHost || ""].filter(Boolean).join(" · ");
+    }
+
+    function renderResources(tab, resources) {
+        var card = document.getElementById("resource-card");
+        var list = document.getElementById("resource-list");
+        resources = Array.isArray(resources) ? resources : [];
+        card.hidden = resources.length === 0;
+        document.getElementById("resource-total").textContent = resources.length
+            ? message("popupResourceCount", [String(resources.length)], resources.length + " 项")
+            : "";
+        while (list.firstChild) list.removeChild(list.firstChild);
+        resources.forEach(function (item) {
+            var row = document.createElement("div");
+            row.className = "resource-row";
+            var info = document.createElement("div");
+            info.className = "resource-info";
+            var name = document.createElement("div");
+            name.className = "resource-name";
+            name.textContent = item.fileName || message("popupUnnamedResource", null, "未命名文件");
+            name.title = name.textContent;
+            var meta = document.createElement("div");
+            meta.className = "resource-meta";
+            meta.textContent = describeResource(item);
+            info.appendChild(name);
+            info.appendChild(meta);
+            var download = document.createElement("button");
+            download.type = "button";
+            download.className = "resource-download";
+            download.textContent = message("popupDownload", null, "下载");
+            download.setAttribute("aria-label", download.textContent + " " + name.textContent);
+            download.addEventListener("click", function () {
+                chrome.runtime.sendMessage({
+                    type: "relay:downloadResource",
+                    tabId: tab && tab.id,
+                    resourceKey: item.resourceKey
+                }, function (reply) {
+                    if (!chrome.runtime.lastError && reply && reply.sent) window.close();
+                });
+            });
+            row.appendChild(info);
+            row.appendChild(download);
+            list.appendChild(row);
+        });
+    }
+
     function refreshState(tab) {
         chrome.runtime.sendMessage(
             { type: "relay:getState", tabId: tab ? tab.id : -1 },
@@ -168,6 +224,7 @@
                     document.getElementById("media-count-line").textContent =
                         describeMedia(count, reply.mediaSample);
                 }
+                renderResources(tab, reply.resources);
             }
         );
     }

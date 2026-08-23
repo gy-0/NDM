@@ -273,7 +273,7 @@
             if (observe(ladder[i]) <= baseline) return ladder[i];
         }
         // Out of room. Concede the slot rather than keep a native item squeezed —
-        // the resource shelf and the NDM float are still reachable.
+        // the toolbar popup and the generic NDM float are still reachable.
         observe("yield");
         return "yield";
     }

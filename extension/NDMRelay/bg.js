@@ -215,6 +215,7 @@ function V() {
     this.H = {};
     this.g = {};
     this.j = {};
+    this.resourcesByTab = Object.create(null);
     this.ga = 1;
     this.forwardedDownloadURLs = Object.create(null);
     this.blockedDownloadURLs = Object.create(null);
@@ -342,6 +343,7 @@ W.updateMediaBadge = function(tabId) {
         var port = this.H[key];
         if (port && port.tabId == tabId) count += Number(port.mediaCount || 0)
     }
+    count += (this.resourcesByTab[tabId] || []).length;
     chrome.action.setBadgeText({
         tabId: tabId,
         text: this.v ? (count ? String(Math.min(99, count)) : "") : "Off"
@@ -388,7 +390,14 @@ W.N = function(a) {
 };
 W.Z = function(a) {
     var b = this.g[[a.tabId, a.frameId]];
-    b && b["2"] != a.url && (b.postMessage([11, a.url]), b["2"] = a.url)
+    if (b && b["2"] != a.url) {
+        if (0 == a.frameId) {
+            delete this.resourcesByTab[a.tabId];
+            this.updateMediaBadge(a.tabId)
+        }
+        b.postMessage([11, a.url]);
+        b["2"] = a.url
+    }
 };
 W.Y = function(a) {
     var b = this.consumeDownloadURL(this.forwardedDownloadURLs, a),
@@ -654,23 +663,13 @@ W.A = function(a) {
     b.postMessage([1, a, b["2"]])
 };
 W.sendResource = function(a) {
-    var b = this.g[[a.tabId, 0]];
-    if (!b && (b = this.g[[a.tabId, a.frameId]], !b)) {
-        if (!this.pendingResources) this.pendingResources = {};
-        var key = a.tabId;
-        if (!this.pendingResources[key]) this.pendingResources[key] = [];
-        this.pendingResources[key].push(a);
-        return;
-    }
-    b.postMessage([19, a])
-};
-W.flushPendingResources = function(tabId) {
-    if (!this.pendingResources || !this.pendingResources[tabId]) return;
-    var pending = this.pendingResources[tabId];
-    delete this.pendingResources[tabId];
-    var b = this.g[[tabId, 0]];
-    if (!b) return;
-    for (var i = 0; i < pending.length; i++) b.postMessage([19, pending[i]]);
+    var tabId = Number(a && a.tabId);
+    if (!(0 <= tabId)) return;
+    this.resourcesByTab[tabId] = NDMRelayResourcePolicy.compactResources(
+        (this.resourcesByTab[tabId] || []).concat([a]),
+        12
+    );
+    this.updateMediaBadge(tabId)
 };
 W.O = function(a) {
     delete this.j[a.requestId]
@@ -1021,7 +1020,6 @@ W.$ = function(a) {
         a.postMessage([3, a.id]);
         a.postMessage([13, this.F]);
         a.sender = null;
-        if (0 == c) this.flushPendingResources(e)
     }
 };
 W.ba = function(a, b) {
@@ -1074,6 +1072,7 @@ W.aa = function(a) {
     var tabId = a.tabId;
     for (var b in this.g) this.g[b] == a && delete this.g[b];
     delete this.H[a.id];
+    a.ja && delete this.resourcesByTab[tabId];
     this.updateMediaBadge(tabId)
 };
 W.ma = function(a, b) {
@@ -1105,6 +1104,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
                 catcherEnabled: NDM_BG.v,
                 mediaCount: mediaCount,
                 mediaSample: mediaSample,
+                resources: NDM_BG.resourcesByTab[message.tabId] || [],
                 // Cached bridge state, so the popup can paint "connected" at once
                 // instead of flashing offline while its own probe dials.
                 connected: !!NDM_BG.D
@@ -1130,6 +1130,15 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     if ("relay:handoff" == message.type) {
         NDM_BG.handoffTabId = "number" == typeof message.tabId && 0 <= message.tabId ? message.tabId : -1;
         sendResponse({});
+        return
+    }
+    if ("relay:downloadResource" == message.type && 0 <= message.tabId) {
+        var resources = NDM_BG.resourcesByTab[message.tabId] || [],
+            requestedKey = message.resourceKey,
+            resource = resources.find(function(item) { return item.resourceKey == requestedKey; }),
+            target = NDM_BG.g[[message.tabId, 0]] || resource && NDM_BG.g[[message.tabId, resource.frameId]];
+        resource && target && target.postMessage([23, resource]);
+        sendResponse({ sent: !!(resource && target) });
         return
     }
     "relay:showMediaPanel" == message.type && 0 <= message.tabId && (NDM_BG.ma(message.tabId, [17]), sendResponse({}))

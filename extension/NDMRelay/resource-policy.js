@@ -72,11 +72,13 @@
         var extension = extensionFor(meta);
         var size = sizeFor(meta);
         var isAttachment = Boolean(meta.isAttachment);
+        var requestType = String(meta.requestType || "");
         if (isNoiseHost(host) || isNoiseFilename(name)) return false;
-        // Plain text from XHR is almost always a beacon or API stub, not a
-        // document the shelf should advertise. Keep attachment downloads only.
-        if (extension === "txt" && !isAttachment) return false;
-        if (extension === "txt" && size > 0 && size < MIN_USEFUL_BYTES) return false;
+        // A Content-Disposition header does not make a background text response
+        // user-facing. YouTube, among others, serves internal API payloads as
+        // json.txt / f.txt attachments. Only a real top-level navigation to a
+        // known-size text attachment belongs in the explicit resource list.
+        if (extension === "txt" && (!isAttachment || requestType !== "main_frame" || size < MIN_USEFUL_BYTES)) return false;
         if (size > 0 && size < (isAttachment ? MIN_ATTACHMENT_BYTES : MIN_USEFUL_BYTES)) return false;
         return true;
     }

@@ -132,6 +132,12 @@ function simulateResponse(runtime, options) {
     });
 }
 
+function readState(runtime, tabId = 10) {
+    let state;
+    runtime.listeners.runtimeMessage({ type: "relay:getState", tabId }, {}, reply => { state = reply; });
+    return state;
+}
+
 test("background ignores DAT and BIN page subresources", () => {
     const runtime = loadBackground();
     simulateResponse(runtime, {
@@ -150,7 +156,7 @@ test("background ignores DAT and BIN page subresources", () => {
     assert.deepEqual(runtime.cookieRequests, []);
 });
 
-test("background reports a useful embedded PDF without auto-downloading it", () => {
+test("background keeps a useful embedded PDF in the toolbar popup without auto-downloading it", () => {
     const runtime = loadBackground();
     const messages = [];
     runtime.listeners.runtimeConnect({
@@ -170,14 +176,15 @@ test("background reports a useful embedded PDF without auto-downloading it", () 
         contentType: "application/pdf"
     });
 
-    const resourceMessage = messages.find(message => message[0] === 19);
-    assert.ok(resourceMessage);
-    assert.equal(resourceMessage[1].fEx, "pdf");
-    assert.equal(resourceMessage[1][6], "normal");
+    const state = readState(runtime);
+    assert.equal(state.resources.length, 1);
+    assert.equal(state.resources[0].fEx, "pdf");
+    assert.equal(state.resources[0][6], "normal");
+    assert.equal(messages.some(message => message[0] === 19), false);
     assert.deepEqual(runtime.cookieRequests, []);
 });
 
-test("an iframe PDF is reported to the top-page resource shelf", () => {
+test("an iframe PDF is reported once in the tab toolbar popup", () => {
     const runtime = loadBackground();
     const topMessages = [];
     const frameMessages = [];
@@ -200,8 +207,38 @@ test("an iframe PDF is reported to the top-page resource shelf", () => {
         contentType: "application/pdf"
     });
 
-    assert.equal(topMessages.some(message => message[0] === 19), true);
+    assert.equal(readState(runtime).resources.length, 1);
+    assert.equal(topMessages.some(message => message[0] === 19), false);
     assert.equal(frameMessages.some(message => message[0] === 19), false);
+    let reply;
+    runtime.listeners.runtimeMessage({
+        type: "relay:downloadResource",
+        tabId: 10,
+        resourceKey: readState(runtime).resources[0].resourceKey
+    }, {}, value => { reply = value; });
+    assert.equal(reply.sent, true);
+    assert.equal(topMessages.filter(message => message[0] === 23).length, 1);
+    assert.equal(frameMessages.filter(message => message[0] === 23).length, 0);
+});
+
+test("YouTube text attachments never become downloadable page files", () => {
+    const runtime = loadBackground();
+    simulateResponse(runtime, {
+        id: "youtube-json-text",
+        url: "https://www.youtube.com/api/stats/json.txt",
+        type: "xmlhttprequest",
+        contentType: "text/plain",
+        disposition: "attachment; filename=json.txt"
+    });
+    simulateResponse(runtime, {
+        id: "youtube-f-text",
+        url: "https://www.youtube.com/api/stats/f.txt",
+        type: "xmlhttprequest",
+        contentType: "text/plain",
+        disposition: "attachment; filename=f.txt"
+    });
+
+    assert.equal(readState(runtime).resources.length, 0);
 });
 
 test("background does not expose JavaScript or unknown DAT traffic as resources", () => {

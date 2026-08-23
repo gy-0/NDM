@@ -79,20 +79,19 @@ resume ordinary browser download catching.
 ## Useful page resources
 
 - Embedded PDF, Word, Excel, PowerPoint, CSV, EPUB/MOBI/AZW3, ZIP/RAR/7Z/TAR,
-  DMG, and PKG responses appear in a compact **Page resources** shelf.
+  DMG, and PKG responses appear only in the NDM Relay toolbar popup.
 - Each row shows the real filename, type, size when known, and source host.
 - Detection never starts a download. The URL is sent to NDM only after the user
   presses **Download**, and that button always uses the row's own URL — never
   the tab's video page.
-- Tiny responses (< 1 KB), plain `txt` without `Content-Disposition: attachment`,
+- Tiny responses (< 1 KB), background `txt` responses even when mislabeled as attachments,
   telemetry hosts such as `data.bilibili.com`, and junk names like `web.txt` are
   excluded so the shelf stays useful.
 - Signed/range variants and strong filename/type/size mirrors of the same
   resource are collapsed. JavaScript, JSON,
   images, DAT/BIN traffic, and raw video transport fragments are excluded.
-- The shelf mounts under `document.body` only when it has items (never as a
-  sibling of `<body>` under `<html>`), minimizes to a persistent resource-count
-  pill, and the NDM Relay toolbar button can open it again.
+- Page resources never inject a shelf, panel, or persistent pill into the site.
+  The toolbar badge announces useful detections; opening Relay reveals the list.
 - Direct installers/archives/documents (`.dmg`, `.pdf`, `.zip`, …) captured from
   a video site still download as ordinary files. Only media sniffs and explicit
   video-page actions enter the yt-dlp quality flow.

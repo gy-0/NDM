@@ -189,3 +189,16 @@ test("plain txt without attachment stays off the shelf", () => {
     });
     assert.equal(attached.fEx, "txt");
 });
+
+test("background text attachments stay hidden even when a site names them like files", () => {
+    ["json.txt", "f.txt"].forEach(fileName => {
+        assert.equal(policy.candidateFromResponse({
+            2: "https://www.youtube.com/api/stats/" + fileName,
+            7: 12_000,
+            8: "text/plain",
+            requestType: "xmlhttprequest",
+            isAttachment: true,
+            fileName
+        }), null);
+    });
+});

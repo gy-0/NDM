@@ -393,7 +393,6 @@ if (!window.o) {
         this.o(document, "DOMContentLoaded", this.da);
         this.o(document, "click", this.ra);
         this.siteAdapters = null;
-        this.resourceShelf = null;
         if (window.top === window && globalThis.NDMRelaySiteAdapters) {
             try {
                 this.siteAdapters = NDMRelaySiteAdapters.install({
@@ -402,15 +401,6 @@ if (!window.o) {
                 })
             } catch (a) {
                 this.siteAdapters = null
-            }
-        }
-        if (window.top === window && globalThis.NDMRelayResourceShelf) {
-            try {
-                this.resourceShelf = NDMRelayResourceShelf.install({
-                    onDownload: this.downloadResource.bind(this)
-                })
-            } catch (a) {
-                this.resourceShelf = null
             }
         }
     };
@@ -1106,7 +1096,6 @@ if (!window.o) {
                 }, 1400);
                 break;
             case 11:
-                b.resourceShelf && b.resourceShelf.reset();
                 b.za();
                 b.siteAdapters && b.siteAdapters.refresh();
                 c = new URL(window.location.href);
@@ -1127,10 +1116,9 @@ if (!window.o) {
             case 17:
                 b.H = !0;
                 b.showAllPanels();
-                b.resourceShelf && b.resourceShelf.show();
                 break;
-            case 19:
-                b.resourceShelf && b.resourceShelf.add(a[1]);
+            case 23:
+                b.downloadResource(a[1]);
                 break;
             case 15:
                 b.showBridgeNotice()

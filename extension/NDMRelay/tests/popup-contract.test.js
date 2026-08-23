@@ -29,6 +29,7 @@ test("popup speaks the background contract and probes the bridge itself", () => 
     assert.match(popup, /relay:getState/);
     assert.match(popup, /relay:toggleCatcher/);
     assert.match(popup, /relay:showMediaPanel/);
+    assert.match(popup, /relay:downloadResource/);
     assert.match(popup, /ws:\/\/127\.0\.0\.1:51873\/ndm\/download/);
     assert.match(popup, /ndm\.open\.v1/);
     assert.match(popup, /ndm:\/\/open\/relay/);
@@ -63,6 +64,7 @@ test("background answers every popup message type", () => {
     assert.match(background, /relay:getState/);
     assert.match(background, /relay:toggleCatcher/);
     assert.match(background, /relay:showMediaPanel/);
+    assert.match(background, /relay:downloadResource/);
     assert.match(background, /chrome\.runtime\.onMessage\.addListener/);
 });
 

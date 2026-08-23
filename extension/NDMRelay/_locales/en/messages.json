@@ -28,6 +28,13 @@
     }
   },
   "popupShowControls": { "message": "Show download options" },
+  "popupResourceTitle": { "message": "Files on this page" },
+  "popupResourceCount": {
+    "message": "$COUNT$",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "popupDownload": { "message": "Download" },
+  "popupUnnamedResource": { "message": "Unnamed file" },
   "popupCatcherTitle": { "message": "Catch browser downloads" },
   "popupCatcherSub": { "message": "Ordinary downloads hand off to NDM" },
   "popupSettingFailed": { "message": "Couldn't save the setting. Try again." },
