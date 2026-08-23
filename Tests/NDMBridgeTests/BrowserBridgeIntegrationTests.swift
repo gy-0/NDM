@@ -235,6 +235,13 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         ))
     }
 
+    func testClientFramesMustBeMasked() {
+        XCTAssertNil(WebSocketFraming.isMaskedClientFrame(Data([0x81])))
+        XCTAssertFalse(WebSocketFraming.isMaskedClientFrame(Data([0x81, 0x05]))!)
+        XCTAssertTrue(WebSocketFraming.isMaskedClientFrame(Data([0x81, 0x85]))!)
+        XCTAssertNil(WebSocketFraming.decodeTextFrame(from: Data([0x81, 0x02, 0x68, 0x69])))
+    }
+
     func testDefaultBridgeUsesDedicatedNDMPort() throws {
         let bridge = BrowserBridge()
         XCTAssertEqual(bridge.configuredPort, BridgeConstants.port)

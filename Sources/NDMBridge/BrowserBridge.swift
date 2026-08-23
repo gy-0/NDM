@@ -170,6 +170,10 @@ public final class BrowserBridge: @unchecked Sendable {
             guard let self else { return }
             var buf = buffer
             if let data { buf.append(data) }
+            if let masked = WebSocketFraming.isMaskedClientFrame(buf), !masked {
+                connection.cancel()
+                return
+            }
             if buf.count > BridgeConstants.maxMessageBytes + 14
                 || (WebSocketFraming.declaredPayloadLength(from: buf) ?? 0) > BridgeConstants.maxMessageBytes {
                 connection.cancel()
@@ -291,6 +295,11 @@ enum WebSocketFraming {
         return length > UInt64(Int.max) ? Int.max : Int(length)
     }
 
+    static func isMaskedClientFrame(_ data: Data) -> Bool? {
+        guard data.count >= 2 else { return nil }
+        return (data[1] & 0x80) != 0
+    }
+
     /// Returns (text, remaining) if a full client frame is available.
     static func decodeTextFrame(from data: Data) -> (String, Data)? {
         guard data.count >= 2 else { return nil }
@@ -298,6 +307,7 @@ enum WebSocketFraming {
         let b1 = data[1]
         let opcode = b0 & 0x0f
         let masked = (b1 & 0x80) != 0
+        guard masked else { return nil }
         var len = Int(b1 & 0x7f)
         var offset = 2
         if len == 126 {
