@@ -6,11 +6,11 @@
   </head>
   <body>
     <header class="head">
-      <div class="brand">
+      <div class="brand" translate="no">
         <span class="wordmark">NDM</span>
         <span class="sub" data-i18n="popupRelay">Relay</span>
       </div>
-      <div class="status" id="status" data-state="checking">
+      <div class="status" id="status" data-state="checking" role="status" aria-live="polite" aria-atomic="true">
         <span class="dot" aria-hidden="true"></span>
         <span class="status-text" id="status-text" data-i18n="popupChecking">正在检查…</span>
       </div>
@@ -29,7 +29,7 @@
         <div class="card-title" data-i18n="popupCatcherTitle">接管浏览器下载</div>
         <div class="card-sub" id="catcher-sub" data-i18n="popupCatcherSub" aria-live="polite">普通下载自动交给 NDM 加速</div>
       </div>
-      <button type="button" class="switch" id="catcher" role="switch" aria-checked="true" aria-label="接管浏览器下载">
+      <button type="button" class="switch" id="catcher" role="switch" aria-checked="true" aria-label="接管浏览器下载" data-i18n-aria-label="popupCatcherTitle" aria-describedby="catcher-sub">
         <span class="knob"></span>
       </button>
     </section>

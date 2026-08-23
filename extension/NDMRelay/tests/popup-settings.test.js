@@ -29,7 +29,11 @@ function loadPopupWithFailedToggle() {
         "status-text": element(),
         "open-app": element(),
         "offline-hint": element(),
-        catcher: element({ "aria-checked": "true" }),
+        catcher: element({
+            "aria-checked": "true",
+            "aria-label": "接管浏览器下载",
+            "data-i18n-aria-label": "popupCatcherTitle"
+        }),
         "catcher-sub": element(),
         "show-panel": element(),
         "media-card": element(),
@@ -37,11 +41,15 @@ function loadPopupWithFailedToggle() {
         "foot-note": element()
     };
     const messages = {
+        popupCatcherTitle: "Catch browser downloads",
         popupCatcherSub: "Ordinary downloads hand off to NDM",
         popupSettingFailed: "Couldn't save the setting. Try again."
     };
     const chrome = {
-        i18n: { getMessage(key) { return messages[key] || ""; } },
+        i18n: {
+            getMessage(key) { return messages[key] || ""; },
+            getUILanguage() { return "en-US"; }
+        },
         runtime: {
             lastError: null,
             getManifest() { return { version: "1.4.0" }; },
@@ -64,10 +72,14 @@ function loadPopupWithFailedToggle() {
         }
     };
     class MockWebSocket {}
+    const documentElement = { lang: "zh-CN" };
     const context = {
         chrome,
         document: {
-            querySelectorAll() { return []; },
+            documentElement,
+            querySelectorAll(selector) {
+                return selector === "[data-i18n-aria-label]" ? [nodes.catcher] : [];
+            },
             getElementById(id) { return nodes[id]; }
         },
         window: { close() {} },
@@ -79,11 +91,11 @@ function loadPopupWithFailedToggle() {
         context,
         { filename: "popup.js" }
     );
-    return nodes;
+    return { nodes, documentElement };
 }
 
 test("popup restores the catcher switch and explains a failed settings write", () => {
-    const nodes = loadPopupWithFailedToggle();
+    const { nodes } = loadPopupWithFailedToggle();
 
     nodes.catcher.click();
 
@@ -92,4 +104,11 @@ test("popup restores the catcher switch and explains a failed settings write", (
     assert.equal(nodes.catcher.getAttribute("aria-checked"), "true");
     assert.equal(nodes["catcher-sub"].dataset.state, "error");
     assert.equal(nodes["catcher-sub"].textContent, "Couldn't save the setting. Try again.");
+});
+
+test("popup localizes its document language and switch accessible name", () => {
+    const { nodes, documentElement } = loadPopupWithFailedToggle();
+
+    assert.equal(documentElement.lang, "en-US");
+    assert.equal(nodes.catcher.getAttribute("aria-label"), "Catch browser downloads");
 });

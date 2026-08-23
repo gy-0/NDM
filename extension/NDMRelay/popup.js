@@ -23,11 +23,21 @@
     }
 
     function localize() {
+        try {
+            var uiLanguage = chrome.i18n.getUILanguage();
+            if (uiLanguage) document.documentElement.lang = uiLanguage;
+        } catch (error) { /* keep the HTML fallback language */ }
         var nodes = document.querySelectorAll("[data-i18n]");
         for (var i = 0; i < nodes.length; i++) {
             var key = nodes[i].getAttribute("data-i18n");
             var text = chrome.i18n.getMessage(key);
             if (text) nodes[i].textContent = text;
+        }
+        var labelled = document.querySelectorAll("[data-i18n-aria-label]");
+        for (var j = 0; j < labelled.length; j++) {
+            var labelKey = labelled[j].getAttribute("data-i18n-aria-label");
+            var label = chrome.i18n.getMessage(labelKey);
+            if (label) labelled[j].setAttribute("aria-label", label);
         }
     }
 

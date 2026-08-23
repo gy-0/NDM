@@ -35,6 +35,17 @@ test("popup speaks the background contract and probes the bridge itself", () => 
     assert.match(popup, /chrome\.tabs\.create/);
 });
 
+test("popup exposes localized names and announces dynamic status", () => {
+    const html = source("popup.html");
+    const popup = source("popup.js");
+    assert.match(html, /id="status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
+    assert.match(html, /id="catcher"[^>]*data-i18n-aria-label="popupCatcherTitle"[^>]*aria-describedby="catcher-sub"/);
+    assert.match(html, /class="brand" translate="no"/);
+    assert.match(popup, /chrome\.i18n\.getUILanguage\(\)/);
+    assert.match(popup, /document\.documentElement\.lang = uiLanguage/);
+    assert.match(popup, /\[data-i18n-aria-label\]/);
+});
+
 test("background answers every popup message type", () => {
     const background = source("bg.js");
     assert.match(background, /relay:getState/);
