@@ -168,6 +168,51 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         )
     }
 
+    func testRejectsOrdinaryWebsiteOrigin() async throws {
+        let bridge = BrowserBridge(port: 0)
+        try bridge.start()
+        defer { bridge.stop() }
+
+        await assertWebSocketRejected(
+            port: bridge.boundPort,
+            path: BridgeConstants.path,
+            subprotocol: BridgeConstants.subprotocol,
+            origin: "https://attacker.example"
+        )
+    }
+
+    func testAcceptsBrowserExtensionOrigin() async throws {
+        let bridge = BrowserBridge(port: 0)
+        let connected = expectation(description: "extension client connected")
+        bridge.onClientCountChanged = { count in
+            if count == 1 { connected.fulfill() }
+        }
+        try bridge.start()
+        defer { bridge.stop() }
+
+        let url = URL(string: "ws://127.0.0.1:\(bridge.boundPort)\(BridgeConstants.path)")!
+        var request = URLRequest(url: url)
+        request.setValue(BridgeConstants.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        request.setValue("chrome-extension://abcdefghijklmnop", forHTTPHeaderField: "Origin")
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: request)
+        socket.resume()
+
+        await fulfillment(of: [connected], timeout: 3)
+        socket.cancel()
+        session.invalidateAndCancel()
+    }
+
+    func testOriginPolicyAllowsExtensionsAndNativeClients() {
+        XCTAssertTrue(BrowserBridge.allowsBrowserOrigin(nil))
+        XCTAssertTrue(BrowserBridge.allowsBrowserOrigin("chrome-extension://abcdefghijklmnop"))
+        XCTAssertTrue(BrowserBridge.allowsBrowserOrigin("moz-extension://relay-id"))
+        XCTAssertTrue(BrowserBridge.allowsBrowserOrigin("safari-web-extension://dev.ndm.relay"))
+        XCTAssertFalse(BrowserBridge.allowsBrowserOrigin("https://attacker.example"))
+        XCTAssertFalse(BrowserBridge.allowsBrowserOrigin("http://127.0.0.1:3000"))
+        XCTAssertFalse(BrowserBridge.allowsBrowserOrigin("null"))
+    }
+
     func testDefaultBridgeUsesDedicatedNDMPort() throws {
         let bridge = BrowserBridge()
         XCTAssertEqual(bridge.configuredPort, BridgeConstants.port)
@@ -184,12 +229,14 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
     private func assertWebSocketRejected(
         port: UInt16,
         path: String,
-        subprotocol: String
+        subprotocol: String,
+        origin: String? = nil
     ) async {
         let rejected = expectation(description: "WebSocket handshake rejected")
         let url = URL(string: "ws://127.0.0.1:\(port)\(path)")!
         var request = URLRequest(url: url)
         request.setValue(subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        if let origin { request.setValue(origin, forHTTPHeaderField: "Origin") }
         let session = URLSession(configuration: .ephemeral)
         let socket = session.webSocketTask(with: request)
         socket.resume()

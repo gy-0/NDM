@@ -137,7 +137,8 @@ public final class BrowserBridge: @unchecked Sendable {
                 .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
             let protocolOK = requestedProtocols.contains(BridgeConstants.subprotocol)
                 || (isLegacyPort && (requestedProtocols.contains("neatextension.v1") || requestedProtocols.isEmpty))
-            guard pathOK, upgradeOK, protocolOK else {
+            let originOK = Self.allowsBrowserOrigin(Self.headerValue(req, name: "Origin"))
+            guard pathOK, upgradeOK, protocolOK, originOK else {
                 connection.cancel()
                 return
             }
@@ -199,6 +200,21 @@ public final class BrowserBridge: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    /// Browser WebSockets always send an Origin header. Accept extension
+    /// origins, but reject ordinary web pages so a site cannot drive NDM's
+    /// loopback bridge (cross-site WebSocket hijacking). Native loopback
+    /// clients omit Origin and remain compatible.
+    static func allowsBrowserOrigin(_ rawValue: String?) -> Bool {
+        guard let rawValue else { return true }
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              let scheme = URLComponents(string: value)?.scheme?.lowercased()
+        else { return false }
+        return scheme == "chrome-extension"
+            || scheme == "moz-extension"
+            || scheme == "safari-web-extension"
     }
 
     private func syncOnQueue<T>(_ body: () throws -> T) rethrows -> T {
