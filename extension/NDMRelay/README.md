@@ -13,7 +13,7 @@ current extension author.
   walnut/dawn design language (dark & light via `prefers-color-scheme`).
 - The popup probes the local bridge itself (`ws://127.0.0.1:51873`), so the
   connection dot is always fresh even when the service worker was suspended.
-- It shows the current tab's detected-media count with a **显示下载控件**
+- It shows the current tab's detected-media count with a **显示下载选项**
   action, and a switch for **接管浏览器下载** (download catching).
 - UI strings are localized through `_locales` (zh_CN default, en fallback);
   context menus and the action title use the same catalog.

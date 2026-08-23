@@ -87,3 +87,14 @@ test("both locales parse and expose the same keys, covering popup i18n hooks", (
         assert.ok(zh[key] && en[key], `missing ${key}`);
     }
 });
+
+test("localized media actions describe outcomes instead of implementation controls", () => {
+    const zh = JSON.parse(source("_locales/zh_CN/messages.json"));
+    const en = JSON.parse(source("_locales/en/messages.json"));
+    assert.equal(zh.popupShowControls.message, "显示下载选项");
+    assert.equal(en.popupShowControls.message, "Show download options");
+    assert.equal(zh.ctxShowPanel.message, "显示视频下载选项");
+    assert.equal(en.ctxShowPanel.message, "Show video download options");
+    assert.doesNotMatch(zh.popupContextHint.message, /任意|→|[“”]/);
+    assert.doesNotMatch(en.popupContextHint.message, /any|→|[\"“”]/i);
+});
