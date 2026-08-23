@@ -213,6 +213,28 @@ final class BrowserBridgeIntegrationTests: XCTestCase {
         XCTAssertFalse(BrowserBridge.allowsBrowserOrigin("null"))
     }
 
+    func testHandshakeRequiresRFC6455UpgradeHeadersAndKey() {
+        let valid = """
+        GET /ndm/download HTTP/1.1\r
+        Upgrade: websocket\r
+        Connection: keep-alive, Upgrade\r
+        Sec-WebSocket-Version: 13\r
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r
+        \r
+
+        """
+        XCTAssertTrue(BrowserBridge.hasValidWebSocketUpgradeHeaders(valid))
+        XCTAssertFalse(BrowserBridge.hasValidWebSocketUpgradeHeaders(
+            valid.replacingOccurrences(of: "Upgrade: websocket", with: "X-Note: upgrade: websocket")
+        ))
+        XCTAssertFalse(BrowserBridge.hasValidWebSocketUpgradeHeaders(
+            valid.replacingOccurrences(of: "Sec-WebSocket-Version: 13", with: "Sec-WebSocket-Version: 12")
+        ))
+        XCTAssertFalse(BrowserBridge.hasValidWebSocketUpgradeHeaders(
+            valid.replacingOccurrences(of: "dGhlIHNhbXBsZSBub25jZQ==", with: "not-a-valid-key")
+        ))
+    }
+
     func testDefaultBridgeUsesDedicatedNDMPort() throws {
         let bridge = BrowserBridge()
         XCTAssertEqual(bridge.configuredPort, BridgeConstants.port)

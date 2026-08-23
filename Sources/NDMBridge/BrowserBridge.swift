@@ -128,10 +128,11 @@ public final class BrowserBridge: @unchecked Sendable {
             let firstLine = req.components(separatedBy: "\r\n").first ?? ""
             let requestParts = firstLine.split(separator: " ")
             let isLegacyPort = self.configuredPort == BridgeConstants.legacyNeatPort
-            let pathOK = requestParts.count >= 2
+            let pathOK = requestParts.count >= 3
                 && requestParts[0] == "GET"
+                && requestParts[2] == "HTTP/1.1"
                 && (requestParts[1] == Substring(BridgeConstants.path) || (isLegacyPort && (requestParts[1] == "/" || requestParts[1] == "/download")))
-            let upgradeOK = req.lowercased().contains("upgrade: websocket")
+            let upgradeOK = Self.hasValidWebSocketUpgradeHeaders(req)
             let requestedProtocols = Self.headerValue(req, name: "Sec-WebSocket-Protocol")?
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
@@ -215,6 +216,19 @@ public final class BrowserBridge: @unchecked Sendable {
         return scheme == "chrome-extension"
             || scheme == "moz-extension"
             || scheme == "safari-web-extension"
+    }
+
+    static func hasValidWebSocketUpgradeHeaders(_ request: String) -> Bool {
+        let upgrade = headerValue(request, name: "Upgrade")?.lowercased()
+        let connectionTokens = headerValue(request, name: "Connection")?
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? []
+        let version = headerValue(request, name: "Sec-WebSocket-Version")
+        let key = headerValue(request, name: "Sec-WebSocket-Key") ?? ""
+        return upgrade == "websocket"
+            && connectionTokens.contains("upgrade")
+            && version == "13"
+            && Data(base64Encoded: key)?.count == 16
     }
 
     private func syncOnQueue<T>(_ body: () throws -> T) rethrows -> T {
