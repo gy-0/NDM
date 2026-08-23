@@ -38,6 +38,7 @@ test("popup speaks the background contract and probes the bridge itself", () => 
 test("popup exposes localized names and announces dynamic status", () => {
     const html = source("popup.html");
     const popup = source("popup.js");
+    assert.match(html, /<title data-i18n="extName">NDM Relay<\/title>/);
     assert.match(html, /id="status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
     assert.match(html, /id="catcher"[^>]*data-i18n-aria-label="popupCatcherTitle"[^>]*aria-describedby="catcher-sub"/);
     assert.match(html, /class="brand" translate="no"/);
