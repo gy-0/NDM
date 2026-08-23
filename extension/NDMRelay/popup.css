@@ -52,7 +52,7 @@
 }
 
 body {
-  width: 292px;
+  width: min(292px, 100vw);
   background: var(--ink);
   color: var(--paper);
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
@@ -64,8 +64,10 @@ body {
 
 .head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
+  gap: 6px 10px;
   padding: 0 2px 12px;
 }
 
@@ -170,6 +172,7 @@ body {
 .btn {
   border: 0;
   border-radius: 999px;
+  min-height: 40px;
   padding: 6px 12px;
   font: inherit;
   font-size: 11.5px;
@@ -223,6 +226,18 @@ body {
   background: var(--line-strong);
   transition: background 180ms;
   cursor: default;
+}
+
+/* Preserve the compact visual track while giving pointer users a forgiving
+   44px target. The pseudo-element is part of the button's hit region. */
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }
 
 .switch[aria-checked="true"] {
@@ -292,8 +307,32 @@ body {
 /* Keyboard reachability is part of the design, not an afterthought. */
 .btn:focus-visible,
 .switch:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  outline-offset: 2px;
+  outline: revert;
+  outline-offset: 3px;
+}
+
+/* Browser popup widths can collapse under zoom or side-by-side tooling. */
+@media (max-width: 220px) {
+  body {
+    padding-inline: 10px;
+  }
+
+  #media-card,
+  .foot-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .btn-accent,
+  .btn-quiet {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .foot {
+    margin-inline: -10px;
+    padding-inline: 12px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
