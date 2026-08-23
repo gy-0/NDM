@@ -347,12 +347,20 @@ W.updateMediaBadge = function(tabId) {
         text: this.v ? (count ? String(Math.min(99, count)) : "") : "Off"
     })
 };
-W.toggleCatcher = function(a) {
-    this.v = "boolean" == typeof a ? a : !this.v;
+W.toggleCatcher = function(a, callback) {
+    var next = "boolean" == typeof a ? a : !this.v,
+        self = this;
     chrome.storage.local.set({
-        DownloadCatcherEnabled: this.v
-    });
-    this.updateActionState()
+        DownloadCatcherEnabled: next
+    }, function() {
+        var saved = !chrome.runtime.lastError;
+        saved && (self.v = next);
+        self.updateActionState();
+        callback && callback({
+            catcherEnabled: self.v,
+            saved: saved
+        })
+    })
 };
 W.rememberDownloadURL = function(a, b) {
     a && b && (a[b] = Date.now() + 3E4)
@@ -1112,10 +1120,10 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     }
     if ("relay:toggleCatcher" == message.type) {
         NDM_BG.whenSettingsReady(function() {
-            NDM_BG.toggleCatcher("boolean" == typeof message.enabled ? message.enabled : void 0);
-            sendResponse({
-                catcherEnabled: NDM_BG.v
-            })
+            NDM_BG.toggleCatcher(
+                "boolean" == typeof message.enabled ? message.enabled : void 0,
+                sendResponse
+            )
         });
         return !0
     }

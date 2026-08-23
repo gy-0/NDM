@@ -153,6 +153,10 @@ body {
   color: var(--mist);
 }
 
+.card-sub[data-state="error"] {
+  color: var(--bad);
+}
+
 /* Media titles are arbitrary page text: clamp to two lines so one long
    headline can never push the accent button out of the popup. */
 #media-count-line {
@@ -223,6 +227,10 @@ body {
 
 .switch[aria-checked="true"] {
   background: var(--accent);
+}
+
+.switch:disabled {
+  opacity: 0.55;
 }
 
 .knob {

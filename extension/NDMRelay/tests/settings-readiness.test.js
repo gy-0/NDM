@@ -11,6 +11,7 @@ function loadBackgroundBeforeSettings() {
     const cancelledDownloads = [];
     const storageWrites = [];
     let resolveSettings;
+    let failStorageWrites = false;
     const event = name => ({
         addListener(listener) {
             listeners[name] = listener;
@@ -47,7 +48,15 @@ function loadBackgroundBeforeSettings() {
         storage: {
             local: {
                 get(_keys, callback) { resolveSettings = callback; },
-                set(value) { storageWrites.push(value); }
+                set(value, callback) {
+                    storageWrites.push(value);
+                    if (!callback) return;
+                    chrome.runtime.lastError = failStorageWrites
+                        ? { message: "storage unavailable" }
+                        : null;
+                    callback();
+                    chrome.runtime.lastError = null;
+                }
             }
         },
         tabs: {
@@ -82,7 +91,14 @@ function loadBackgroundBeforeSettings() {
         context,
         { filename: "bg.js" }
     );
-    return { context, listeners, cancelledDownloads, storageWrites, resolveSettings };
+    return {
+        context,
+        listeners,
+        cancelledDownloads,
+        storageWrites,
+        resolveSettings,
+        failNextStorageWrite() { failStorageWrites = true; }
+    };
 }
 
 test("cold worker never intercepts before the persisted catcher setting loads", () => {
@@ -131,4 +147,23 @@ test("a catcher toggle arriving during startup is applied after settings load", 
     assert.equal(runtime.storageWrites.length, 1);
     assert.equal(runtime.storageWrites[0].DownloadCatcherEnabled, false);
     assert.equal(replies[0].catcherEnabled, false);
+    assert.equal(replies[0].saved, true);
+});
+
+test("a failed catcher write preserves the last durable setting", () => {
+    const runtime = loadBackgroundBeforeSettings();
+    const replies = [];
+    runtime.resolveSettings({ DownloadCatcherEnabled: true });
+    runtime.failNextStorageWrite();
+
+    runtime.listeners.runtimeMessage(
+        { type: "relay:toggleCatcher", enabled: false },
+        {},
+        reply => replies.push(reply)
+    );
+
+    assert.equal(runtime.context.NDM_BG.v, true);
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].saved, false);
+    assert.equal(replies[0].catcherEnabled, true);
 });

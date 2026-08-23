@@ -30,6 +30,7 @@
   "popupShowControls": { "message": "Show download controls" },
   "popupCatcherTitle": { "message": "Catch browser downloads" },
   "popupCatcherSub": { "message": "Ordinary downloads hand off to NDM" },
+  "popupSettingFailed": { "message": "Couldn't save the setting. Try again." },
   "popupOfflineHint": { "message": "NDM is not running. The current download stays in the browser; try handing it off again after NDM opens." },
   "popupContextHint": { "message": "Right-click any link or image → \"Download with NDM\"" },
   "popupOpenApp": { "message": "Open NDM" },

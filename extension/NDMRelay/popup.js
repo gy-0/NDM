@@ -163,9 +163,39 @@
     }
 
     document.getElementById("catcher").addEventListener("click", function () {
+        var catcher = this;
+        var subtitle = document.getElementById("catcher-sub");
+        var previous = catcher.getAttribute("aria-checked") === "true";
         var next = this.getAttribute("aria-checked") !== "true";
-        this.setAttribute("aria-checked", next ? "true" : "false");
-        chrome.runtime.sendMessage({ type: "relay:toggleCatcher", enabled: next });
+        catcher.setAttribute("aria-checked", next ? "true" : "false");
+        catcher.setAttribute("aria-busy", "true");
+        catcher.disabled = true;
+        subtitle.removeAttribute("data-state");
+        subtitle.textContent = message(
+            "popupCatcherSub",
+            null,
+            "普通下载自动交给 NDM 加速"
+        );
+        chrome.runtime.sendMessage(
+            { type: "relay:toggleCatcher", enabled: next },
+            function (reply) {
+                var failed = chrome.runtime.lastError || !reply || !reply.saved;
+                catcher.disabled = false;
+                catcher.setAttribute("aria-busy", "false");
+                catcher.setAttribute(
+                    "aria-checked",
+                    failed ? (previous ? "true" : "false") : (reply.catcherEnabled ? "true" : "false")
+                );
+                if (failed) {
+                    subtitle.dataset.state = "error";
+                    subtitle.textContent = message(
+                        "popupSettingFailed",
+                        null,
+                        "未能保存设置，请重试"
+                    );
+                }
+            }
+        );
     });
 
     document.getElementById("show-panel").addEventListener("click", function () {
