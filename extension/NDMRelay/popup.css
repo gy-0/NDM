@@ -144,6 +144,18 @@ body {
   min-width: 0;
 }
 
+/* The localized action and arbitrary page title cannot share a useful row at
+   popup width. Keep one stable reading order: context first, action second. */
+#media-card {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+#media-card .btn-accent {
+  width: 100%;
+  white-space: normal;
+}
+
 .card-title {
   font-size: 12.5px;
   font-weight: 500;
@@ -317,13 +329,11 @@ body {
     padding-inline: 10px;
   }
 
-  #media-card,
   .foot-row {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .btn-accent,
   .btn-quiet {
     width: 100%;
     white-space: normal;
