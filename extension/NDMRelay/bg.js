@@ -284,23 +284,36 @@ function V() {
     });
     this.l(chrome.webNavigation.onHistoryStateUpdated, this.Z);
     chrome.action.onClicked.addListener(this.N);
-    this.v = !0;
+    // Download interception is opt-in only after persisted settings are
+    // available. MV3 can wake this worker for the same download event that
+    // starts the async storage read; assuming "on" during that gap can steal
+    // one browser download from a user who explicitly disabled the catcher.
+    this.v = !1;
+    this.settingsReady = !1;
+    this.settingsReadyCallbacks = [];
     chrome.action.setBadgeBackgroundColor({
         color: "#D08A3A"
     });
     var c = this;
     this.F = !0;
     chrome.storage.local.get(["ShowMediaPanel", "DownloadCatcherEnabled"], function(d) {
+        d = d || {};
         -1 == d.ShowMediaPanel && (c.F = !1);
-        d.DownloadCatcherEnabled === !1 && (c.v = !1);
-        c.updateActionState()
+        c.v = !chrome.runtime.lastError && d.DownloadCatcherEnabled !== !1;
+        c.settingsReady = !0;
+        c.updateActionState();
+        var callbacks = c.settingsReadyCallbacks;
+        c.settingsReadyCallbacks = [];
+        for (var i = 0; i < callbacks.length; i++) callbacks[i]()
     });
-    this.updateActionState();
     this.i = this.G = null;
     this.D = !1;
     this.M()
 }
 var W = V.prototype;
+W.whenSettingsReady = function(callback) {
+    this.settingsReady ? callback() : this.settingsReadyCallbacks.push(callback)
+};
 W.updateActionState = function() {
     var a = this.v ? "" : "Off";
     chrome.action.setTitle({
@@ -1071,23 +1084,25 @@ var NDM_BG = new V;
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     if (!message || "object" != typeof message) return;
     if ("relay:getState" == message.type) {
-        var mediaCount = 0,
-            mediaSample = null;
-        Object.values(NDM_BG.H).forEach(function(port) {
-            if (!port || port.tabId != message.tabId) return;
-            mediaCount += Number(port.mediaCount || 0);
-            // Top frame wins; a subframe sample only fills an empty slot.
-            if (port.mediaSample && (!mediaSample || port.ja)) mediaSample = port.mediaSample
+        NDM_BG.whenSettingsReady(function() {
+            var mediaCount = 0,
+                mediaSample = null;
+            Object.values(NDM_BG.H).forEach(function(port) {
+                if (!port || port.tabId != message.tabId) return;
+                mediaCount += Number(port.mediaCount || 0);
+                // Top frame wins; a subframe sample only fills an empty slot.
+                if (port.mediaSample && (!mediaSample || port.ja)) mediaSample = port.mediaSample
+            });
+            sendResponse({
+                catcherEnabled: NDM_BG.v,
+                mediaCount: mediaCount,
+                mediaSample: mediaSample,
+                // Cached bridge state, so the popup can paint "connected" at once
+                // instead of flashing offline while its own probe dials.
+                connected: !!NDM_BG.D
+            })
         });
-        sendResponse({
-            catcherEnabled: NDM_BG.v,
-            mediaCount: mediaCount,
-            mediaSample: mediaSample,
-            // Cached bridge state, so the popup can paint "connected" at once
-            // instead of flashing offline while its own probe dials.
-            connected: !!NDM_BG.D
-        });
-        return
+        return !0
     }
     if ("relay:openApp" == message.type) {
         sendResponse({
@@ -1096,11 +1111,13 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
         return
     }
     if ("relay:toggleCatcher" == message.type) {
-        NDM_BG.toggleCatcher("boolean" == typeof message.enabled ? message.enabled : void 0);
-        sendResponse({
-            catcherEnabled: NDM_BG.v
+        NDM_BG.whenSettingsReady(function() {
+            NDM_BG.toggleCatcher("boolean" == typeof message.enabled ? message.enabled : void 0);
+            sendResponse({
+                catcherEnabled: NDM_BG.v
+            })
         });
-        return
+        return !0
     }
     if ("relay:handoff" == message.type) {
         NDM_BG.handoffTabId = "number" == typeof message.tabId && 0 <= message.tabId ? message.tabId : -1;
