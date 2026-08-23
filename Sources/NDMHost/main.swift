@@ -538,7 +538,8 @@ func handle(request: [String: Any], connection: NWConnection) async {
                         "compactApproximateBytes": NSNumber(value: f.compactApproximateBytes ?? f.approximateBytes ?? 0),
                         "compactComponentBytes": (f.compactComponentBytes.isEmpty ? f.componentBytes : f.compactComponentBytes).map { NSNumber(value: $0) },
                         "containerHint": f.containerHint,
-                        "isVideo": f.isVideo
+                        "isVideo": f.isVideo,
+                        "isHighBitrate": f.isHighBitrate
                     ] as [String: Any]
                 }
                 let subtitles = probe.subtitleTracks.map { track in

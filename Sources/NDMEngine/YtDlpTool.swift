@@ -27,6 +27,8 @@ public struct YtDlpFormat: Equatable, Sendable {
     /// Short container hint for UI (`MP4`).
     public var containerHint: String
     public var isVideo: Bool
+    /// YouTube enhanced / Premium 1080p VP9 (itag 616 HLS, 356 HTTPS).
+    public var isHighBitrate: Bool
 
     public init(
         id: String,
@@ -39,7 +41,8 @@ public struct YtDlpFormat: Equatable, Sendable {
         compatibleSelectorOverride: String? = nil,
         compactSelectorOverride: String? = nil,
         containerHint: String = "MP4",
-        isVideo: Bool = true
+        isVideo: Bool = true,
+        isHighBitrate: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -52,6 +55,7 @@ public struct YtDlpFormat: Equatable, Sendable {
         self.compactSelectorOverride = compactSelectorOverride
         self.containerHint = containerHint
         self.isVideo = isVideo
+        self.isHighBitrate = isHighBitrate
     }
 
     /// Compatibility shim for older call sites.
@@ -98,6 +102,9 @@ public struct YtDlpFormat: Equatable, Sendable {
     /// portable height-bounded selector is required instead of probe overrides.
     public func collectionSelector(for preference: YtDlpContainerPreference) -> String {
         let limit = height > 0 ? "[height<=\(height)]" : ""
+        if isHighBitrate {
+            return "bestvideo\(limit)[format_id=356]+bestaudio/bestvideo\(limit)[format_id=616]+bestaudio/bestvideo\(limit)+bestaudio/best\(limit)"
+        }
         switch preference {
         case .compatibleMP4:
             return "bestvideo\(limit)[ext=mp4]+bestaudio[acodec^=mp4a]/bestvideo\(limit)+bestaudio/best\(limit)[ext=mp4]/\(id)"
@@ -381,7 +388,11 @@ public enum YtDlpTool {
         let title = (json["title"] as? String) ?? ""
         let duration = json["duration"] as? Double
         let formats = (json["formats"] as? [[String: Any]]) ?? []
-        let tiers = buildTiers(from: formats, duration: duration)
+        let tiers = buildTiers(
+            from: formats,
+            duration: duration,
+            includeYouTubeHighBitrate: isYouTubeMediaURL(url)
+        )
         return YtDlpProbe(
             title: title,
             durationSeconds: duration,
@@ -401,11 +412,13 @@ public enum YtDlpTool {
     static let aria2MinimumBytes: Int64 = 48 * 1024 * 1024
 
     static func isYouTubeMediaURL(_ url: String) -> Bool {
-        let lowered = url.lowercased()
-        return lowered.contains("youtube.com")
-            || lowered.contains("youtu.be")
-            || lowered.contains("youtube-nocookie.com")
-            || lowered.contains("googlevideo.com")
+        guard let host = URLComponents(string: url)?.host?
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".")) else {
+            return false
+        }
+        return ["youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"]
+            .contains { host == $0 || host.hasSuffix(".\($0)") }
     }
 
     private static func infoJSONCacheDirectory() -> URL {
@@ -711,7 +724,8 @@ public enum YtDlpTool {
 
     static func buildTiers(
         from formats: [[String: Any]],
-        duration: Double?
+        duration: Double?,
+        includeYouTubeHighBitrate: Bool = false
     ) -> [YtDlpFormat] {
         var heights = Set<Int>()
         for fmt in formats {
@@ -758,35 +772,105 @@ public enum YtDlpTool {
             ]
         }
 
-        return picked.map { h in
-            let video = bestCompatibleVideo(in: formats, maxHeight: h)
-            let audio = needsSeparateAudio(video) ? bestCompatibleAudio(in: formats) : nil
-            let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
-            let bytes = components.isEmpty ? nil : components.reduce(0, +)
-            let compactVideo = bestCompactVideo(in: formats, maxHeight: h)
-            let compactAudio = needsSeparateAudio(compactVideo) ? bestAudio(in: formats) : nil
-            let compactComponents = estimateComponentBytes(
-                video: compactVideo,
-                audio: compactAudio,
-                duration: duration
-            )
-            let compatibleSelector = exactSelector(video: video, audio: audio)
-            let compactSelector = exactSelector(video: compactVideo, audio: compactAudio)
-            let id = "bestvideo[height<=\(h)]+bestaudio/best[height<=\(h)]/best"
-            return YtDlpFormat(
-                id: id,
-                label: "\(h)p",
-                height: h,
-                approximateBytes: bytes,
-                componentBytes: components,
-                compactApproximateBytes: compactComponents.isEmpty ? nil : compactComponents.reduce(0, +),
-                compactComponentBytes: compactComponents,
-                compatibleSelectorOverride: compatibleSelector,
-                compactSelectorOverride: compactSelector,
-                containerHint: "MP4",
-                isVideo: true
-            )
+        let regularFormats = includeYouTubeHighBitrate
+            ? formats.filter { !isYouTubeHighBitrateFormat($0) }
+            : formats
+        let catalog = picked.map { h in
+            makeHeightTier(from: regularFormats, height: h, duration: duration)
         }
+        var expanded: [YtDlpFormat] = []
+        expanded.reserveCapacity(catalog.count + 2)
+        for tier in catalog {
+            if includeYouTubeHighBitrate,
+               let high = highBitrateTier(from: formats, height: tier.height, duration: duration) {
+                expanded.append(high)
+            }
+            expanded.append(tier)
+        }
+        return expanded
+    }
+
+    private static func makeHeightTier(
+        from formats: [[String: Any]],
+        height: Int,
+        duration: Double?
+    ) -> YtDlpFormat {
+        let video = bestCompatibleVideo(in: formats, maxHeight: height)
+        let audio = needsSeparateAudio(video) ? bestCompatibleAudio(in: formats) : nil
+        let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
+        let bytes = components.isEmpty ? nil : components.reduce(0, +)
+        let compactVideo = bestCompactVideo(in: formats, maxHeight: height)
+        let compactAudio = needsSeparateAudio(compactVideo) ? bestAudio(in: formats) : nil
+        let compactComponents = estimateComponentBytes(
+            video: compactVideo,
+            audio: compactAudio,
+            duration: duration
+        )
+        return YtDlpFormat(
+            id: "bestvideo[height<=\(height)]+bestaudio/best[height<=\(height)]/best",
+            label: "\(height)p",
+            height: height,
+            approximateBytes: bytes,
+            componentBytes: components,
+            compactApproximateBytes: compactComponents.isEmpty ? nil : compactComponents.reduce(0, +),
+            compactComponentBytes: compactComponents,
+            compatibleSelectorOverride: exactSelector(video: video, audio: audio),
+            compactSelectorOverride: exactSelector(video: compactVideo, audio: compactAudio),
+            containerHint: "MP4",
+            isVideo: true
+        )
+    }
+
+    /// itag 616 (iOS HLS) and 356 (HTTPS) are the enhanced-bitrate 1080p VP9
+    /// encodes. Regular AVC 137 is often a higher number of bits for worse
+    /// efficiency, so it is never promoted just because `tbr` is larger.
+    static let youtubeHighBitrateFormatIDs: Set<String> = ["616", "356"]
+
+    static func formatID(of format: [String: Any]) -> String {
+        if let value = format["format_id"] as? String { return value }
+        if let value = format["format_id"] as? Int { return String(value) }
+        return ""
+    }
+
+    static func canonicalYouTubeFormatID(_ raw: String) -> String {
+        String(raw.split(separator: "-").first ?? Substring(raw))
+    }
+
+    static func isYouTubeHighBitrateFormat(_ format: [String: Any]) -> Bool {
+        let id = canonicalYouTubeFormatID(formatID(of: format))
+        if youtubeHighBitrateFormatIDs.contains(id) { return true }
+        let note = ((format["format_note"] as? String) ?? "").lowercased()
+        return note.contains("premium") || note.contains("enhanced bitrate")
+    }
+
+    static func highBitrateTier(
+        from formats: [[String: Any]],
+        height: Int,
+        duration: Double?
+    ) -> YtDlpFormat? {
+        let candidates = formats.filter {
+            isYouTubeHighBitrateFormat($0) && qualityHeight(of: $0) == height
+        }
+        guard let video = bestVideo(in: candidates, maxHeight: nil) else { return nil }
+        let audio = needsSeparateAudio(video)
+            ? (bestCompatibleAudio(in: formats) ?? bestAudio(in: formats))
+            : nil
+        guard let selector = exactSelector(video: video, audio: audio) else { return nil }
+        let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
+        return YtDlpFormat(
+            id: selector,
+            label: "\(height)p 高码率",
+            height: height,
+            approximateBytes: components.isEmpty ? nil : components.reduce(0, +),
+            componentBytes: components,
+            compactApproximateBytes: components.isEmpty ? nil : components.reduce(0, +),
+            compactComponentBytes: components,
+            compatibleSelectorOverride: selector,
+            compactSelectorOverride: selector,
+            containerHint: "MP4",
+            isVideo: true,
+            isHighBitrate: true
+        )
     }
 
     private static func bestCompatibleVideo(

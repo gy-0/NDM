@@ -528,4 +528,68 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertEqual(tiers.map(\.height), [2160, 1080])
         XCTAssertFalse(tiers.contains(where: { $0.label == "1440p" }))
     }
+
+    func testYouTubeHighBitrate1080pIsASeparateTier() {
+        let formats: [[String: Any]] = [
+            [
+                "format_id": "137", "height": 1080, "format_note": "1080p",
+                "vcodec": "avc1.640028", "acodec": "none", "ext": "mp4",
+                "filesize": 80_000_000, "tbr": 2_200.0,
+            ],
+            [
+                "format_id": "248", "height": 1080, "format_note": "1080p",
+                "vcodec": "vp9", "acodec": "none", "ext": "webm",
+                "filesize": 40_000_000, "tbr": 1_600.0,
+            ],
+            [
+                "format_id": "616", "height": 1080, "format_note": "1080p Premium",
+                "vcodec": "vp9", "acodec": "none", "ext": "mp4",
+                "protocol": "m3u8_native", "filesize": 120_000_000, "tbr": 5_800.0,
+            ],
+            [
+                "format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2",
+                "ext": "m4a", "filesize": 8_000_000, "abr": 128.0,
+            ],
+        ]
+
+        let tiers = YtDlpTool.buildTiers(
+            from: formats,
+            duration: 180,
+            includeYouTubeHighBitrate: true
+        )
+
+        XCTAssertEqual(tiers.map(\.label), ["1080p 高码率", "1080p"])
+        XCTAssertEqual(tiers.map(\.isHighBitrate), [true, false])
+        XCTAssertEqual(tiers[0].selector(for: .compatibleMP4), "616+140")
+        XCTAssertEqual(tiers[0].selector(for: .compactMKV), "616+140")
+        XCTAssertEqual(tiers[1].selector(for: .compatibleMP4), "137+140")
+        XCTAssertTrue(YtDlpTool.isYouTubeMediaURL("https://youtu.be/abc"))
+        XCTAssertTrue(YtDlpTool.isYouTubeMediaURL("https://music.youtube.com/watch?v=abc"))
+        XCTAssertFalse(YtDlpTool.isYouTubeMediaURL("https://www.bilibili.com/video/1"))
+        XCTAssertFalse(YtDlpTool.isYouTubeMediaURL("https://example.com/?next=youtube.com"))
+        XCTAssertTrue(tiers[0].collectionSelector(for: .compatibleMP4).contains("format_id=616"))
+    }
+
+    func testRegularAVCIsNotPromotedToHighBitrate() {
+        let formats: [[String: Any]] = [
+            [
+                "format_id": "137", "height": 1080, "format_note": "1080p",
+                "vcodec": "avc1.640028", "acodec": "none", "filesize": 90_000_000, "tbr": 3_000.0,
+            ],
+            [
+                "format_id": "248", "height": 1080, "format_note": "1080p",
+                "vcodec": "vp9", "acodec": "none", "filesize": 40_000_000, "tbr": 1_400.0,
+            ],
+            [
+                "format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "filesize": 8_000_000,
+            ],
+        ]
+        let tiers = YtDlpTool.buildTiers(
+            from: formats,
+            duration: 180,
+            includeYouTubeHighBitrate: true
+        )
+        XCTAssertEqual(tiers.map(\.label), ["1080p"])
+        XCTAssertFalse(tiers.contains(where: \.isHighBitrate))
+    }
 }
