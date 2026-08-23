@@ -545,11 +545,21 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 currentSettings.httpProxy = update.host.isEmpty
                     ? nil
                     : ProxySettings(host: update.host, port: update.port, enabled: update.enabled)
+            } else if let enabled = request["httpProxyEnabled"] as? Bool,
+                      var proxy = currentSettings.httpProxy {
+                // Switching protocols should not require resending or deleting
+                // the saved endpoint. Match the Windows settings contract.
+                proxy.enabled = enabled
+                currentSettings.httpProxy = proxy
             }
             if let update = socksProxyUpdate {
                 currentSettings.socksProxy = update.host.isEmpty
                     ? nil
                     : SocksProxySettings(host: update.host, port: update.port, version: .v5, enabled: update.enabled)
+            } else if let enabled = request["socksProxyEnabled"] as? Bool,
+                      var proxy = currentSettings.socksProxy {
+                proxy.enabled = enabled
+                currentSettings.socksProxy = proxy
             }
             SettingsStore.save(currentSettings)
             await manager.updateSettings(currentSettings)
