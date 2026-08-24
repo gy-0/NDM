@@ -62,6 +62,54 @@ final class PostDownloadTests: XCTestCase {
         )
     }
 
+    func testBridgeDownloadPreservesAuthenticatedBrowserRequestContext() async throws {
+        let payload = Data(repeating: 0x4E, count: 64 * 1024)
+        let server = LocalRangeServer(payload: payload)
+        try server.start()
+        defer { server.stop() }
+
+        let (support, dest) = try makeSandbox("bridge-auth-context")
+        let store = try DownloadStore(directory: support)
+        let settings = AppSettings(downloadDirectory: dest, maxConnections: 1, useCategoryFolders: false)
+        let manager = DownloadManager(store: store, settings: settings, supportRoot: support)
+
+        var message = ParsedBridgeMessage()
+        message.method = "POST"
+        message.url = "http://127.0.0.1:\(server.port)/authenticated-export"
+        message.filename = "authenticated.bin"
+        message.pageURL = "https://app.example.com/report/42"
+        message.pageTitle = "Authenticated export"
+        message.cookies = "session=live; entitlement=pro"
+        message.userAgent = "Relay Test Browser"
+        message.referer = "https://embed.example.com/frame/42"
+        message.origin = "https://embed.example.com"
+        message.reqContentType = "application/x-www-form-urlencoded"
+        message.extraHeaders["Authorization"] = "Bearer test-token"
+        message.extraHeaders["Accept"] = "application/octet-stream"
+        message.extraHeaders["Accept-Language"] = "zh-CN,zh;q=0.9"
+        message.extraHeaders["X-Download-Nonce"] = "nonce-42"
+        message.postData = "export=42"
+
+        let task = try await manager.addFromBridge(message)
+        try await manager.startAndWait(taskID: task.id)
+
+        XCTAssertFalse(server.recordedHeaders.isEmpty)
+        for headers in server.recordedHeaders {
+            XCTAssertEqual(headers["cookie"], "session=live; entitlement=pro")
+            XCTAssertEqual(headers["authorization"], "Bearer test-token")
+            XCTAssertEqual(headers["referer"], "https://embed.example.com/frame/42")
+            XCTAssertEqual(headers["origin"], "https://embed.example.com")
+            XCTAssertEqual(headers["user-agent"], "Relay Test Browser")
+            XCTAssertEqual(headers["accept"], "application/octet-stream")
+            XCTAssertEqual(headers["accept-language"], "zh-CN,zh;q=0.9")
+            XCTAssertEqual(headers["x-download-nonce"], "nonce-42")
+            XCTAssertEqual(headers["content-type"], "application/x-www-form-urlencoded")
+        }
+        XCTAssertTrue(server.recordedMethods.allSatisfy { $0 == "POST" })
+        XCTAssertTrue(server.recordedBodies.allSatisfy { $0.contains("export=42") })
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent("authenticated.bin")), payload)
+    }
+
     func testPostTaskProbesWithItsOwnMethodInsteadOfHEAD() async throws {
         let payload = Data(repeating: 0x7C, count: 64 * 1024)
         let server = LocalRangeServer(payload: payload)

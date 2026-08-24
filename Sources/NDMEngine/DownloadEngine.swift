@@ -1323,8 +1323,10 @@ public actor DownloadEngine {
             req.setValue(v, forHTTPHeaderField: k)
         }
         if let page = request.pageURL {
-            req.setValue(page.absoluteString, forHTTPHeaderField: "Referer")
-            if let host = page.host {
+            if req.value(forHTTPHeaderField: "Referer") == nil {
+                req.setValue(page.absoluteString, forHTTPHeaderField: "Referer")
+            }
+            if req.value(forHTTPHeaderField: "Origin") == nil, let host = page.host {
                 req.setValue("\(page.scheme ?? "https")://\(host)", forHTTPHeaderField: "Origin")
             }
         }

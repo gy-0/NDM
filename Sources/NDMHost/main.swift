@@ -181,21 +181,13 @@ let bridge = BrowserBridge(port: currentSettings.bridgePort)
 bridge.onDownloadMessage = { msg in
     Task {
         do {
-            var headerList: [String] = []
-            if !msg.cookies.isEmpty { headerList.append("Cookie: \(msg.cookies)") }
-            if !msg.userAgent.isEmpty { headerList.append("User-Agent: \(msg.userAgent)") }
-            if !msg.referer.isEmpty { headerList.append("Referer: \(msg.referer)") }
-            for (k, v) in msg.extraHeaders {
-                headerList.append("\(k): \(v)")
-            }
-
-            var ltype = msg.ltype
+            var normalizedMessage = msg
             let capturedFilename = msg.filename.isEmpty ? embeddedFilename(in: msg.url) : msg.filename
             let ordinaryFile = MediaLinkClassifier.looksLikeOrdinaryFileDownload(
                 msg.url,
                 suggestedFilename: capturedFilename
             )
-            if !ordinaryFile && (ltype.lowercased() == "media-page" || MediaLinkClassifier.looksLikeMediaPage(msg.url) || msg.url.contains("youtube.com") || msg.url.contains("youtu.be") || msg.url.contains("bilibili.com")) {
+            if !ordinaryFile && (msg.ltype.lowercased() == "media-page" || MediaLinkClassifier.looksLikeMediaPage(msg.url) || msg.url.contains("youtube.com") || msg.url.contains("youtu.be") || msg.url.contains("bilibili.com")) {
                 broadcast([
                     "op": "openMediaComposer",
                     "url": msg.url,
@@ -203,18 +195,11 @@ bridge.onDownloadMessage = { msg in
                 ])
                 return
             } else if ordinaryFile {
-                ltype = "normal"
+                normalizedMessage.ltype = "normal"
             }
+            if let capturedFilename { normalizedMessage.filename = capturedFilename }
 
-            var task = try await manager.addURL(
-                msg.url,
-                connections: currentSettings.maxConnections,
-                pageURL: msg.pageURL.isEmpty ? nil : msg.pageURL,
-                pageTitle: msg.pageTitle.isEmpty ? nil : msg.pageTitle,
-                headers: headerList,
-                method: msg.method,
-                ltype: ltype
-            )
+            var task = try await manager.addFromBridge(normalizedMessage)
             if let capturedFilename, !capturedFilename.isEmpty {
                 applyFilename(capturedFilename, to: &task)
                 try? store.update(task)

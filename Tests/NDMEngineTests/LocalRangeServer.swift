@@ -19,6 +19,7 @@ final class LocalRangeServer: @unchecked Sendable {
     private var _recordedRanges: [String] = []
     private var _recordedMethods: [String] = []
     private var _recordedBodies: [String] = []
+    private var _recordedHeaders: [[String: String]] = []
     private(set) var port: UInt16 = 0
 
     init(
@@ -59,6 +60,11 @@ final class LocalRangeServer: @unchecked Sendable {
     var recordedBodies: [String] {
         recordLock.lock(); defer { recordLock.unlock() }
         return _recordedBodies
+    }
+
+    var recordedHeaders: [[String: String]] {
+        recordLock.lock(); defer { recordLock.unlock() }
+        return _recordedHeaders
     }
 
     func start() throws {
@@ -136,6 +142,15 @@ final class LocalRangeServer: @unchecked Sendable {
                 .split(separator: " ").first.map(String.init) ?? ""
         )
         _recordedBodies.append(String(req[bodyStart...]))
+        _recordedHeaders.append(Dictionary(
+            uniqueKeysWithValues: req.components(separatedBy: "\r\n").dropFirst().compactMap { line in
+                guard let colon = line.firstIndex(of: ":") else { return nil }
+                let name = String(line[..<colon]).lowercased()
+                let value = String(line[line.index(after: colon)...])
+                    .trimmingCharacters(in: .whitespaces)
+                return (name, value)
+            }
+        ))
         var rangeOrdinal: Int?
         let rangeLine = req.components(separatedBy: "\r\n")
             .first { $0.lowercased().hasPrefix("range:") }
