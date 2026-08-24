@@ -480,6 +480,20 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertEqual(tier?.approximateBytes, 1_000)
     }
 
+    func testNonMediaGenericExtractorDoesNotInventBestMP4() {
+        XCTAssertTrue(YtDlpTool.buildTiers(from: [], duration: nil).isEmpty)
+
+        let formats: [[String: Any]] = [[
+            "format_id": "0",
+            "ext": "gguf",
+            "vcodec": "none",
+            "acodec": "none",
+            "filesize": 17_378_626_464,
+        ]]
+
+        XCTAssertTrue(YtDlpTool.buildTiers(from: formats, duration: nil).isEmpty)
+    }
+
     func testTwitterVideoOnlyProbeLeavesAudioPairingToYtDlp() {
         // X/Twitter's JSON probe may omit the separate HLS audio rendition
         // from `formats`, even though yt-dlp resolves it when evaluating

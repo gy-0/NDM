@@ -747,10 +747,14 @@ public enum YtDlpTool {
             picked.sort(by: >)
         }
         if picked.isEmpty {
-            let video = bestCompatibleVideo(in: formats, maxHeight: nil)
+            guard let video = bestCompatibleVideo(in: formats, maxHeight: nil) else {
+                // yt-dlp's GenericExtractor exposes arbitrary attachments as a
+                // format too. No video stream means there is no quality picker.
+                return []
+            }
             let audio = needsSeparateAudio(video) ? bestCompatibleAudio(in: formats) : nil
             let components = estimateComponentBytes(video: video, audio: audio, duration: duration)
-            let compactVideo = bestCompactVideo(in: formats, maxHeight: nil)
+            let compactVideo = bestCompactVideo(in: formats, maxHeight: nil) ?? video
             let compactAudio = needsSeparateAudio(compactVideo) ? bestAudio(in: formats) : nil
             let compactComponents = estimateComponentBytes(
                 video: compactVideo,

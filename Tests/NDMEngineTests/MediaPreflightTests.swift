@@ -172,6 +172,7 @@ final class MediaPreflightTests: XCTestCase {
     }
 
     func testClassifierSeparatesPagesFromDirectFiles() {
+        let ggufDownload = "https://hf-mirror.com/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/resolve/main/Huihui-Qwen3.8-27B-abliterated-UD-Q4_K_XL.gguf?download=true&utm_source=chatgpt.com"
         XCTAssertTrue(MediaLinkClassifier.looksLikeMediaPage("https://youtube.com/watch?v=1"))
         XCTAssertTrue(MediaLinkClassifier.looksLikeMediaPage("https://example.com/article/1"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/movie.mp4"))
@@ -179,6 +180,11 @@ final class MediaPreflightTests: XCTestCase {
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/README.md"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/install.sh"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("https://example.com/payload.dat"))
+        XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage(ggufDownload))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload(ggufDownload))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload("https://models.example/model.safetensors"))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload("https://models.example/model.onnx"))
+        XCTAssertTrue(MediaLinkClassifier.looksLikeOrdinaryFileDownload("https://models.example/model.ckpt"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage("ftp://example.com/archive.zip"))
         XCTAssertFalse(MediaLinkClassifier.looksLikeMediaPage(
             "https://release-assets.githubusercontent.com/assets/opaque-token?response-content-disposition=attachment%3B%20filename%3DCipherTalk-Setup.dmg"
