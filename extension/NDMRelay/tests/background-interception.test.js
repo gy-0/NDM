@@ -6,14 +6,18 @@ const vm = require("node:vm");
 const policy = require("../media-policy.js");
 const resourcePolicy = require("../resource-policy.js");
 
-function loadBackground() {
+function loadBackground(options = {}) {
     const listeners = {};
+    const registrations = {};
     const cookieRequests = [];
+    const pendingCookieRequests = [];
     const cancelledDownloads = [];
     const erasedDownloads = [];
+    const sentMessages = [];
     const event = name => ({
-        addListener(listener) {
+        addListener(listener, ...args) {
             listeners[name] = listener;
+            registrations[name] = args;
         }
     });
 
@@ -33,7 +37,11 @@ function loadBackground() {
         cookies: {
             getAll(details, callback) {
                 cookieRequests.push(details.url);
-                callback([]);
+                if (options.deferCookies) {
+                    pendingCookieRequests.push({ details, callback });
+                } else {
+                    callback(options.cookies || []);
+                }
             }
         },
         downloads: {
@@ -78,7 +86,10 @@ function loadBackground() {
     };
 
     class MockWebSocket {
-        send() {}
+        constructor() {
+            this.readyState = 0;
+        }
+        send(message) { sentMessages.push(message); }
     }
 
     const context = {
@@ -99,7 +110,17 @@ function loadBackground() {
         context,
         { filename: "bg.js" }
     );
-    return { listeners, cookieRequests, cancelledDownloads, erasedDownloads };
+    context.NDM_BG.D = true;
+    context.NDM_BG.G = { readyState: 1, send(message) { sentMessages.push(message); } };
+    return {
+        listeners,
+        registrations,
+        cookieRequests,
+        pendingCookieRequests,
+        cancelledDownloads,
+        erasedDownloads,
+        sentMessages
+    };
 }
 
 function responseHeaders(contentType, disposition) {
@@ -119,6 +140,15 @@ function simulateResponse(runtime, options) {
         frameId: options.type === "main_frame" ? 0 : 2,
         type: options.type,
         method: "GET"
+    });
+    runtime.listeners.beforeSendHeaders({
+        requestId: options.id,
+        url: options.url,
+        tabId: 10,
+        frameId: options.type === "main_frame" ? 0 : 2,
+        type: options.type,
+        method: "GET",
+        requestHeaders: options.requestHeaders || []
     });
     runtime.listeners.headersReceived({
         requestId: options.id,
@@ -323,6 +353,75 @@ test("background still hands an intentional top-level attachment to NDM", () => 
         disposition: "attachment; filename=manual.zip"
     });
     assert.deepEqual(runtime.cookieRequests, ["https://example.com/manual.zip"]);
+});
+
+test("background relays the browser's authenticated request context without unsafe transport headers", () => {
+    const runtime = loadBackground({ cookies: [{ name: "fallback", value: "stale" }] });
+    const url = "https://secure.example.com/export/report.zip";
+    simulateResponse(runtime, {
+        id: "authenticated-download",
+        url,
+        type: "main_frame",
+        contentType: "application/zip",
+        disposition: "attachment; filename=report.zip",
+        requestHeaders: [
+            { name: "Cookie", value: "session=live; entitlement=pro" },
+            { name: "Authorization", value: "Bearer test-token" },
+            { name: "Referer", value: "https://secure.example.com/reports/42" },
+            { name: "Origin", value: "https://secure.example.com" },
+            { name: "User-Agent", value: "Relay Test Browser" },
+            { name: "Accept", value: "application/zip" },
+            { name: "Accept-Language", value: "zh-CN,zh;q=0.9" },
+            { name: "X-Download-Nonce", value: "nonce-42" },
+            { name: "Host", value: "secure.example.com" },
+            { name: "Range", value: "bytes=0-1023" },
+            { name: "Accept-Encoding", value: "br, gzip" },
+            { name: "Sec-Fetch-Site", value: "same-origin" }
+        ]
+    });
+
+    assert.deepEqual(Array.from(runtime.registrations.beforeSendHeaders[1]), ["requestHeaders", "extraHeaders"]);
+    assert.equal(runtime.sentMessages.length, 1);
+    const message = runtime.sentMessages[0];
+    assert.match(message, /Cookie: session=live; entitlement=pro\r\n/);
+    assert.match(message, /Authorization: Bearer test-token\r\n/);
+    assert.match(message, /Referer: https:\/\/secure\.example\.com\/reports\/42\r\n/);
+    assert.match(message, /Origin: https:\/\/secure\.example\.com\r\n/);
+    assert.match(message, /9:Relay Test Browser\r\n/);
+    assert.match(message, /Accept: application\/zip\r\n/);
+    assert.match(message, /Accept-Language: zh-CN,zh;q=0\.9\r\n/);
+    assert.match(message, /X-Download-Nonce: nonce-42\r\n/);
+    assert.doesNotMatch(message, /Cookie: fallback=stale/);
+    assert.doesNotMatch(message, /\r\n(?:Host|Range|Accept-Encoding|Sec-Fetch-Site):/i);
+});
+
+test("concurrent cookie lookups keep each authenticated handoff attached to its own URL", () => {
+    const runtime = loadBackground({ deferCookies: true });
+    const first = "https://secure.example.com/first.zip";
+    const second = "https://secure.example.com/second.zip";
+    simulateResponse(runtime, {
+        id: "auth-first",
+        url: first,
+        type: "main_frame",
+        contentType: "application/zip",
+        disposition: "attachment; filename=first.zip"
+    });
+    simulateResponse(runtime, {
+        id: "auth-second",
+        url: second,
+        type: "main_frame",
+        contentType: "application/zip",
+        disposition: "attachment; filename=second.zip"
+    });
+
+    assert.equal(runtime.pendingCookieRequests.length, 2);
+    runtime.pendingCookieRequests[1].callback([{ name: "session", value: "second" }]);
+    runtime.pendingCookieRequests[0].callback([{ name: "session", value: "first" }]);
+
+    assert.equal(runtime.sentMessages.length, 2);
+    const byURL = new Map(runtime.sentMessages.map(message => [message.match(/2:(.+)\r\n/)[1], message]));
+    assert.match(byURL.get(first), /Cookie: session=first\r\n/);
+    assert.match(byURL.get(second), /Cookie: session=second\r\n/);
 });
 
 test("concurrent top-level handoffs survive unrelated Chrome downloads", () => {

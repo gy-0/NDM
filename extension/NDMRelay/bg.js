@@ -144,6 +144,15 @@ function L(a, b) {
     return null
 }
 
+function relayHeaderValue(a) {
+    return String(a || "").replace(/[\r\n\0]+/g, " ").trim()
+}
+
+function isRelayRequestHeader(a) {
+    a = String(a || "").toLowerCase();
+    return "authorization" == a || "accept" == a || "accept-language" == a || N(a, "x-")
+}
+
 function M() {
     for (var a = {}, b = 0; b < arguments.length; b++)
         for (var c in arguments[b]) arguments[b].hasOwnProperty(c) && (a[c] = arguments[b][c]);
@@ -269,10 +278,19 @@ function V() {
         urls: ["http://*/*", "https://*/*", "ftp://*/*"],
         types: n
     }, ["requestBody"]);
-    this.l(chrome.webRequest.onBeforeSendHeaders, this.U, {
-        urls: ["https://*/*", "http://*/*"],
-        types: n
-    }, ["requestHeaders"]);
+    try {
+        this.l(chrome.webRequest.onBeforeSendHeaders, this.U, {
+            urls: ["https://*/*", "http://*/*"],
+            types: n
+        }, ["requestHeaders", "extraHeaders"])
+    } catch (d) {
+        // Firefox lacks Chromium's extraHeaders flag. Ordinary headers still
+        // flow there, with cookies.getAll as the authenticated-session fallback.
+        this.l(chrome.webRequest.onBeforeSendHeaders, this.U, {
+            urls: ["https://*/*", "http://*/*"],
+            types: n
+        }, ["requestHeaders"])
+    }
     this.l(chrome.webRequest.onHeadersReceived, this.W, {
         urls: ["<all_urls>"],
         types: n
@@ -411,24 +429,25 @@ W.I = async function(a) {
         a["3"] && (b += "3:" + a["3"] + "\r\n");
         b += "6:" + (a["6"] || "normal") + "\r\n";
         a["4"] && (b += "4:" + a["4"] + "\r\n");
-        if (a.pageUrl) {
-            var c = a.pageUrl,
-                d = "";
-            c &&= c.trim();
-            c && (d = (new URL(c)).origin);
-            b += "Origin: " + d + "\r\n"
+        var c = relayHeaderValue(a.requestOrigin),
+            d = relayHeaderValue(a.requestReferer);
+        if (!c && a.pageUrl) try {
+            c = (new URL(a.pageUrl.trim())).origin
+        } catch (f) {}
+        if (!d && a.pageUrl) {
+            d = a.pageUrl;
+            var e = d.lastIndexOf("#");
+            d = 0 > e || e < d.indexOf("?") ? d : d.substr(0, e)
         }
-        if (a.pageUrl) {
-            if (c = a.pageUrl) d = c.lastIndexOf("#"), c = 0 > d || d < c.indexOf("?") ? c : c.substr(0, d);
-            b += "Referer: " + c + "\r\n"
-        }
+        c && (b += "Origin: " + c + "\r\n");
+        d && (b += "Referer: " + relayHeaderValue(d) + "\r\n");
         a["5"] && (b += "5:" + a["5"] + "\r\n");
         a.cookies && (b += "Cookie: " + a.cookies + "\r\n");
         a["10"] && (b += "Content-Type: " + a["10"] +
             "\r\n");
         a["11"] && (b += "Content-Disposition: " + a["11"] + "\r\n");
         a["9"] && (b += "9:" + a["9"] + "\r\n");
-        for (var e in a) N(e.toLowerCase(), "x-") && (b += e + ": " + a[e] + "\r\n");
+        for (e in a) isRelayRequestHeader(e) && (b += e + ": " + relayHeaderValue(a[e]) + "\r\n");
         "POST" == a["1"] && (a["7"] && (b += "7:" + a["7"] + "\r\n"), a["8"] && (b += "8:" + a["8"] + "\r\n"), b = a.postData ? b + ("__0NeatPostData9__:" + a.postData) : b + "Content-Length: 0\r\n");
         if (!(118784 < b.length))
             if (a["3"]) this.G.send(b), this.i = null;
@@ -492,8 +511,7 @@ W.fa = function() {
     }
     var a = this.pendingRelayQueue;
     this.pendingRelayQueue = [];
-    for (var b = 0; b < a.length; b++) this.I(a[b]);
-    this.i && this.I(this.i)
+    for (var b = 0; b < a.length; b++) this.I(a[b])
 };
 W.ca = function() {
     this.D = !1;
@@ -542,15 +560,28 @@ W.da = function() {
     this.i = null;
     this.pendingRelayQueue.length && this.scheduleBridgeRetry()
 };
-W.J = function(a) {
-    if (this.i) {
-        var b = "";
-        if (a && 0 < a.length)
-            for (var c = 0; c < a.length; c++) b += a[c].name + "=" + a[c].value + (c < a.length - 1 ? "; " : "");
-        b = b.trim();
-        this.i.cookies = b;
-        this.I(this.i)
+W.J = function(a, b) {
+    if (!a) return;
+    var c = "";
+    if (b && 0 < b.length)
+        for (var d = 0; d < b.length; d++) c += b[d].name + "=" + b[d].value + (d < b.length - 1 ? "; " : "");
+    a.cookies || (a.cookies = relayHeaderValue(c));
+    this.i === a && (this.i = null);
+    this.I(a)
+};
+W.relayWithCookies = function(a) {
+    if (!a) return;
+    if (a.cookies) {
+        this.I(a);
+        return
     }
+    this.i = a;
+    var b = this;
+    chrome.cookies.getAll({
+        url: a["2"]
+    }, function(c) {
+        b.J(a, c)
+    })
 };
 W.X = function(a, b) {
     if ("NDM_ShowMediaPanel" == a.menuItemId) {
@@ -562,9 +593,7 @@ W.X = function(a, b) {
         return
     }
     var c = R(a.linkUrl);
-    !c || "ftp" != c && "http" != c && "https" != c || "ftp" == c && !F(a.linkUrl) || (c = new U, c["2"] = a.linkUrl || a.srcUrl, c.pageUrl = a.pageUrl, c["4"] = b && b.title || "", b && b.url && (c["5"] = b.url), !c["5"] && (c["5"] = a.pageUrl), this.i = c, chrome.cookies.getAll({
-        url: c["2"]
-    }, this.J))
+    !c || "ftp" != c && "http" != c && "https" != c || "ftp" == c && !F(a.linkUrl) || (c = new U, c["2"] = a.linkUrl || a.srcUrl, c.pageUrl = a.pageUrl, c["4"] = b && b.title || "", b && b.url && (c["5"] = b.url), !c["5"] && (c["5"] = a.pageUrl), this.relayWithCookies(c))
 };
 
 function X(a) {
@@ -928,10 +957,7 @@ W.W = function(a) {
                                 });
                                 "POST" == A["1"] && T(b, A);
                                 Y(b, A);
-                                d.i = A;
-                                chrome.cookies.getAll({
-                                    url: A["2"]
-                                }, d.J)
+                                d.relayWithCookies(A)
                             }
                             delete this.j[c]
                         }
@@ -954,7 +980,13 @@ function T(a, b) {
 
 function Y(a, b) {
     if (a.m)
-        for (var c = 0; c < a.m.length; c++) N(a.m[c].name.toLowerCase(), "x-") && (b[a.m[c].name] = a.m[c].value)
+        for (var c = 0; c < a.m.length; c++) {
+            var d = a.m[c].name,
+                e = d.toLowerCase(),
+                f = relayHeaderValue(a.m[c].value);
+            if (!f) continue;
+            "cookie" == e ? b.cookies = f : "referer" == e ? b.requestReferer = f : "origin" == e ? b.requestOrigin = f : "user-agent" == e ? b["9"] = f : "content-type" == e ? b["10"] = f : isRelayRequestHeader(e) && (b[d] = f)
+        }
 }
 W.U = function(a) {
     if (!(0 > a.tabId || 0 > a.frameId)) {
@@ -1053,10 +1085,7 @@ W.ba = function(a, b) {
             c["10"] && (e["10"] = c["10"]);
             c["11"] && (e["11"] = c["11"]);
             for (d in c) N(d.toLowerCase(), "x-") && (e[d] = c[d]);
-            this.i = e;
-            chrome.cookies.getAll({
-                url: e["2"]
-            }, this.J)
+            this.relayWithCookies(e)
             break;
         case 21:
             a.mediaCount = Math.max(0, Number(b[1]) || 0);
