@@ -1084,7 +1084,10 @@ W.ba = function(a, b) {
                 c.postData);
             c["10"] && (e["10"] = c["10"]);
             c["11"] && (e["11"] = c["11"]);
-            for (d in c) N(d.toLowerCase(), "x-") && (e[d] = c[d]);
+            c.cookies && (e.cookies = c.cookies);
+            c.requestReferer && (e.requestReferer = c.requestReferer);
+            c.requestOrigin && (e.requestOrigin = c.requestOrigin);
+            for (d in c) isRelayRequestHeader(d) && (e[d] = c[d]);
             this.relayWithCookies(e)
             break;
         case 21:

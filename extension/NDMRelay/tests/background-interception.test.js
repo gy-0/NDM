@@ -395,6 +395,45 @@ test("background relays the browser's authenticated request context without unsa
     assert.doesNotMatch(message, /\r\n(?:Host|Range|Accept-Encoding|Sec-Fetch-Site):/i);
 });
 
+test("clicking a detected media candidate preserves its captured authentication context", () => {
+    const runtime = loadBackground({ cookies: [{ name: "fallback", value: "stale" }] });
+    let receiveFromContent;
+    runtime.listeners.runtimeConnect({
+        sender: {
+            tab: { id: 10, title: "Authenticated media", url: "https://secure.example.com/watch/42" },
+            frameId: 0,
+            url: "https://secure.example.com/watch/42"
+        },
+        onMessage: { addListener(listener) { receiveFromContent = listener; } },
+        onDisconnect: { addListener() {} },
+        postMessage() {}
+    });
+
+    receiveFromContent([6, {
+        1: "GET",
+        2: "https://cdn.example.com/video.mp4",
+        6: "media",
+        cookies: "session=live",
+        requestReferer: "https://secure.example.com/watch/42",
+        requestOrigin: "https://secure.example.com",
+        Authorization: "Bearer test-token",
+        Accept: "video/mp4",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "X-Download-Nonce": "nonce-42"
+    }, "https://secure.example.com/watch/42", "Authenticated media", "Relay Test Browser"]);
+
+    assert.equal(runtime.sentMessages.length, 1);
+    const message = runtime.sentMessages[0];
+    assert.match(message, /Cookie: session=live\r\n/);
+    assert.match(message, /Authorization: Bearer test-token\r\n/);
+    assert.match(message, /Referer: https:\/\/secure\.example\.com\/watch\/42\r\n/);
+    assert.match(message, /Origin: https:\/\/secure\.example\.com\r\n/);
+    assert.match(message, /Accept: video\/mp4\r\n/);
+    assert.match(message, /Accept-Language: zh-CN,zh;q=0\.9\r\n/);
+    assert.match(message, /X-Download-Nonce: nonce-42\r\n/);
+    assert.doesNotMatch(message, /Cookie: fallback=stale/);
+});
+
 test("concurrent cookie lookups keep each authenticated handoff attached to its own URL", () => {
     const runtime = loadBackground({ deferCookies: true });
     const first = "https://secure.example.com/first.zip";
