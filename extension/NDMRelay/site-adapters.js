@@ -212,7 +212,7 @@
             ".better-ndm-bilibili-yield{display:none}",
             ".better-ndm-site-inline-action{display:inline-flex;align-items:center;margin-left:8px}",
             ".better-ndm-site-inline-button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid rgba(120,120,128,.25);border-radius:8px;background:rgba(120,120,128,.08);color:inherit;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap}",
-            ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(53,120,246,.12);border-color:rgba(53,120,246,.45);color:#3478f6;outline:none}",
+            ".better-ndm-site-inline-button:hover,.better-ndm-site-inline-button:focus-visible{background:rgba(120,120,128,.14);border-color:rgba(120,120,128,.38);outline:none}",
             ".better-ndm-site-inline-button svg{width:18px;height:18px;fill:currentColor;flex:none}",
             ".better-ndm-site-busy{opacity:.68;pointer-events:none}"
         ].join("");

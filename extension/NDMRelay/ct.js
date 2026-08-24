@@ -168,13 +168,13 @@ O.theme = function() {
         fg: "#202124",
         muted: "#5f6368",
         bd: "rgba(60, 60, 67, 0.24)",
-        hbg: "#3478f6"
+        hbg: "#303238"
     } : {
         bg: "#2c2c2e",
         fg: "#f5f5f7",
         muted: "#c7c7cc",
         bd: "rgba(235, 235, 245, 0.22)",
-        hbg: "#3f82f7"
+        hbg: "#f0f0f2"
     }
 };
 O.fade = function(delay) {
@@ -198,20 +198,21 @@ O.I = function(d) {
         }) : M(e),
         a = document.createElement("BUTTON");
     a.type = "button";
-    a.style.cssText = "all:unset;box-sizing:border-box;display:flex;align-items:center;width:100%;max-width:360px;min-height:32px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:5px 10px;margin:0px;border-radius:8px;border:solid 1px " + t.bd + ";background:" + (0 == d ? t.hbg : t.bg) + ";color:" + (0 == d ? "white" : t.fg) + ";cursor:pointer;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:12px;line-height:18px;font-weight:" + (0 == d ? "650" : "500") + ";direction:ltr;text-align:left;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.12)";
+    var primaryText = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "#f7f7f8" : "#17181c";
+    a.style.cssText = "all:unset;box-sizing:border-box;display:flex;align-items:center;width:100%;max-width:360px;min-height:32px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:5px 10px;margin:0px;border-radius:8px;border:solid 1px " + t.bd + ";background:" + (0 == d ? t.hbg : t.bg) + ";color:" + (0 == d ? primaryText : t.fg) + ";cursor:pointer;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:12px;line-height:18px;font-weight:" + (0 == d ? "650" : "500") + ";direction:ltr;text-align:left;user-select:none";
     a.innerText = b.trim();
     a.title = b.trim();
     a.setAttribute("aria-label", b.trim());
     a.onmouseover = function() {
         this.style.background = t.hbg;
-        this.style.color = "white"
+        this.style.color = primaryText
     };
     a.onmouseout = function() {
         this.style.background = 0 == d ? t.hbg : t.bg;
-        this.style.color = 0 == d ? "white" : t.fg
+        this.style.color = 0 == d ? primaryText : t.fg
     };
     a.onfocus = function() {
-        this.style.outline = "2px solid rgba(64, 156, 255, 0.95)";
+        this.style.outline = "2px solid " + t.muted;
         this.style.outlineOffset = "2px"
     };
     a.onblur = function() {
@@ -1000,11 +1001,11 @@ if (!window.o) {
             ".title{font-size:13px;font-weight:700;line-height:1.3}",
             ".msg{margin-top:3px;font-size:12px;line-height:1.45;color:#6e6e73}",
             ".row{display:flex;align-items:center;gap:8px;margin-top:9px}",
-            ".open{appearance:none;border:0;border-radius:7px;background:#3478f6;color:#fff;height:28px;padding:0 12px;cursor:pointer;font:650 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
-            ".open:hover,.open:focus-visible{background:#2167e8;outline:2px solid rgba(52,120,246,.35);outline-offset:2px}",
+            ".open{appearance:none;border:0;border-radius:7px;background:#303238;color:#f7f7f8;height:28px;padding:0 12px;cursor:pointer;font:650 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
+            ".open:hover,.open:focus-visible{outline:2px solid rgba(102,106,115,.45);outline-offset:2px}",
             ".close{appearance:none;border:0;border-radius:7px;background:transparent;color:#6e6e73;height:28px;padding:0 10px;cursor:pointer;font:550 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
             ".close:hover,.close:focus-visible{background:rgba(120,120,128,.12);outline:none}",
-            "@media(prefers-color-scheme:dark){.card{background:#262628;color:#f5f5f6;border-color:rgba(235,235,245,.16)}.msg{color:#aaaab0}.close{color:#aaaab0}.close:hover{background:rgba(235,235,245,.12)}}"
+            "@media(prefers-color-scheme:dark){.card{background:#1e2025;color:#f5f5f7;border-color:rgba(255,255,255,.135)}.msg{color:#a8abb2}.open{background:#f0f0f2;color:#17181c}.close{color:#a8abb2}.close:hover{background:rgba(235,235,245,.12)}}"
         ].join("");
         shadow.appendChild(style);
         var wrap = document.createElement("div");

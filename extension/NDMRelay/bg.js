@@ -311,7 +311,7 @@ function V() {
     this.settingsReady = !1;
     this.settingsReadyCallbacks = [];
     chrome.action.setBadgeBackgroundColor({
-        color: "#D08A3A"
+        color: "#5f636b"
     });
     var c = this;
     this.F = !0;

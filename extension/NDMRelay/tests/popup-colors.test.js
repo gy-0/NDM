@@ -59,13 +59,12 @@ test("popup light and dark palettes keep modern neutrals and readable contrast",
     assert.equal(roots.length, 2);
     roots.map(tokens).forEach((theme, index) => {
         const name = index === 0 ? "light" : "dark";
-        const tintedAction = blend(theme.accent, theme.raised, 0.14);
         const pairs = [
             ["body", theme.paper, theme.ink, 90],
             ["secondary", theme.fog, theme.raised, 75],
             ["muted", theme.mist, theme.raised, 60],
             ["primary action", theme["on-accent"], theme.accent, 60],
-            ["resource action", theme["accent-label"], tintedAction, 60]
+            ["resource action", theme.paper, theme.panel, 60]
         ];
         pairs.forEach(([role, foreground, background, minimumAPCA]) => {
             assert.ok(wcagRatio(foreground, background) >= 4.5, `${name} ${role} misses WCAG AA`);
@@ -74,8 +73,9 @@ test("popup light and dark palettes keep modern neutrals and readable contrast",
     });
 });
 
-test("interactive blue is reserved for actions instead of decorative text", () => {
+test("actions use the neutral product palette instead of stock blue", () => {
     assert.match(css, /\.btn-accent\s*\{[^}]*background:\s*var\(--accent\)/s);
-    assert.match(css, /\.resource-download\s*\{[^}]*color:\s*var\(--accent-label\)/s);
+    assert.match(css, /\.resource-download\s*\{[^}]*color:\s*var\(--paper\)/s);
+    assert.doesNotMatch(css, /#(?:365fd9|97acff|2f52c7|a9baff)/i);
     assert.doesNotMatch(css, /\.card-title\s*\{[^}]*var\(--accent/s);
 });
