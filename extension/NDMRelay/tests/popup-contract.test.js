@@ -48,9 +48,10 @@ test("popup exposes localized names and announces dynamic status", () => {
     assert.match(popup, /\[data-i18n-aria-label\]/);
 });
 
-test("popup reflows at narrow widths and keeps practical pointer targets", () => {
+test("popup pins its toolbar width and keeps practical pointer targets", () => {
     const css = source("popup.css");
-    assert.match(css, /width:\s*min\(292px,\s*100vw\)/);
+    assert.match(css, /body\s*\{[^}]*width:\s*292px/s);
+    assert.doesNotMatch(css, /body\s*\{[^}]*width:[^;}]*(?:vw|dvw|svw)/s);
     assert.match(css, /\.btn\s*\{[^}]*min-height:\s*40px/s);
     assert.match(css, /\.switch::after\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s);
     assert.match(css, /#media-card\s*\{[^}]*flex-direction:\s*column[^}]*align-items:\s*stretch/s);

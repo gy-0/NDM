@@ -52,7 +52,10 @@
 }
 
 body {
-  width: min(292px, 100vw);
+  /* Toolbar popups are shrink-to-content surfaces. A viewport-relative width
+     feeds Chrome's provisional popup width back into layout and can lock the
+     whole UI at its narrow default (~200px). Keep the product width explicit. */
+  width: 292px;
   background: var(--ink);
   color: var(--paper);
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
@@ -400,7 +403,7 @@ body {
   outline-offset: 3px;
 }
 
-/* Browser popup widths can collapse under zoom or side-by-side tooling. */
+/* Keep the footer usable if an embedding surface forcibly narrows the page. */
 @media (max-width: 220px) {
   body {
     padding-inline: 10px;
