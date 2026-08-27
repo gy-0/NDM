@@ -74,6 +74,8 @@ public actor HLSEngine {
         token.reset()
         openLog()
         progress.status = .downloading
+        progress.phase = .preparing
+        progress.currentConnections = 1
         log("DownloadID = \(taskID) , Protocol = HLS , OS = MAC")
         log("Trying to Start HLS Download for -> \(request.url.absoluteString)")
 
@@ -81,17 +83,46 @@ public actor HLSEngine {
         let media = streams.video
         log("TS-Mode Sockets Created. hlsSegmentsCount = \(media.segments.count)")
 
-        // Progress denominator spans both streams when there's separate audio.
         let audioCount = streams.audio?.segments.count ?? 0
-        progress.segmentStates = media.segments.map {
-            SegmentState(id: $0.id, start: 0, end: 0, completed: 0, isFinished: false)
+        let totalSegmentCount = media.segments.count + audioCount
+        var videoTransferSizes = Array<Int64?>(repeating: nil, count: media.segments.count)
+        var audioTransferSizes = Array<Int64?>(repeating: nil, count: audioCount)
+
+        if media.endList {
+            // A VOD playlist rarely declares its aggregate byte size. Ask each
+            // segment for Content-Length so `totalBytes` stays a byte count instead
+            // of abusing the field for a segment count. Origins that reject HEAD
+            // simply keep an unknown total; completed bytes remain truthful.
+            let segmentsRequiringProbe = media.segments.filter { $0.byteRange == nil }.count
+                + (streams.audio?.segments.filter { $0.byteRange == nil }.count ?? 0)
+            if segmentsRequiringProbe <= 256 {
+                videoTransferSizes = await probeTransferSizes(for: media)
+                if let audio = streams.audio {
+                    audioTransferSizes = await probeTransferSizes(for: audio)
+                }
+            } else {
+                log("Skipping HLS size preflight for \(segmentsRequiringProbe) segment URLs; total size remains unknown")
+            }
+            let allSizes = videoTransferSizes + audioTransferSizes
+            progress.totalBytes = Self.knownTotal(of: allSizes) ?? 0
+            progress.completedBytes = 0
+            progress.journeyFraction = progress.totalBytes > 0 ? nil : 0
+            progress.segmentStates = (0..<totalSegmentCount).map {
+                SegmentState(id: $0, start: 0, end: 0, completed: 0, isFinished: false)
+            }
+        } else {
+            progress.totalBytes = 0
+            progress.completedBytes = 0
+            progress.journeyFraction = nil
+            progress.segmentStates = []
         }
-        progress.totalBytes = Int64(media.segments.count + audioCount)
+        progress.phase = .transferring
 
         let tsDir = workDirectory.appendingPathComponent("ts", isDirectory: true)
         try FileManager.default.createDirectory(at: tsDir, withIntermediateDirectories: true)
 
-        var completed: Int64 = 0
+        var completedSegments = 0
+        var completedBytes: Int64 = 0
         // A playlist without #EXT-X-ENDLIST is a live stream: what we just fetched is a
         // sliding window, not the whole thing. Downloading it once would hand the user
         // the last thirty seconds and call it done — which is what this engine did until
@@ -100,7 +131,16 @@ public actor HLSEngine {
         if !media.endList {
             capturedSegmentCount = try await captureLive(startingFrom: media, into: tsDir)
         } else {
-            try await downloadSegments(media, into: tsDir, label: "TS", completedBase: &completed)
+            try await downloadSegments(
+                media,
+                into: tsDir,
+                label: "TS",
+                expectedSizes: videoTransferSizes,
+                stateOffset: 0,
+                totalSegmentCount: totalSegmentCount,
+                completedSegments: &completedSegments,
+                completedBytes: &completedBytes
+            )
         }
 
         // Separate audio rendition: download its segments too.
@@ -108,13 +148,23 @@ public actor HLSEngine {
         if capturedSegmentCount == nil, let audio = streams.audio, !audio.segments.isEmpty {
             let audioDir = workDirectory.appendingPathComponent("audio", isDirectory: true)
             try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
-            try await downloadSegments(audio, into: audioDir, label: "Audio", completedBase: &completed)
+            try await downloadSegments(
+                audio,
+                into: audioDir,
+                label: "Audio",
+                expectedSizes: audioTransferSizes,
+                stateOffset: media.segments.count,
+                totalSegmentCount: totalSegmentCount,
+                completedSegments: &completedSegments,
+                completedBytes: &completedBytes
+            )
             let merged = workDirectory.appendingPathComponent("audio.ts")
             try mergeTS(count: audio.segments.count, from: audioDir, to: merged)
             audioMergedURL = merged
         }
 
         log("DownloadEngine State Changed : Downloading... -> Merging...")
+        progress.phase = .merging
         let filename = outputFilename()
         try FileManager.default.createDirectory(
             at: request.destinationDirectory,
@@ -166,10 +216,10 @@ public actor HLSEngine {
         }
 
         progress.status = .complete
-        progress.completedBytes = progress.totalBytes
         let size = (try? FileManager.default.attributesOfItem(atPath: finalURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         progress.totalBytes = size
         progress.completedBytes = size
+        progress.journeyFraction = 1
         log("DownloadEngine State Changed : Merging... -> Completed")
         closeLog()
         return finalURL
@@ -317,7 +367,11 @@ public actor HLSEngine {
         _ media: HLSPlaylist.Media,
         into dir: URL,
         label: String,
-        completedBase completed: inout Int64
+        expectedSizes: [Int64?],
+        stateOffset: Int,
+        totalSegmentCount: Int,
+        completedSegments: inout Int,
+        completedBytes: inout Int64
     ) async throws {
         // Keys are per segment because playlists rotate them, but the same URI is
         // usually shared by a long run of segments — fetch each one once.
@@ -343,23 +397,53 @@ public actor HLSEngine {
             if FileManager.default.fileExists(atPath: partURL.path),
                let attrs = try? FileManager.default.attributesOfItem(atPath: partURL.path),
                let size = (attrs[.size] as? NSNumber)?.intValue, size > 0 {
-                completed += 1
-                progress.completedBytes = completed
+                completedSegments += 1
+                let expectedSize = expectedSizes.indices.contains(index) ? expectedSizes[index] : nil
+                completedBytes += expectedSize ?? Int64(size)
+                updateVODProgress(
+                    stateIndex: stateOffset + index,
+                    completedSegments: completedSegments,
+                    totalSegmentCount: totalSegmentCount,
+                    completedBytes: completedBytes
+                )
                 continue
             }
             guard let segURL = HLSPlaylist.resolveURL(seg.uri, against: request.url) else {
                 throw HLSError.unresolvedURL(seg.uri)
             }
             var data = try await fetchData(segURL, byteRange: seg.byteRange)
+            let transferredBytes = Int64(data.count)
             if let key = seg.key, key.isAES128 {
                 let iv = Self.ivData(hex: key.ivHex, mediaSequence: seg.id)
                 data = try Self.decryptAES128(data, key: try await keyData(for: key), iv: iv)
             }
             try data.write(to: partURL, options: .atomic)
-            completed += 1
-            progress.completedBytes = completed
+            completedSegments += 1
+            completedBytes += transferredBytes
+            updateVODProgress(
+                stateIndex: stateOffset + index,
+                completedSegments: completedSegments,
+                totalSegmentCount: totalSegmentCount,
+                completedBytes: completedBytes
+            )
             log("\(label)-Segment \(index + 1)/\(media.segments.count) ok (\(data.count) bytes)")
         }
+    }
+
+    private func updateVODProgress(
+        stateIndex: Int,
+        completedSegments: Int,
+        totalSegmentCount: Int,
+        completedBytes: Int64
+    ) {
+        progress.completedBytes = completedBytes
+        if progress.segmentStates.indices.contains(stateIndex) {
+            progress.segmentStates[stateIndex].completed = 1
+            progress.segmentStates[stateIndex].isFinished = true
+        }
+        progress.journeyFraction = progress.totalBytes > 0
+            ? nil
+            : min(1, Double(completedSegments) / Double(max(1, totalSegmentCount)))
     }
 
     // MARK: - Playlist
@@ -370,6 +454,71 @@ public actor HLSEngine {
         /// (X/Twitter and many CDNs) — must be downloaded and muxed, or the
         /// result is silent.
         var audio: HLSPlaylist.Media?
+    }
+
+    private func probeTransferSizes(for media: HLSPlaylist.Media) async -> [Int64?] {
+        var sizes = Array<Int64?>(repeating: nil, count: media.segments.count)
+        let batchSize = 12
+
+        for lowerBound in stride(from: 0, to: media.segments.count, by: batchSize) {
+            let upperBound = min(media.segments.count, lowerBound + batchSize)
+            let batch = await withTaskGroup(of: (Int, Int64?).self) { group in
+                for index in lowerBound..<upperBound {
+                    let segment = media.segments[index]
+                    group.addTask {
+                        (index, await self.probeTransferSize(for: segment))
+                    }
+                }
+                var values: [(Int, Int64?)] = []
+                for await value in group { values.append(value) }
+                return values
+            }
+            for (index, size) in batch { sizes[index] = size }
+
+            // HEAD support is normally uniform across a media origin. Stop at
+            // the first unsupported batch instead of delaying the real download
+            // with more probes that cannot produce an aggregate total anyway.
+            if batch.contains(where: { $0.1 == nil }) { break }
+        }
+        return sizes
+    }
+
+    private func probeTransferSize(for segment: HLSPlaylist.Segment) async -> Int64? {
+        if let byteRange = segment.byteRange, byteRange.length > 0 {
+            return byteRange.length
+        }
+        guard let url = HLSPlaylist.resolveURL(segment.uri, against: request.url) else {
+            return nil
+        }
+
+        var req = configuredRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 4
+        req.setValue(nil, forHTTPHeaderField: "Range")
+        do {
+            let (_, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            let declared = Int64(http.value(forHTTPHeaderField: "Content-Length") ?? "")
+            let length = declared ?? http.expectedContentLength
+            return length > 0 ? length : nil
+        } catch {
+            return nil
+        }
+    }
+
+    private static func knownTotal(of sizes: [Int64?]) -> Int64? {
+        guard !sizes.isEmpty else { return nil }
+        var total: Int64 = 0
+        for candidate in sizes {
+            guard let size = candidate, size > 0, total <= Int64.max - size else {
+                return nil
+            }
+            total += size
+        }
+        return total
     }
 
     private func resolveMediaPlaylist(startingAt url: URL) async throws -> ResolvedStreams {
@@ -433,14 +582,8 @@ public actor HLSEngine {
     }
 
     private func fetchData(_ url: URL, byteRange: HLSPlaylist.ByteRange? = nil) async throws -> Data {
-        var req = URLRequest(url: url)
+        var req = configuredRequest(url: url)
         req.httpMethod = "GET"
-        if let ua = request.userAgent {
-            req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        }
-        for (k, v) in request.headers {
-            req.setValue(v, forHTTPHeaderField: k)
-        }
         if let br = byteRange {
             if let off = br.offset {
                 req.setValue("bytes=\(off)-\(off + br.length - 1)", forHTTPHeaderField: "Range")
@@ -454,6 +597,17 @@ public actor HLSEngine {
             throw EngineError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? -1)
         }
         return data
+    }
+
+    private func configuredRequest(url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        if let ua = request.userAgent {
+            req.setValue(ua, forHTTPHeaderField: "User-Agent")
+        }
+        for (key, value) in request.headers {
+            req.setValue(value, forHTTPHeaderField: key)
+        }
+        return req
     }
 
     // MARK: - Merge / crypto

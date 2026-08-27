@@ -4,12 +4,20 @@ import Network
 /// Minimal static-file HTTP server for HLS playlist + TS segment integration tests.
 final class LocalHLSServer: @unchecked Sendable {
     private let files: [String: Data]
+    private let supportsHEAD: Bool
+    private let delayedGETs: [String: TimeInterval]
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "ndm.test.hlsserver")
     private(set) var port: UInt16 = 0
 
-    init(files: [String: Data]) {
+    init(
+        files: [String: Data],
+        supportsHEAD: Bool = true,
+        delayedGETs: [String: TimeInterval] = [:]
+    ) {
         self.files = files
+        self.supportsHEAD = supportsHEAD
+        self.delayedGETs = delayedGETs
     }
 
     func start() throws {
@@ -50,16 +58,35 @@ final class LocalHLSServer: @unchecked Sendable {
                 return
             }
             let response = self.buildResponse(for: req)
-            connection.send(content: response, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            let send = {
+                connection.send(content: response, completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            }
+            let delay = self.getDelay(for: req)
+            if delay > 0 {
+                self.queue.asyncAfter(deadline: .now() + delay, execute: send)
+            } else {
+                send()
+            }
         }
+    }
+
+    private func getDelay(for request: String) -> TimeInterval {
+        let first = request.components(separatedBy: "\r\n").first ?? ""
+        let parts = first.split(separator: " ")
+        guard parts.first == "GET", parts.count > 1 else { return 0 }
+        let pathPart = String(parts[1])
+        let path = pathPart.split(separator: "?").first.map(String.init) ?? pathPart
+        let key = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        return delayedGETs[key] ?? 0
     }
 
     private func buildResponse(for request: String) -> Data {
         let lines = request.components(separatedBy: "\r\n")
         let first = lines.first ?? ""
         let parts = first.split(separator: " ")
+        let method = parts.first.map(String.init) ?? "GET"
         let pathPart = parts.count > 1 ? String(parts[1]) : "/"
         let path = pathPart.split(separator: "?").first.map(String.init) ?? pathPart
         let key = path.hasPrefix("/") ? String(path.dropFirst()) : path
@@ -71,6 +98,11 @@ final class LocalHLSServer: @unchecked Sendable {
             return Data(h.utf8)
         }
 
+        if method == "HEAD", !supportsHEAD {
+            let h = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            return Data(h.utf8)
+        }
+
         let mime: String
         if key.hasSuffix(".m3u8") {
             mime = "application/vnd.apple.mpegurl"
@@ -78,6 +110,14 @@ final class LocalHLSServer: @unchecked Sendable {
             mime = "video/mp2t"
         } else {
             mime = "application/octet-stream"
+        }
+
+        if method == "HEAD" {
+            var h = "HTTP/1.1 200 OK\r\n"
+            h += "Content-Length: \(body.count)\r\n"
+            h += "Content-Type: \(mime)\r\n"
+            h += "Connection: close\r\n\r\n"
+            return Data(h.utf8)
         }
 
         if let rangeHeader {

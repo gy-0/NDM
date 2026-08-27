@@ -325,14 +325,22 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     let connections = progress.map {
         $0.currentConnections > 0 ? $0.currentConnections : task.connections
     } ?? task.connections
+    let isHLS = task.linkType.lowercased() == "hls"
+        || task.url.lowercased().contains(".m3u8")
     let segments = (progress?.segmentStates ?? []).map { segment in
-        [
+        var row: [String: Any] = [
             "id": segment.id,
-            "fraction": segment.fractionCompleted as Double,
-            "start": NSNumber(value: segment.start),
-            "end": NSNumber(value: segment.end),
-            "completed": NSNumber(value: segment.completed)
-        ] as [String: Any]
+            "fraction": segment.fractionCompleted as Double
+        ]
+        // HLS states describe whole media fragments, not byte ranges within one
+        // file. Omitting fake 0...0 ranges lets the desktop render equal-width
+        // fragment progress while ordinary HTTP tasks retain precise geometry.
+        if !isHLS {
+            row["start"] = NSNumber(value: segment.start)
+            row["end"] = NSNumber(value: segment.end)
+            row["completed"] = NSNumber(value: segment.completed)
+        }
+        return row
     }
     let source = URL(string: task.pageURL ?? task.url)?.host
     // For yt-dlp tasks hitTitle stores the selected formatID, not a title.

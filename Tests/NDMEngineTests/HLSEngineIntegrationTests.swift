@@ -271,6 +271,87 @@ final class HLSEngineIntegrationTests: XCTestCase {
         )
     }
 
+    func testVODProgressReportsRealBytesAndContentLengthTotal() async throws {
+        let first = Data(repeating: 0x41, count: 128)
+        let second = Data(repeating: 0x42, count: 512)
+        let playlist = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:1
+        #EXTINF:1.0,
+        first.ts
+        #EXTINF:1.0,
+        second.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(
+            files: [
+                "stream.m3u8": Data(playlist.utf8),
+                "first.ts": first,
+                "second.ts": second,
+            ],
+            delayedGETs: ["second.ts": 0.5]
+        )
+        try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-hls-progress-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(server.url(path: "stream.m3u8"), root: root)
+        let run = Task { try await engine.start() }
+
+        let progress = try await waitForProgress(engine) {
+            $0.status == .downloading && $0.completedBytes == Int64(first.count)
+        }
+        XCTAssertEqual(progress.totalBytes, Int64(first.count + second.count))
+        XCTAssertEqual(progress.completedBytes, Int64(first.count))
+        XCTAssertEqual(progress.fractionCompleted, Double(first.count) / Double(first.count + second.count), accuracy: 0.001)
+        XCTAssertEqual(progress.currentConnections, 1)
+        XCTAssertEqual(progress.segmentStates.map(\.fractionCompleted), [1, 0])
+
+        _ = try await run.value
+    }
+
+    func testVODProgressKeepsBytesTruthfulWhenHEADIsUnsupported() async throws {
+        let first = Data(repeating: 0x41, count: 128)
+        let second = Data(repeating: 0x42, count: 512)
+        let playlist = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:1
+        #EXTINF:1.0,
+        first.ts
+        #EXTINF:1.0,
+        second.ts
+        #EXT-X-ENDLIST
+        """
+        let server = LocalHLSServer(
+            files: [
+                "stream.m3u8": Data(playlist.utf8),
+                "first.ts": first,
+                "second.ts": second,
+            ],
+            supportsHEAD: false,
+            delayedGETs: ["second.ts": 0.5]
+        )
+        try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ndm-hls-progress-unknown-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = makeEngine(server.url(path: "stream.m3u8"), root: root)
+        let run = Task { try await engine.start() }
+
+        let progress = try await waitForProgress(engine) {
+            $0.status == .downloading && $0.completedBytes == Int64(first.count)
+        }
+        XCTAssertEqual(progress.totalBytes, 0)
+        XCTAssertEqual(progress.completedBytes, Int64(first.count))
+        XCTAssertEqual(progress.fractionCompleted, 0.5, accuracy: 0.001)
+
+        _ = try await run.value
+    }
+
     func testRealTSStreamRemuxesToMP4() async throws {
         guard let ffmpeg = FFmpegTool.find() else {
             throw XCTSkip("ffmpeg not installed; MP4 remux path not exercisable")
@@ -335,6 +416,31 @@ final class HLSEngineIntegrationTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func makeEngine(_ url: URL, root: URL) -> HLSEngine {
+        HLSEngine(
+            taskID: 1,
+            request: DownloadRequest(
+                url: url,
+                destinationDirectory: root.appendingPathComponent("Downloads", isDirectory: true),
+                suggestedFilename: "stream.ts"
+            ),
+            workDirectory: root.appendingPathComponent("work", isDirectory: true)
+        )
+    }
+
+    private func waitForProgress(
+        _ engine: HLSEngine,
+        matching predicate: (DownloadProgress) -> Bool
+    ) async throws -> DownloadProgress {
+        for _ in 0..<200 {
+            let progress = await engine.currentProgress()
+            if predicate(progress) { return progress }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("timed out waiting for HLS progress snapshot")
+        return await engine.currentProgress()
+    }
 
     private func makeManager() throws -> (DownloadManager, URL) {
         let tmp = FileManager.default.temporaryDirectory
