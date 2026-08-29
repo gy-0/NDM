@@ -119,6 +119,24 @@ test("Twitter-style variants collapse to one recommended page download plus clea
     assert.match(policy.describeCandidate(result[2], {
         locale: "zh-CN"
     }), /^仅音频 · M4A/);
+
+    assert.deepEqual(policy.candidatePresentation(result[0], {
+        locale: "zh-CN",
+        recommended: true
+    }), {
+        title: "选择画质并下载",
+        meta: "由 NDM 解析最佳可用格式",
+        badge: "推荐",
+        kind: "resolver"
+    });
+    assert.deepEqual(policy.candidatePresentation(result[1], {
+        locale: "zh-CN"
+    }), {
+        title: "视频文件",
+        meta: "720p · MP4 · 11 MB",
+        badge: "",
+        kind: "video"
+    });
 });
 
 test("raw transport fragments are not offered as standalone videos", () => {

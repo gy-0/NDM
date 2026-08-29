@@ -207,6 +207,41 @@
         return parts.join(" · ");
     }
 
+    function candidatePresentation(item, options) {
+        options = options || {};
+        var zh = String(options.locale || "").toLowerCase().indexOf("zh") === 0;
+        var recommended = Boolean(options.recommended);
+        var quality = qualityFor(item);
+        var extension = extensionFor(item).toUpperCase();
+        var size = formatSize(sizeFor(item), options.locale);
+        var meta = [];
+
+        if (isPageResolver(item)) {
+            return {
+                title: zh ? "选择画质并下载" : "Choose quality and download",
+                meta: zh ? "由 NDM 解析最佳可用格式" : "NDM resolves the best available format",
+                badge: zh ? "推荐" : "Recommended",
+                kind: "resolver"
+            };
+        }
+
+        if (quality) meta.push(quality + "p");
+        if (extension) meta.push(extension);
+        if (size) meta.push(size);
+        return {
+            title: isAudioOnly(item)
+                ? (zh ? "仅音频" : "Audio only")
+                : isCombined(item)
+                    ? (zh ? "完整视频" : "Complete video")
+                    : isHLS(item)
+                        ? (zh ? "流媒体视频" : "Streaming video")
+                        : (zh ? "视频文件" : "Video file"),
+            meta: meta.join(" · ") || (zh ? "检测到的媒体源" : "Detected media source"),
+            badge: recommended ? (zh ? "推荐" : "Recommended") : "",
+            kind: isAudioOnly(item) ? "audio" : "video"
+        };
+    }
+
     function shouldInterceptNavigation(meta) {
         meta = meta || {};
         var extension = String(meta.extension || "").replace(/^\./, "").toLowerCase();
@@ -229,6 +264,7 @@
 
     return {
         candidateScore: candidateScore,
+        candidatePresentation: candidatePresentation,
         compactCandidates: compactCandidates,
         contentTypeFor: contentTypeFor,
         describeCandidate: describeCandidate,

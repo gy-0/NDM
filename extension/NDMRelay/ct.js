@@ -1,5 +1,4 @@
 var k = chrome.runtime.getURL("img/icon16.png"),
-    w = chrome.runtime.getURL("img/close16.png"),
     y = {
         242: "240p",
         243: "360p",
@@ -97,6 +96,80 @@ function NDMRelayText(zh, en) {
     return String(navigator.language || "").toLowerCase().indexOf("zh") === 0 ? zh : en
 }
 
+function NDMRelayIcon(name) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 18 18");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    if (name === "close") {
+        svg.innerHTML = '<path d="M5 5l8 8M13 5l-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+    } else if (name === "chevron") {
+        svg.innerHTML = '<path d="m5.5 7 3.5 3.5L12.5 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    } else if (name === "download") {
+        svg.innerHTML = '<path d="M9 3.5v7m0 0 2.5-2.5M9 10.5 6.5 8M4 13.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    } else if (name === "audio") {
+        svg.innerHTML = '<path d="M7.5 12.2V5.1l5-1v6.1M7.5 12.2c0 1-1 1.8-2.2 1.8S3 13.4 3 12.5s1-1.7 2.3-1.7c.9 0 1.7.3 2.2.8m5-1.4c0 1-1 1.8-2.2 1.8S8 11.4 8 10.5s1-1.7 2.3-1.7c.9 0 1.7.3 2.2.8" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"/>'
+    } else {
+        svg.innerHTML = '<rect x="3" y="4" width="12" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m8 7 4 2-4 2Z" fill="currentColor"/>'
+    }
+    return svg
+}
+
+function NDMRelayFloatCSS() {
+    return [
+        ":host{all:initial;--ndm-ink:#202124;--ndm-muted:#70737b;--ndm-surface:#fff;--ndm-subtle:#f2f3f5;--ndm-hover:#eceef1;--ndm-line:rgba(24,26,30,.09);--ndm-accent:#292b30;--ndm-on-accent:#fff;--ndm-shadow:0 22px 56px rgba(18,20,24,.16),0 4px 14px rgba(18,20,24,.08),0 0 0 1px rgba(18,20,24,.07);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;color-scheme:light dark}",
+        "@media(prefers-color-scheme:dark){:host{--ndm-ink:#f5f5f7;--ndm-muted:#a9abb2;--ndm-surface:#202126;--ndm-subtle:#2a2c32;--ndm-hover:#32343b;--ndm-line:rgba(255,255,255,.09);--ndm-accent:#f0f0f2;--ndm-on-accent:#191a1e;--ndm-shadow:0 24px 64px rgba(0,0,0,.42),0 4px 16px rgba(0,0,0,.24),0 0 0 1px rgba(255,255,255,.1)}.ndm-launcher img{filter:grayscale(1) invert(1)}}",
+        "*{box-sizing:border-box}",
+        "[hidden]{display:none!important}",
+        "button{all:unset;box-sizing:border-box}",
+        ".ndm-shell{display:flex;align-items:flex-start;color:var(--ndm-ink);font-family:inherit}",
+        ".ndm-launcher{position:relative;display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 10px 0 9px;border-radius:11px;background:var(--ndm-surface);box-shadow:0 8px 24px rgba(18,20,24,.12),0 2px 8px rgba(18,20,24,.07),0 0 0 1px var(--ndm-line);cursor:pointer;user-select:none;transition:background-color .14s ease,transform .12s cubic-bezier(.2,0,0,1),box-shadow .14s ease}",
+        ".ndm-launcher::after{content:'';position:absolute;inset:-2px 0}",
+        ".ndm-launcher:hover{background:var(--ndm-subtle);box-shadow:0 10px 28px rgba(18,20,24,.15),0 2px 8px rgba(18,20,24,.08),0 0 0 1px var(--ndm-line)}",
+        ".ndm-launcher:active{transform:scale(.96)}",
+        ".ndm-launcher:focus-visible,.ndm-close:focus-visible,.ndm-media-item:focus-visible,.ndm-alternatives:focus-visible{outline:2px solid var(--ndm-ink);outline-offset:3px}",
+        ".ndm-launcher img{display:block;width:15px;height:15px;filter:grayscale(1) contrast(1.3);pointer-events:none}",
+        ".ndm-launcher-label{font-size:11.5px;line-height:1;font-weight:650;letter-spacing:-.01em}",
+        ".ndm-launcher-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:6px;background:var(--ndm-subtle);color:var(--ndm-muted);font-size:10px;line-height:1;font-weight:650;font-variant-numeric:tabular-nums}",
+        ".ndm-surface{width:min(344px,calc(100vw - 32px));padding:8px;border-radius:18px;background:var(--ndm-surface);box-shadow:var(--ndm-shadow)}",
+        ".ndm-header{display:flex;align-items:center;gap:10px;padding:5px 4px 9px 8px}",
+        ".ndm-heading{min-width:0;flex:1}",
+        ".ndm-eyebrow{font-size:9.5px;line-height:1.2;font-weight:650;letter-spacing:.12em;text-transform:uppercase;color:var(--ndm-muted)}",
+        ".ndm-title-row{display:flex;align-items:baseline;gap:8px;margin-top:3px}",
+        ".ndm-title{font-size:14px;line-height:1.25;font-weight:680;letter-spacing:-.025em;color:var(--ndm-ink)}",
+        ".ndm-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.3;color:var(--ndm-muted);font-variant-numeric:tabular-nums}",
+        ".ndm-close{position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;color:var(--ndm-muted);cursor:pointer;transition:background-color .14s ease,color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-close::after{content:'';position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}",
+        ".ndm-close:hover{background:var(--ndm-hover);color:var(--ndm-ink)}",
+        ".ndm-close:active{transform:scale(.96)}",
+        ".ndm-close svg{width:18px;height:18px}",
+        ".ndm-list{display:flex;flex-direction:column;max-height:min(330px,calc(100vh - 96px));overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--ndm-line) transparent}",
+        ".ndm-media-item{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:58px;padding:8px;border-radius:10px;color:var(--ndm-ink);cursor:pointer;text-align:start;transition:background-color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-media-item:hover{background:var(--ndm-hover)}",
+        ".ndm-media-item:active{transform:scale(.96)}",
+        ".ndm-media-item.is-recommended{background:var(--ndm-subtle)}",
+        ".ndm-media-item.is-recommended:hover{background:var(--ndm-hover)}",
+        ".ndm-item-icon{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;background:var(--ndm-surface);color:var(--ndm-muted);box-shadow:inset 0 0 0 1px var(--ndm-line)}",
+        ".ndm-media-item.is-recommended .ndm-item-icon{background:var(--ndm-accent);color:var(--ndm-on-accent);box-shadow:none}",
+        ".ndm-item-icon svg{width:18px;height:18px}",
+        ".ndm-item-copy{min-width:0}",
+        ".ndm-item-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:1.3;font-weight:650;letter-spacing:-.01em}",
+        ".ndm-item-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;color:var(--ndm-muted);font-size:11px;line-height:1.35;font-weight:450;font-variant-numeric:tabular-nums}",
+        ".ndm-item-end{display:flex;align-items:center;gap:6px;color:var(--ndm-muted)}",
+        ".ndm-item-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:6px;background:var(--ndm-accent);color:var(--ndm-on-accent);font-size:9.5px;line-height:1;font-weight:650;white-space:nowrap}",
+        ".ndm-item-action{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px}",
+        ".ndm-item-action svg{width:18px;height:18px}",
+        ".ndm-media-item:hover .ndm-item-action{color:var(--ndm-ink)}",
+        ".ndm-alternatives{display:flex;align-items:center;justify-content:space-between;width:100%;height:36px;margin-top:2px;padding:0 9px;border-radius:9px;color:var(--ndm-muted);cursor:pointer;font-size:11px;line-height:1.3;font-weight:550;transition:background-color .14s ease,color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-alternatives:hover{background:var(--ndm-hover);color:var(--ndm-ink)}",
+        ".ndm-alternatives:active{transform:scale(.96)}",
+        ".ndm-alternatives svg{width:18px;height:18px;transition:transform .16s cubic-bezier(.2,0,0,1)}",
+        ".ndm-alternatives[aria-expanded=true] svg{transform:rotate(180deg)}",
+        "@media(max-width:380px){.ndm-surface{width:calc(100vw - 24px)}.ndm-item-badge{display:none}}",
+        "@media(prefers-reduced-motion:reduce){.ndm-launcher,.ndm-close,.ndm-media-item,.ndm-alternatives,.ndm-alternatives svg{transition:none}}"
+    ].join("")
+}
+
 function N(d, g, a) {
     this.D = d;
     d.i[a] = this;
@@ -105,6 +178,9 @@ function N(d, g, a) {
     this.badge = null;
     this.badgeLabel = null;
     this.count = null;
+    this.summary = null;
+    this.closeButton = null;
+    this.pointerOpening = !1;
     this.p = null;
     this.panel = null;
     this.m = g;
@@ -126,14 +202,45 @@ O.G = function(d) {
     d.addEventListener.apply(d, g.slice(1))
 };
 O.v = function() {
-    this.h && (this.h.style.left = (this.toolbarPinned ? 16 : this.position.left) + "px", this.h.style.top = (this.toolbarPinned ? 16 : this.position.top) + "px")
+    if (!this.h) return;
+    var fixed = this.h.style.position === "fixed";
+    var viewportLeft = fixed ? 0 : window.pageXOffset;
+    var viewportTop = fixed ? 0 : window.pageYOffset;
+    var activeSurface = this.p && !this.p.hidden ? this.p : this.badge;
+    var rect = activeSurface && activeSurface.getBoundingClientRect ? activeSurface.getBoundingClientRect() : null;
+    var width = rect && rect.width || 84;
+    var height = rect && rect.height || 36;
+    var desiredLeft = this.toolbarPinned ? 16 : this.position.left;
+    var desiredTop = this.toolbarPinned ? 16 : this.position.top;
+    var maxLeft = Math.max(viewportLeft + 12, viewportLeft + window.innerWidth - width - 12);
+    var maxTop = Math.max(viewportTop + 12, viewportTop + window.innerHeight - height - 12);
+    this.h.style.left = Math.round(Math.min(maxLeft, Math.max(viewportLeft + 12, desiredLeft))) + "px";
+    this.h.style.top = Math.round(Math.min(maxTop, Math.max(viewportTop + 12, desiredTop))) + "px"
 };
 O.Y = function(d) {
     this.K(!0);
     this.D.oa(this.visibleItems[d])
 };
+O.setExpanded = function(expanded) {
+    if (!this.p || !this.badge) return;
+    var active = this.h && this.h.shadowRoot ? this.h.shadowRoot.activeElement : document.activeElement;
+    var focusCameFromLauncher = active === this.badge;
+    var focusWasInside = active && this.p.contains(active);
+    this.p.hidden = !expanded;
+    this.badge.hidden = expanded;
+    this.v();
+    var g = this;
+    if (expanded && focusCameFromLauncher && !this.pointerOpening) requestAnimationFrame(function() {
+        var first = g.panel && g.panel.querySelector("button");
+        (first || g.closeButton) && (first || g.closeButton).focus()
+    });
+    if (!expanded && focusWasInside) requestAnimationFrame(function() {
+        g.badge && g.badge.focus()
+    })
+};
 O.K = function(d) {
-    this.p && (this.p.style.display = d ? "none" : "none" == this.p.style.display ? "flex" : "none")
+    if (!this.p) return;
+    this.setExpanded(d ? !1 : this.p.hidden)
 };
 O.siteHasInlineUI = function() {
     if (!globalThis.NDMRelaySiteAdapters) return false;
@@ -159,30 +266,15 @@ O.show = function(d) {
     this.h.removeAttribute("aria-hidden");
     this.h.style.opacity = 1;
     this.h.style.pointerEvents = "";
-    d && this.p && (this.p.style.display = "flex");
-    this.fade(d ? 6E3 : 1800)
-};
-O.theme = function() {
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? {
-        bg: "#f7f7f8",
-        fg: "#202124",
-        muted: "#5f6368",
-        bd: "rgba(60, 60, 67, 0.24)",
-        hbg: "#303238"
-    } : {
-        bg: "#2c2c2e",
-        fg: "#f5f5f7",
-        muted: "#c7c7cc",
-        bd: "rgba(235, 235, 245, 0.22)",
-        hbg: "#f0f0f2"
-    }
+    d && this.setExpanded(!0);
+    this.hover || this.fade(d ? 6E3 : 1800)
 };
 O.fade = function(delay) {
     var g = this;
     this.j && clearTimeout(this.j);
     this.j = setTimeout(function() {
         g.j = null;
-        g.h && (g.p.style.display = "none", g.h.style.opacity = 0, g.h.style.pointerEvents = "none")
+        g.h && (g.setExpanded(!1), g.h.style.opacity = 0, g.h.style.pointerEvents = "none")
     }, delay || 1800)
 };
 O.wake = function() {
@@ -190,34 +282,53 @@ O.wake = function() {
 };
 O.I = function(d) {
     var g = this,
-        t = this.theme(),
         e = this.D.N(this.visibleItems[d]),
         b = NDMRelayPolicy ? NDMRelayPolicy.describeCandidate(e, {
             locale: navigator.language,
             recommended: 0 == d
         }) : M(e),
+        presentation = NDMRelayPolicy && NDMRelayPolicy.candidatePresentation ? NDMRelayPolicy.candidatePresentation(e, {
+            locale: navigator.language,
+            recommended: 0 == d
+        }) : {
+            title: b,
+            meta: "",
+            badge: 0 == d ? NDMRelayText("推荐", "Recommended") : "",
+            kind: "video"
+        },
         a = document.createElement("BUTTON");
     a.type = "button";
-    var primaryText = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "#f7f7f8" : "#17181c";
-    a.style.cssText = "all:unset;box-sizing:border-box;display:flex;align-items:center;width:100%;max-width:360px;min-height:32px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:5px 10px;margin:0px;border-radius:8px;border:solid 1px " + t.bd + ";background:" + (0 == d ? t.hbg : t.bg) + ";color:" + (0 == d ? primaryText : t.fg) + ";cursor:pointer;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:12px;line-height:18px;font-weight:" + (0 == d ? "650" : "500") + ";direction:ltr;text-align:left;user-select:none";
-    a.innerText = b.trim();
+    a.className = "ndm-media-item" + (0 == d ? " is-recommended" : "");
     a.title = b.trim();
     a.setAttribute("aria-label", b.trim());
-    a.onmouseover = function() {
-        this.style.background = t.hbg;
-        this.style.color = primaryText
-    };
-    a.onmouseout = function() {
-        this.style.background = 0 == d ? t.hbg : t.bg;
-        this.style.color = 0 == d ? primaryText : t.fg
-    };
-    a.onfocus = function() {
-        this.style.outline = "2px solid " + t.muted;
-        this.style.outlineOffset = "2px"
-    };
-    a.onblur = function() {
-        this.style.outline = "none"
-    };
+    var icon = document.createElement("SPAN");
+    icon.className = "ndm-item-icon";
+    icon.appendChild(NDMRelayIcon(presentation.kind === "audio" ? "audio" : "media"));
+    var copy = document.createElement("SPAN");
+    copy.className = "ndm-item-copy";
+    var title = document.createElement("SPAN");
+    title.className = "ndm-item-title";
+    title.textContent = presentation.title;
+    var meta = document.createElement("SPAN");
+    meta.className = "ndm-item-meta";
+    meta.textContent = presentation.meta;
+    copy.appendChild(title);
+    copy.appendChild(meta);
+    var end = document.createElement("SPAN");
+    end.className = "ndm-item-end";
+    if (presentation.badge) {
+        var badge = document.createElement("SPAN");
+        badge.className = "ndm-item-badge";
+        badge.textContent = presentation.badge;
+        end.appendChild(badge)
+    }
+    var action = document.createElement("SPAN");
+    action.className = "ndm-item-action";
+    action.appendChild(NDMRelayIcon("download"));
+    end.appendChild(action);
+    a.appendChild(icon);
+    a.appendChild(copy);
+    a.appendChild(end);
     a.onclick = function(e) {
         e.stopPropagation();
         e.preventDefault();
@@ -241,11 +352,13 @@ O.render = function() {
     var a = allItemIds.length;
     if (1 < a) {
         var e = this,
-            t = this.theme(),
             more = document.createElement("BUTTON");
         more.type = "button";
-        more.style.cssText = "all:unset;box-sizing:border-box;min-height:28px;padding:4px 10px;border-radius:6px;color:" + t.muted + ";cursor:pointer;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:11px;line-height:18px;font-weight:550;text-align:left";
-        more.innerText = this.showAlternatives ? NDMRelayText("收起其他格式", "Hide other formats") : NDMRelayText("其他格式（" + (a - 1) + "）", "Other formats (" + (a - 1) + ")");
+        more.className = "ndm-alternatives";
+        var moreLabel = document.createElement("SPAN");
+        moreLabel.textContent = this.showAlternatives ? NDMRelayText("收起其他格式", "Hide other formats") : NDMRelayText("显示其他 " + (a - 1) + " 个格式", "Show " + (a - 1) + " other formats");
+        more.appendChild(moreLabel);
+        more.appendChild(NDMRelayIcon("chevron"));
         more.setAttribute("aria-expanded", this.showAlternatives ? "true" : "false");
         more.onclick = function(f) {
             f.stopPropagation();
@@ -257,6 +370,7 @@ O.render = function() {
     }
     this.count.innerText = a;
     this.count.style.display = 1 < a ? "" : "none";
+    this.summary.textContent = NDMRelayText(a + " 个可用来源", a + (1 == a ? " source" : " sources"));
     this.badge.setAttribute("aria-label", NDMRelayText("显示检测到的 " + a + " 个视频下载选项", "Show " + a + " detected video download options"));
     // Pass the media element so X/Instagram can scope to the nearby article;
     // page-level adapters (YouTube/Bilibili/…) query document for the inject.
@@ -287,60 +401,89 @@ O.L = function(d) {
     });
     if (this.h) this.v();
     else {
-        var t = this.theme();
         this.h = document.createElement("DIV");
-        this.h.style.cssText = "padding:0px;margin:0px;position:" + c + ";z-index:100000000;left:" + this.position.left + "px;top:" + this.position.top + "px;direction:ltr;line-height:100% !important;opacity:1;transition:opacity 0.35s";
+        this.h.style.cssText = "padding:0;margin:0;position:" + c + ";z-index:2147483646;left:" + this.position.left + "px;top:" + this.position.top + "px;direction:ltr;opacity:1;transition:opacity .24s ease-out";
         this.h.id = "neatDiv" + this.ua;
         this.h.style.display = this.D.H ? "" : "none";
-        var row = document.createElement("DIV");
-        row.style.cssText = "display:flex;flex-direction:row;align-items:flex-start;gap:5px";
-        this.h.appendChild(row);
+        var shadow = this.h.attachShadow ? this.h.attachShadow({ mode: "open" }) : this.h;
+        var style = document.createElement("STYLE");
+        style.textContent = NDMRelayFloatCSS();
+        shadow.appendChild(style);
+        var shell = document.createElement("DIV");
+        shell.className = "ndm-shell";
+        shadow.appendChild(shell);
         this.badge = document.createElement("BUTTON");
         this.badge.type = "button";
-        this.badge.style.cssText = "all:unset;display:flex;align-items:center;justify-content:center;height:30px;min-width:48px;padding:0px 8px;box-sizing:border-box;border-radius:9px;border:solid 1px " + t.bd + ";background:" + t.bg + ";cursor:pointer;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.14)";
+        this.badge.className = "ndm-launcher";
         this.badge.setAttribute("aria-label", NDMRelayText("显示视频下载选项", "Show video download options"));
         var e = document.createElement("IMG");
         e.src = k;
-        e.width = 14;
-        e.height = 14;
-        e.style.cssText = "display:block;pointer-events:none";
+        e.alt = "";
         this.badge.appendChild(e);
         this.badgeLabel = document.createElement("SPAN");
         this.badgeLabel.innerText = "NDM";
-        this.badgeLabel.style.cssText = "display:block;margin-left:5px;color:" + t.fg + ";font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:10px;line-height:1;font-weight:700;letter-spacing:0.01em";
+        this.badgeLabel.className = "ndm-launcher-label";
         this.badge.appendChild(this.badgeLabel);
         this.count = document.createElement("SPAN");
-        this.count.style.cssText = "display:none;margin-left:4px;color:" + t.muted + ";font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI' !important;font-size:10px;font-weight:600";
+        this.count.className = "ndm-launcher-count";
+        this.count.style.display = "none";
         this.badge.appendChild(this.count);
+        this.badge.addEventListener("pointerdown", function() {
+            g.pointerOpening = !0
+        });
         this.badge.onclick = function(f) {
             f.stopPropagation();
-            g.K();
-            g.show(!1)
+            g.show(!0);
+            g.pointerOpening = !1
         };
-        row.appendChild(this.badge);
-        this.p = document.createElement("DIV");
-        this.p.style.cssText = "display:none;flex-direction:row;align-items:flex-start;gap:4px";
-        this.panel = document.createElement("DIV");
-        this.panel.style.cssText = "display:flex;flex-direction:column;align-items:stretch;gap:5px;max-width:min(360px,calc(100vw - 72px))";
-        this.p.appendChild(this.panel);
+        shell.appendChild(this.badge);
+        this.p = document.createElement("SECTION");
+        this.p.className = "ndm-surface";
+        this.p.hidden = !0;
+        this.p.setAttribute("role", "dialog");
+        this.p.setAttribute("aria-label", NDMRelayText("NDM 媒体下载选项", "NDM media download options"));
+        var header = document.createElement("DIV");
+        header.className = "ndm-header";
+        var heading = document.createElement("DIV");
+        heading.className = "ndm-heading";
+        var eyebrow = document.createElement("DIV");
+        eyebrow.className = "ndm-eyebrow";
+        eyebrow.textContent = "NDM Relay";
+        var titleRow = document.createElement("DIV");
+        titleRow.className = "ndm-title-row";
+        var panelTitle = document.createElement("DIV");
+        panelTitle.className = "ndm-title";
+        panelTitle.textContent = NDMRelayText("可下载媒体", "Downloadable media");
+        this.summary = document.createElement("DIV");
+        this.summary.className = "ndm-summary";
+        titleRow.appendChild(panelTitle);
+        titleRow.appendChild(this.summary);
+        heading.appendChild(eyebrow);
+        heading.appendChild(titleRow);
+        header.appendChild(heading);
         var cls = document.createElement("BUTTON");
         cls.type = "button";
-        cls.style.cssText = "all:unset;display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;border-radius:7px;border:solid 1px " + t.bd + ";background:" + t.bg + ";cursor:pointer";
+        cls.className = "ndm-close";
+        this.closeButton = cls;
         cls.setAttribute("aria-label", NDMRelayText("收起视频下载选项", "Minimize video download options"));
-        var f = document.createElement("IMG");
-        f.src = w;
-        f.width = 10;
-        f.height = 10;
-        f.style.cssText = "display:block;pointer-events:none";
-        cls.appendChild(f);
+        cls.appendChild(NDMRelayIcon("close"));
+        header.appendChild(cls);
+        this.p.appendChild(header);
+        this.panel = document.createElement("DIV");
+        this.panel.className = "ndm-list";
+        this.p.appendChild(this.panel);
         cls.onclick = function(ev) {
             ev.stopPropagation();
             g.K(!0);
-            g.h.style.opacity = 0;
-            g.h.style.pointerEvents = "none"
+            g.h.style.opacity = 1;
+            g.h.style.pointerEvents = ""
         };
-        this.p.appendChild(cls);
-        row.appendChild(this.p);
+        this.p.addEventListener("keydown", function(ev) {
+            if (ev.key !== "Escape") return;
+            ev.stopPropagation();
+            g.K(!0)
+        });
+        shell.appendChild(this.p);
         this.h.addEventListener("mouseenter", function() {
             g.hover = !0;
             g.j && (clearTimeout(g.j), g.j = null);

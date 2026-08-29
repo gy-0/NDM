@@ -36,6 +36,18 @@ test("generic media control gets out of the way and remains toolbar-recoverable"
     assert.match(background, /case 21:/);
 });
 
+test("floating media choices stay isolated from page CSS and expose structured rows", () => {
+    const content = source("ct.js");
+    assert.match(content, /attachShadow\(\{ mode: "open" \}\)/);
+    assert.match(content, /setAttribute\("role", "dialog"\)/);
+    assert.match(content, /candidatePresentation/);
+    assert.match(content, /className = "ndm-item-title"/);
+    assert.match(content, /className = "ndm-item-meta"/);
+    assert.match(content, /NDMRelayIcon\("close"\)/);
+    assert.match(content, /ev\.key !== "Escape"/);
+    assert.doesNotMatch(content, /getURL\("img\/close16(?:_2x)?\.png"\)/);
+});
+
 test("bilibili adapter never observes documentElement and defers toolbar watch", () => {
     const adapters = source("site-adapters.js");
     assert.match(adapters, /watchBilibiliToolbar/);
