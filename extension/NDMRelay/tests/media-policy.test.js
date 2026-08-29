@@ -124,18 +124,29 @@ test("Twitter-style variants collapse to one recommended page download plus clea
         locale: "zh-CN",
         recommended: true
     }), {
-        title: "选择画质并下载",
-        meta: "由 NDM 解析最佳可用格式",
-        badge: "推荐",
-        kind: "resolver"
+        title: "智能选择最佳版本",
+        meta: "由 NDM 解析画质并完成下载",
+        badge: "首选",
+        kind: "resolver",
+        quality: 0
     });
     assert.deepEqual(policy.candidatePresentation(result[1], {
         locale: "zh-CN"
     }), {
-        title: "视频文件",
-        meta: "720p · MP4 · 11 MB",
+        title: "720p 视频",
+        meta: "MP4 · 11 MB",
         badge: "",
-        kind: "video"
+        kind: "video",
+        quality: 720
+    });
+    assert.deepEqual(policy.candidatePresentation(result[2], {
+        locale: "en-US"
+    }), {
+        title: "Audio only",
+        meta: "M4A · 1.9 MB",
+        badge: "",
+        kind: "audio",
+        quality: 0
     });
 });
 

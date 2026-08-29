@@ -218,27 +218,34 @@
 
         if (isPageResolver(item)) {
             return {
-                title: zh ? "选择画质并下载" : "Choose quality and download",
-                meta: zh ? "由 NDM 解析最佳可用格式" : "NDM resolves the best available format",
-                badge: zh ? "推荐" : "Recommended",
-                kind: "resolver"
+                title: zh ? "智能选择最佳版本" : "Smart download",
+                meta: zh ? "由 NDM 解析画质并完成下载" : "Let NDM resolve quality and download",
+                badge: zh ? "首选" : "Best choice",
+                kind: "resolver",
+                quality: 0
             };
         }
 
-        if (quality) meta.push(quality + "p");
         if (extension) meta.push(extension);
         if (size) meta.push(size);
+        var title = isAudioOnly(item)
+            ? (zh ? "仅音频" : "Audio only")
+            : isCombined(item)
+                ? (zh ? "完整视频" : "Complete video")
+                : isHLS(item)
+                    ? (zh ? "流媒体视频" : "Streaming video")
+                    : (zh ? "视频文件" : "Video file");
+        if (quality && !isAudioOnly(item)) {
+            title = quality + "p " + (isHLS(item)
+                ? (zh ? "流媒体" : "stream")
+                : (zh ? "视频" : "video"));
+        }
         return {
-            title: isAudioOnly(item)
-                ? (zh ? "仅音频" : "Audio only")
-                : isCombined(item)
-                    ? (zh ? "完整视频" : "Complete video")
-                    : isHLS(item)
-                        ? (zh ? "流媒体视频" : "Streaming video")
-                        : (zh ? "视频文件" : "Video file"),
+            title: title,
             meta: meta.join(" · ") || (zh ? "检测到的媒体源" : "Detected media source"),
-            badge: recommended ? (zh ? "推荐" : "Recommended") : "",
-            kind: isAudioOnly(item) ? "audio" : "video"
+            badge: recommended ? (zh ? "首选" : "Best choice") : "",
+            kind: isAudioOnly(item) ? "audio" : "video",
+            quality: quality
         };
     }
 

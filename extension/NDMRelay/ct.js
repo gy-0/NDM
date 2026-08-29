@@ -1,5 +1,4 @@
-var k = chrome.runtime.getURL("img/icon16.png"),
-    y = {
+var y = {
         242: "240p",
         243: "360p",
         244: "480p",
@@ -73,15 +72,27 @@ function I(d) {
         var g = d.getBoundingClientRect();
         return g ? {
             left: Math.round(g.left + window.pageXOffset),
-            top: Math.round(g.top + window.pageYOffset)
+            top: Math.round(g.top + window.pageYOffset),
+            right: Math.round(g.right + window.pageXOffset),
+            bottom: Math.round(g.bottom + window.pageYOffset),
+            width: Math.round(g.width),
+            height: Math.round(g.height)
         } : {
             left: 0,
-            top: 0
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 0,
+            height: 0
         }
     } catch (a) {
         return {
             left: 0,
-            top: 0
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 0,
+            height: 0
         }
     }
 }
@@ -109,6 +120,10 @@ function NDMRelayIcon(name) {
         svg.innerHTML = '<path d="M9 3.5v7m0 0 2.5-2.5M9 10.5 6.5 8M4 13.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
     } else if (name === "audio") {
         svg.innerHTML = '<path d="M7.5 12.2V5.1l5-1v6.1M7.5 12.2c0 1-1 1.8-2.2 1.8S3 13.4 3 12.5s1-1.7 2.3-1.7c.9 0 1.7.3 2.2.8m5-1.4c0 1-1 1.8-2.2 1.8S8 11.4 8 10.5s1-1.7 2.3-1.7c.9 0 1.7.3 2.2.8" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"/>'
+    } else if (name === "brand") {
+        svg.innerHTML = '<path d="M4.5 13.5v-9l9 9v-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    } else if (name === "resolver") {
+        svg.innerHTML = '<path d="M9 2.8 10.1 6l3.1 1.1-3.1 1.1L9 11.4 7.9 8.2 4.8 7.1 7.9 6 9 2.8Z" fill="currentColor"/><path d="m13.5 11 .55 1.55 1.45.55-1.45.55-.55 1.55-.55-1.55-1.45-.55 1.45-.55.55-1.55Z" fill="currentColor"/>'
     } else {
         svg.innerHTML = '<rect x="3" y="4" width="12" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m8 7 4 2-4 2Z" fill="currentColor"/>'
     }
@@ -117,55 +132,59 @@ function NDMRelayIcon(name) {
 
 function NDMRelayFloatCSS() {
     return [
-        ":host{all:initial;--ndm-ink:#202124;--ndm-muted:#70737b;--ndm-surface:#fff;--ndm-subtle:#f2f3f5;--ndm-hover:#eceef1;--ndm-line:rgba(24,26,30,.09);--ndm-accent:#292b30;--ndm-on-accent:#fff;--ndm-shadow:0 22px 56px rgba(18,20,24,.16),0 4px 14px rgba(18,20,24,.08),0 0 0 1px rgba(18,20,24,.07);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;color-scheme:light dark}",
-        "@media(prefers-color-scheme:dark){:host{--ndm-ink:#f5f5f7;--ndm-muted:#a9abb2;--ndm-surface:#202126;--ndm-subtle:#2a2c32;--ndm-hover:#32343b;--ndm-line:rgba(255,255,255,.09);--ndm-accent:#f0f0f2;--ndm-on-accent:#191a1e;--ndm-shadow:0 24px 64px rgba(0,0,0,.42),0 4px 16px rgba(0,0,0,.24),0 0 0 1px rgba(255,255,255,.1)}.ndm-launcher img{filter:grayscale(1) invert(1)}}",
+        ":host{all:initial;--ndm-ink:#191b21;--ndm-muted:#676b76;--ndm-faint:#8b8f98;--ndm-surface:#fff;--ndm-subtle:#f4f5f7;--ndm-hover:#eef0f4;--ndm-line:rgba(25,27,33,.08);--ndm-accent:#3d5af1;--ndm-accent-ink:#2946d2;--ndm-accent-soft:rgba(61,90,241,.085);--ndm-accent-hover:rgba(61,90,241,.125);--ndm-on-accent:#fff;--ndm-shadow:0 24px 64px rgba(20,23,31,.16),0 6px 18px rgba(20,23,31,.08),0 0 0 1px rgba(20,23,31,.06);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;color-scheme:light dark}",
+        "@media(prefers-color-scheme:dark){:host{--ndm-ink:#f6f7fb;--ndm-muted:#a8abb5;--ndm-faint:#858995;--ndm-surface:#1e2026;--ndm-subtle:#282b33;--ndm-hover:#30343e;--ndm-line:rgba(255,255,255,.09);--ndm-accent:#91a1ff;--ndm-accent-ink:#bac4ff;--ndm-accent-soft:rgba(145,161,255,.12);--ndm-accent-hover:rgba(145,161,255,.17);--ndm-on-accent:#171922;--ndm-shadow:0 28px 72px rgba(0,0,0,.46),0 6px 20px rgba(0,0,0,.26),0 0 0 1px rgba(255,255,255,.1)}}",
         "*{box-sizing:border-box}",
         "[hidden]{display:none!important}",
-        "button{all:unset;box-sizing:border-box}",
+        "button,h2{all:unset;box-sizing:border-box}",
         ".ndm-shell{display:flex;align-items:flex-start;color:var(--ndm-ink);font-family:inherit}",
-        ".ndm-launcher{position:relative;display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 10px 0 9px;border-radius:11px;background:var(--ndm-surface);box-shadow:0 8px 24px rgba(18,20,24,.12),0 2px 8px rgba(18,20,24,.07),0 0 0 1px var(--ndm-line);cursor:pointer;user-select:none;transition:background-color .14s ease,transform .12s cubic-bezier(.2,0,0,1),box-shadow .14s ease}",
+        ".ndm-launcher{position:relative;display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 11px 0 8px;border-radius:14px;background:var(--ndm-surface);box-shadow:0 10px 28px rgba(20,23,31,.13),0 2px 8px rgba(20,23,31,.07),0 0 0 1px var(--ndm-line);cursor:pointer;touch-action:manipulation;user-select:none;transition:background-color .14s ease,scale .12s cubic-bezier(.2,0,0,1),box-shadow .14s ease}",
         ".ndm-launcher::after{content:'';position:absolute;inset:-2px 0}",
-        ".ndm-launcher:hover{background:var(--ndm-subtle);box-shadow:0 10px 28px rgba(18,20,24,.15),0 2px 8px rgba(18,20,24,.08),0 0 0 1px var(--ndm-line)}",
-        ".ndm-launcher:active{transform:scale(.96)}",
-        ".ndm-launcher:focus-visible,.ndm-close:focus-visible,.ndm-media-item:focus-visible,.ndm-alternatives:focus-visible{outline:2px solid var(--ndm-ink);outline-offset:3px}",
-        ".ndm-launcher img{display:block;width:15px;height:15px;filter:grayscale(1) contrast(1.3);pointer-events:none}",
-        ".ndm-launcher-label{font-size:11.5px;line-height:1;font-weight:650;letter-spacing:-.01em}",
-        ".ndm-launcher-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:6px;background:var(--ndm-subtle);color:var(--ndm-muted);font-size:10px;line-height:1;font-weight:650;font-variant-numeric:tabular-nums}",
-        ".ndm-surface{width:min(344px,calc(100vw - 32px));padding:8px;border-radius:18px;background:var(--ndm-surface);box-shadow:var(--ndm-shadow)}",
-        ".ndm-header{display:flex;align-items:center;gap:10px;padding:5px 4px 9px 8px}",
-        ".ndm-heading{min-width:0;flex:1}",
-        ".ndm-eyebrow{font-size:9.5px;line-height:1.2;font-weight:650;letter-spacing:.12em;text-transform:uppercase;color:var(--ndm-muted)}",
-        ".ndm-title-row{display:flex;align-items:baseline;gap:8px;margin-top:3px}",
-        ".ndm-title{font-size:14px;line-height:1.25;font-weight:680;letter-spacing:-.025em;color:var(--ndm-ink)}",
-        ".ndm-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.3;color:var(--ndm-muted);font-variant-numeric:tabular-nums}",
-        ".ndm-close{position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;color:var(--ndm-muted);cursor:pointer;transition:background-color .14s ease,color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-launcher:hover{background:var(--ndm-subtle);box-shadow:0 13px 34px rgba(20,23,31,.16),0 3px 10px rgba(20,23,31,.08),0 0 0 1px var(--ndm-line)}",
+        ".ndm-launcher:active{scale:.96}",
+        ".ndm-launcher:focus-visible,.ndm-close:focus-visible,.ndm-media-item:focus-visible,.ndm-alternatives:focus-visible{outline:2px solid var(--ndm-accent);outline-offset:3px}",
+        ".ndm-brand-mark{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:8px;background:var(--ndm-accent);color:var(--ndm-on-accent);box-shadow:0 4px 12px rgba(61,90,241,.24)}",
+        ".ndm-brand-mark svg{width:16px;height:16px}",
+        ".ndm-launcher-label{font-size:12px;line-height:1;font-weight:670;letter-spacing:-.015em}",
+        ".ndm-launcher-count{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:7px;background:var(--ndm-accent-soft);color:var(--ndm-accent-ink);font-size:10px;line-height:1;font-weight:700;font-variant-numeric:tabular-nums}",
+        ".ndm-surface{width:min(352px,calc(100vw - 32px));padding:8px;border-radius:20px;background:var(--ndm-surface);box-shadow:var(--ndm-shadow);transform-origin:top right}",
+        ".ndm-header{display:grid;grid-template-columns:32px minmax(0,1fr) 32px;align-items:center;gap:10px;padding:6px 4px 12px 8px}",
+        ".ndm-header .ndm-brand-mark{width:32px;height:32px;border-radius:10px}",
+        ".ndm-header .ndm-brand-mark svg{width:19px;height:19px}",
+        ".ndm-heading{min-width:0}",
+        ".ndm-title{display:block;font-size:14.5px;line-height:1.25;font-weight:700;letter-spacing:-.025em;color:var(--ndm-ink);text-wrap:balance}",
+        ".ndm-summary{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;font-size:11px;line-height:1.35;color:var(--ndm-muted);font-variant-numeric:tabular-nums}",
+        ".ndm-close{position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:10px;color:var(--ndm-muted);cursor:pointer;touch-action:manipulation;transition:background-color .14s ease,color .14s ease,scale .12s cubic-bezier(.2,0,0,1)}",
         ".ndm-close::after{content:'';position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}",
         ".ndm-close:hover{background:var(--ndm-hover);color:var(--ndm-ink)}",
-        ".ndm-close:active{transform:scale(.96)}",
+        ".ndm-close:active{scale:.96}",
         ".ndm-close svg{width:18px;height:18px}",
-        ".ndm-list{display:flex;flex-direction:column;max-height:min(330px,calc(100vh - 96px));overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--ndm-line) transparent}",
-        ".ndm-media-item{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:58px;padding:8px;border-radius:10px;color:var(--ndm-ink);cursor:pointer;text-align:start;transition:background-color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-list{display:flex;flex-direction:column;max-height:min(360px,calc(100vh - 112px));overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--ndm-line) transparent}",
+        ".ndm-media-item{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:11px;width:100%;min-height:62px;padding:9px;border-radius:12px;color:var(--ndm-ink);cursor:pointer;touch-action:manipulation;text-align:start;transition:background-color .14s ease,scale .12s cubic-bezier(.2,0,0,1),box-shadow .14s ease}",
         ".ndm-media-item:hover{background:var(--ndm-hover)}",
-        ".ndm-media-item:active{transform:scale(.96)}",
-        ".ndm-media-item.is-recommended{background:var(--ndm-subtle)}",
-        ".ndm-media-item.is-recommended:hover{background:var(--ndm-hover)}",
-        ".ndm-item-icon{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;background:var(--ndm-surface);color:var(--ndm-muted);box-shadow:inset 0 0 0 1px var(--ndm-line)}",
-        ".ndm-media-item.is-recommended .ndm-item-icon{background:var(--ndm-accent);color:var(--ndm-on-accent);box-shadow:none}",
+        ".ndm-media-item:active{scale:.96}",
+        ".ndm-media-item.is-recommended{background:var(--ndm-accent-soft);box-shadow:inset 0 0 0 1px rgba(61,90,241,.1)}",
+        ".ndm-media-item.is-recommended:hover{background:var(--ndm-accent-hover)}",
+        ".ndm-item-icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:11px;background:var(--ndm-surface);color:var(--ndm-muted);box-shadow:0 0 0 1px var(--ndm-line),0 1px 2px rgba(20,23,31,.04)}",
+        ".ndm-media-item.is-recommended .ndm-item-icon{background:var(--ndm-accent);color:var(--ndm-on-accent);box-shadow:0 5px 14px rgba(61,90,241,.24)}",
         ".ndm-item-icon svg{width:18px;height:18px}",
+        ".ndm-quality{display:flex;align-items:baseline;color:var(--ndm-ink);font-size:10.5px;line-height:1;font-weight:720;letter-spacing:-.025em;font-variant-numeric:tabular-nums}",
+        ".ndm-quality small{margin-inline-start:1px;color:var(--ndm-faint);font-size:7px;line-height:1;font-weight:650}",
         ".ndm-item-copy{min-width:0}",
-        ".ndm-item-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:1.3;font-weight:650;letter-spacing:-.01em}",
+        ".ndm-item-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.3;font-weight:670;letter-spacing:-.012em}",
         ".ndm-item-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;color:var(--ndm-muted);font-size:11px;line-height:1.35;font-weight:450;font-variant-numeric:tabular-nums}",
         ".ndm-item-end{display:flex;align-items:center;gap:6px;color:var(--ndm-muted)}",
-        ".ndm-item-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:6px;background:var(--ndm-accent);color:var(--ndm-on-accent);font-size:9.5px;line-height:1;font-weight:650;white-space:nowrap}",
-        ".ndm-item-action{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px}",
+        ".ndm-item-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:7px;background:var(--ndm-surface);color:var(--ndm-accent-ink);box-shadow:0 0 0 1px rgba(61,90,241,.12);font-size:9.5px;line-height:1;font-weight:700;white-space:nowrap}",
+        ".ndm-item-action{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px}",
         ".ndm-item-action svg{width:18px;height:18px}",
         ".ndm-media-item:hover .ndm-item-action{color:var(--ndm-ink)}",
-        ".ndm-alternatives{display:flex;align-items:center;justify-content:space-between;width:100%;height:36px;margin-top:2px;padding:0 9px;border-radius:9px;color:var(--ndm-muted);cursor:pointer;font-size:11px;line-height:1.3;font-weight:550;transition:background-color .14s ease,color .14s ease,transform .12s cubic-bezier(.2,0,0,1)}",
+        ".ndm-alternatives{display:flex;align-items:center;justify-content:space-between;width:100%;height:40px;margin-top:3px;padding:0 10px;border-radius:11px;color:var(--ndm-muted);cursor:pointer;touch-action:manipulation;font-size:11.5px;line-height:1.3;font-weight:580;transition:background-color .14s ease,color .14s ease,scale .12s cubic-bezier(.2,0,0,1)}",
         ".ndm-alternatives:hover{background:var(--ndm-hover);color:var(--ndm-ink)}",
-        ".ndm-alternatives:active{transform:scale(.96)}",
+        ".ndm-alternatives:active{scale:.96}",
         ".ndm-alternatives svg{width:18px;height:18px;transition:transform .16s cubic-bezier(.2,0,0,1)}",
         ".ndm-alternatives[aria-expanded=true] svg{transform:rotate(180deg)}",
-        "@media(max-width:380px){.ndm-surface{width:calc(100vw - 24px)}.ndm-item-badge{display:none}}",
+        "@media(max-width:380px){.ndm-surface{width:calc(100vw - 24px)}.ndm-item-badge{display:none}.ndm-header{grid-template-columns:30px minmax(0,1fr) 32px;gap:9px;padding-inline-start:7px}.ndm-header .ndm-brand-mark{width:30px;height:30px}.ndm-media-item{grid-template-columns:36px minmax(0,1fr) auto;gap:9px;padding-inline:8px}.ndm-item-icon{width:36px;height:36px}}",
+        "@media(prefers-contrast:more){:host{--ndm-muted:var(--ndm-ink);--ndm-accent-soft:rgba(61,90,241,.16)}.ndm-media-item.is-recommended{box-shadow:inset 0 0 0 2px var(--ndm-accent)}}",
         "@media(prefers-reduced-motion:reduce){.ndm-launcher,.ndm-close,.ndm-media-item,.ndm-alternatives,.ndm-alternatives svg{transition:none}}"
     ].join("")
 }
@@ -186,6 +205,8 @@ function N(d, g, a) {
     this.m = g;
     this.j = null;
     this.hover = !1;
+    this.focusWithin = !1;
+    this.anchor = null;
     this.position = {
         left: 0,
         top: 0
@@ -210,8 +231,9 @@ O.v = function() {
     var rect = activeSurface && activeSurface.getBoundingClientRect ? activeSurface.getBoundingClientRect() : null;
     var width = rect && rect.width || 84;
     var height = rect && rect.height || 36;
-    var desiredLeft = this.toolbarPinned ? 16 : this.position.left;
-    var desiredTop = this.toolbarPinned ? 16 : this.position.top;
+    var anchor = !this.toolbarPinned && this.anchor;
+    var desiredLeft = anchor ? anchor.right - width - 12 : viewportLeft + window.innerWidth - width - 16;
+    var desiredTop = anchor ? anchor.top + 12 : viewportTop + 16;
     var maxLeft = Math.max(viewportLeft + 12, viewportLeft + window.innerWidth - width - 12);
     var maxTop = Math.max(viewportTop + 12, viewportTop + window.innerHeight - height - 12);
     this.h.style.left = Math.round(Math.min(maxLeft, Math.max(viewportLeft + 12, desiredLeft))) + "px";
@@ -266,16 +288,20 @@ O.show = function(d) {
     this.h.removeAttribute("aria-hidden");
     this.h.style.opacity = 1;
     this.h.style.pointerEvents = "";
-    d && this.setExpanded(!0);
-    this.hover || this.fade(d ? 6E3 : 1800)
+    this.j && (clearTimeout(this.j), this.j = null);
+    if (d) {
+        this.setExpanded(!0);
+        return
+    }
+    this.hover || this.focusWithin || this.fade(3200)
 };
 O.fade = function(delay) {
     var g = this;
     this.j && clearTimeout(this.j);
     this.j = setTimeout(function() {
         g.j = null;
-        g.h && (g.setExpanded(!1), g.h.style.opacity = 0, g.h.style.pointerEvents = "none")
-    }, delay || 1800)
+        g.h && g.p && g.p.hidden && !g.hover && !g.focusWithin && (g.h.style.opacity = 0, g.h.style.pointerEvents = "none")
+    }, delay || 3200)
 };
 O.wake = function() {
     this.hover || !this.h || this.show(!1)
@@ -293,17 +319,28 @@ O.I = function(d) {
         }) : {
             title: b,
             meta: "",
-            badge: 0 == d ? NDMRelayText("推荐", "Recommended") : "",
-            kind: "video"
+            badge: 0 == d ? NDMRelayText("首选", "Best choice") : "",
+            kind: "video",
+            quality: 0
         },
         a = document.createElement("BUTTON");
     a.type = "button";
     a.className = "ndm-media-item" + (0 == d ? " is-recommended" : "");
     a.title = b.trim();
-    a.setAttribute("aria-label", b.trim());
+    a.setAttribute("aria-label", (presentation.kind === "resolver" ? NDMRelayText("打开：", "Open: ") : NDMRelayText("下载：", "Download: ")) + b.trim());
     var icon = document.createElement("SPAN");
     icon.className = "ndm-item-icon";
-    icon.appendChild(NDMRelayIcon(presentation.kind === "audio" ? "audio" : "media"));
+    if (presentation.quality) {
+        var quality = document.createElement("SPAN");
+        quality.className = "ndm-quality";
+        quality.textContent = presentation.quality;
+        var qualityUnit = document.createElement("SMALL");
+        qualityUnit.textContent = "p";
+        quality.appendChild(qualityUnit);
+        icon.appendChild(quality)
+    } else {
+        icon.appendChild(NDMRelayIcon(presentation.kind === "audio" ? "audio" : presentation.kind === "resolver" ? "resolver" : "media"))
+    }
     var copy = document.createElement("SPAN");
     copy.className = "ndm-item-copy";
     var title = document.createElement("SPAN");
@@ -356,22 +393,27 @@ O.render = function() {
         more.type = "button";
         more.className = "ndm-alternatives";
         var moreLabel = document.createElement("SPAN");
-        moreLabel.textContent = this.showAlternatives ? NDMRelayText("收起其他格式", "Hide other formats") : NDMRelayText("显示其他 " + (a - 1) + " 个格式", "Show " + (a - 1) + " other formats");
+        moreLabel.textContent = this.showAlternatives ? NDMRelayText("收起其他版本", "Hide other versions") : NDMRelayText("显示其他 " + (a - 1) + " 个版本", "Show " + (a - 1) + " more versions");
         more.appendChild(moreLabel);
         more.appendChild(NDMRelayIcon("chevron"));
         more.setAttribute("aria-expanded", this.showAlternatives ? "true" : "false");
         more.onclick = function(f) {
             f.stopPropagation();
+            var keyboardActivation = 0 === f.detail;
             e.showAlternatives = !e.showAlternatives;
             e.render();
-            e.show(!0)
+            e.show(!0);
+            keyboardActivation && requestAnimationFrame(function() {
+                var replacement = e.panel && e.panel.querySelector(".ndm-alternatives");
+                replacement && replacement.focus()
+            })
         };
         this.panel.appendChild(more)
     }
     this.count.innerText = a;
     this.count.style.display = 1 < a ? "" : "none";
-    this.summary.textContent = NDMRelayText(a + " 个可用来源", a + (1 == a ? " source" : " sources"));
-    this.badge.setAttribute("aria-label", NDMRelayText("显示检测到的 " + a + " 个视频下载选项", "Show " + a + " detected video download options"));
+    this.summary.textContent = NDMRelayText(a + " 个版本 · 首选项已置顶", a + (1 == a ? " version" : " versions") + " · Best option first");
+    this.badge.setAttribute("aria-label", NDMRelayText("打开 NDM 下载选项，共 " + a + " 个版本", "Open NDM downloads, " + a + (1 == a ? " version" : " versions")));
     // Pass the media element so X/Instagram can scope to the nearby article;
     // page-level adapters (YouTube/Bilibili/…) query document for the inject.
     var siteHasInlineUI = this.siteHasInlineUI();
@@ -391,13 +433,13 @@ O.L = function(d) {
         b = null,
         c = this.m ? "absolute" : "fixed";
     this.m && (b = I(this.m));
-    b && (this.position = {
+    b && (this.anchor = b, this.position = {
         left: Math.max(0, b.left + 8),
         top: Math.max(0, b.top + 8)
     });
-    this.m || (this.position = {
-        left: 16,
-        top: 16
+    this.m || (this.anchor = null, this.position = {
+        left: Math.max(0, window.pageXOffset + window.innerWidth - 100),
+        top: Math.max(0, window.pageYOffset + 16)
     });
     if (this.h) this.v();
     else {
@@ -416,9 +458,10 @@ O.L = function(d) {
         this.badge.type = "button";
         this.badge.className = "ndm-launcher";
         this.badge.setAttribute("aria-label", NDMRelayText("显示视频下载选项", "Show video download options"));
-        var e = document.createElement("IMG");
-        e.src = k;
-        e.alt = "";
+        var e = document.createElement("SPAN");
+        e.className = "ndm-brand-mark";
+        e.setAttribute("aria-hidden", "true");
+        e.appendChild(NDMRelayIcon("brand"));
         this.badge.appendChild(e);
         this.badgeLabel = document.createElement("SPAN");
         this.badgeLabel.innerText = "NDM";
@@ -431,6 +474,12 @@ O.L = function(d) {
         this.badge.addEventListener("pointerdown", function() {
             g.pointerOpening = !0
         });
+        this.badge.addEventListener("pointercancel", function() {
+            g.pointerOpening = !1
+        });
+        this.badge.addEventListener("pointerleave", function() {
+            g.pointerOpening = !1
+        });
         this.badge.onclick = function(f) {
             f.stopPropagation();
             g.show(!0);
@@ -441,31 +490,34 @@ O.L = function(d) {
         this.p.className = "ndm-surface";
         this.p.hidden = !0;
         this.p.setAttribute("role", "dialog");
-        this.p.setAttribute("aria-label", NDMRelayText("NDM 媒体下载选项", "NDM media download options"));
+        var titleId = "ndm-relay-title-" + this.ua;
+        var summaryId = "ndm-relay-summary-" + this.ua;
+        this.p.setAttribute("aria-labelledby", titleId);
+        this.p.setAttribute("aria-describedby", summaryId);
         var header = document.createElement("DIV");
         header.className = "ndm-header";
+        var headerMark = document.createElement("SPAN");
+        headerMark.className = "ndm-brand-mark";
+        headerMark.setAttribute("aria-hidden", "true");
+        headerMark.appendChild(NDMRelayIcon("brand"));
+        header.appendChild(headerMark);
         var heading = document.createElement("DIV");
         heading.className = "ndm-heading";
-        var eyebrow = document.createElement("DIV");
-        eyebrow.className = "ndm-eyebrow";
-        eyebrow.textContent = "NDM Relay";
-        var titleRow = document.createElement("DIV");
-        titleRow.className = "ndm-title-row";
-        var panelTitle = document.createElement("DIV");
+        var panelTitle = document.createElement("H2");
+        panelTitle.id = titleId;
         panelTitle.className = "ndm-title";
-        panelTitle.textContent = NDMRelayText("可下载媒体", "Downloadable media");
+        panelTitle.textContent = NDMRelayText("选择下载版本", "Choose a download");
         this.summary = document.createElement("DIV");
+        this.summary.id = summaryId;
         this.summary.className = "ndm-summary";
-        titleRow.appendChild(panelTitle);
-        titleRow.appendChild(this.summary);
-        heading.appendChild(eyebrow);
-        heading.appendChild(titleRow);
+        heading.appendChild(panelTitle);
+        heading.appendChild(this.summary);
         header.appendChild(heading);
         var cls = document.createElement("BUTTON");
         cls.type = "button";
         cls.className = "ndm-close";
         this.closeButton = cls;
-        cls.setAttribute("aria-label", NDMRelayText("收起视频下载选项", "Minimize video download options"));
+        cls.setAttribute("aria-label", NDMRelayText("收起下载面板", "Minimize downloads"));
         cls.appendChild(NDMRelayIcon("close"));
         header.appendChild(cls);
         this.p.appendChild(header);
@@ -491,11 +543,23 @@ O.L = function(d) {
         });
         this.h.addEventListener("mouseleave", function() {
             g.hover = !1;
-            g.fade(1200)
+            g.p && g.p.hidden && g.fade(2400)
+        });
+        this.h.addEventListener("focusin", function() {
+            g.focusWithin = !0;
+            g.j && (clearTimeout(g.j), g.j = null);
+            g.h.style.opacity = 1;
+            g.h.style.pointerEvents = ""
+        });
+        this.h.addEventListener("focusout", function(ev) {
+            var next = ev.relatedTarget;
+            if (next && g.h.contains(next)) return;
+            g.focusWithin = !1;
+            g.p && g.p.hidden && g.fade(3200)
         });
         this.m && this.G(this.m, "mousemove", this.wake);
         document.body.appendChild(this.h);
-        this.fade(1800)
+        this.fade(3200)
     }
     if (-1 < this.items.indexOf(d)) return;
     this.items.push(d);
@@ -949,6 +1013,7 @@ if (!window.o) {
                         try {
                             document.body.removeChild(c.h)
                         } catch (e) {}
+                        c.anchor = f;
                         c.position.left =
                             Math.max(0, f.left + 8);
                         c.position.top = Math.max(0, f.top + 8);
@@ -1035,7 +1100,7 @@ if (!window.o) {
     O.ha = function(a) {
         if (a && a.m) {
             var b = I(a.m);
-            b && (a.position = {
+            b && (a.anchor = b, a.position = {
                 left: Math.max(0, b.left + 8),
                 top: Math.max(0, b.top + 8)
             }, a.v());
@@ -1275,7 +1340,11 @@ if (!window.o) {
         a.addEventListener.apply(a, b.slice(1))
     };
     O.ra = function() {
-        for (var a in this.i) this.i[a].K(!0)
+        for (var a in this.i) {
+            var panel = this.i[a];
+            panel.K(!0);
+            panel.fade(3200)
+        }
     };
     O.za = function() {
         try {

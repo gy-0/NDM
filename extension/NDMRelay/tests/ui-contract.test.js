@@ -48,6 +48,23 @@ test("floating media choices stay isolated from page CSS and expose structured r
     assert.doesNotMatch(content, /getURL\("img\/close16(?:_2x)?\.png"\)/);
 });
 
+test("floating media panel favors the trailing edge and does not time out while open", () => {
+    const content = source("ct.js");
+    assert.match(content, /anchor\.right - width - 12/);
+    assert.match(content, /window\.innerWidth - width - 16/);
+    assert.match(content, /g\.p && g\.p\.hidden && !g\.hover && !g\.focusWithin/);
+    assert.match(content, /addEventListener\("focusin"/);
+    assert.doesNotMatch(content, /fade\(d \? 6E3/);
+});
+
+test("floating media disclosure and dialog keep keyboard context", () => {
+    const content = source("ct.js");
+    assert.match(content, /setAttribute\("aria-labelledby", titleId\)/);
+    assert.match(content, /document\.createElement\("H2"\)/);
+    assert.match(content, /keyboardActivation && requestAnimationFrame/);
+    assert.match(content, /replacement && replacement\.focus\(\)/);
+});
+
 test("bilibili adapter never observes documentElement and defers toolbar watch", () => {
     const adapters = source("site-adapters.js");
     assert.match(adapters, /watchBilibiliToolbar/);
