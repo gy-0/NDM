@@ -433,6 +433,9 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     if let startAt = task.startAt {
         row["startAt"] = startAt.timeIntervalSince1970 * 1000
     }
+    if let activityAt = task.mostRecentActivity {
+        row["activityAt"] = activityAt.timeIntervalSince1970 * 1000
+    }
     if let errorText = task.errorText {
         row["errorText"] = errorText
         if let diagnostic = DownloadDiagnostic.fromStoredErrorText(errorText) {
@@ -443,6 +446,12 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
                 "primaryAction": diagnostic.primaryAction.rawValue
             ]
         }
+    }
+    if let deliveryNote = task.deliveryNote.flatMap(DeliveryNote.init(storageKey:)) {
+        row["deliveryNote"] = [
+            "title": deliveryNote.title,
+            "detail": deliveryNote.detail
+        ]
     }
     return row
 }
