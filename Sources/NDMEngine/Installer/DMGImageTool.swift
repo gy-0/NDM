@@ -5,7 +5,7 @@ import Foundation
 /// Separate from `EngineError` because these describe a different surface: not
 /// a download that failed, but a local install that could not be completed.
 public enum InstallerError: Error, LocalizedError, Equatable {
-    /// `hdiutil attach` returned no usable mount point.
+    /// The system disk-image service returned no usable mount point.
     case mountFailed(detail: String)
     /// The mounted volume could not be read.
     case enumerationFailed(detail: String)
@@ -13,7 +13,7 @@ public enum InstallerError: Error, LocalizedError, Equatable {
     case appNotFound(app: String)
     /// The copy step failed (permission, disk full, locked file…).
     case copyFailed(detail: String)
-    /// `hdiutil detach` failed and the volume may still be mounted.
+    /// The system disk-image service could not eject the mounted volume.
     case detachFailed(detail: String)
     /// The destination directory does not exist and could not be created.
     case destinationUnavailable(detail: String)
@@ -33,13 +33,14 @@ public enum InstallerError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Thin wrapper around `hdiutil` for the one-click install path.
+/// Thin wrapper around macOS' system disk-image tools for one-click install.
 ///
 /// Ported from the *behavior* of Rapidmg 1.3.1 (reverse spec 15). Rapidmg
 /// extracts DMGs with an embedded 7-Zip and never mounts; NDM is not sandboxed,
-/// so the system `hdiutil` — present on every supported macOS — is the lighter,
-/// dependency-free equivalent. The contract that matters is the same: a
-/// read-only mount that is *always* detached, even when the caller throws.
+/// so the system tools present on every supported macOS are the lighter,
+/// dependency-free equivalent. macOS 26 deprecated `hdiutil attach`; mounting
+/// now goes through `diskutil image attach`, while `hdiutil` remains for image
+/// metadata and conversion operations that diskutil does not cover.
 public enum DMGImageTool: Sendable {
     struct ProcessResult: Sendable {
         let terminationStatus: Int32
@@ -48,6 +49,7 @@ public enum DMGImageTool: Sendable {
     }
 
     public static let hdiutil = "/usr/bin/hdiutil"
+    public static let diskutil = "/usr/sbin/diskutil"
 
     /// Mount the image read-only and hidden from Finder; returns the mount point.
     /// The caller must call `detach` (preferably via `withMountedImage`).
@@ -57,18 +59,18 @@ public enum DMGImageTool: Sendable {
     /// in quick succession (Rapidmg's `attachHandleBusy` behavior).
     public static func attach(dmgURL: URL, timeout: TimeInterval = 60) throws -> URL {
         try attachImage(
-            ["attach", "-nobrowse", "-readonly", "-plist", dmgURL.path],
+            executable: diskutil,
+            arguments: ["image", "attach", "--plist", "--readOnly", "--nobrowse", dmgURL.path],
             timeout: timeout
         )
     }
 
-    /// Detach the volume; retries with `-force` once for a busy handle.
+    /// Eject the volume; falls back to a force detach for a busy read-only mount.
     public static func detach(mountPoint: URL, timeout: TimeInterval = 60) throws {
-        let normal = try run(["detach", mountPoint.path, "-quiet"], timeout: timeout)
+        let normal = try run(["eject", mountPoint.path], executable: diskutil, timeout: timeout)
         if normal.terminationStatus == 0 { return }
-        // Busy volumes (a Finder window, Quick Look, or a lingering helper) fail
-        // the first time. Forcing is safe here: the mount is read-only, so there
-        // is nothing on the volume to lose.
+        // Finder, Quick Look, and scanner processes can briefly retain a mount.
+        // Forcing is safe here because NDM always mounts the image read-only.
         let forced = try run(["detach", mountPoint.path, "-force", "-quiet"], timeout: timeout)
         guard forced.terminationStatus == 0 else {
             throw InstallerError.detachFailed(
@@ -135,7 +137,8 @@ public enum DMGImageTool: Sendable {
             )
         }
         let mountPoint = try attachImage(
-            ["attach", stripped.path, "-nobrowse", "-readonly", "-plist"],
+            executable: diskutil,
+            arguments: ["image", "attach", "--plist", "--readOnly", "--nobrowse", stripped.path],
             timeout: timeout
         )
         return BypassMount(mountPoint: mountPoint, temporaryImage: stripped)
@@ -173,17 +176,20 @@ public enum DMGImageTool: Sendable {
     /// Under test load the daemon can stay saturated for a couple of seconds,
     /// so the backoff grows past that (Rapidmg's `attachHandleBusy` behavior).
     private static func attachImage(
-        _ arguments: [String], timeout: TimeInterval
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval
     ) throws -> URL {
-        var lastDetail = "hdiutil attach failed"
+        var lastDetail = "disk image attach failed"
         let backoff: [TimeInterval] = [0.8, 1.6, 3.0]
         for attempt in 0...backoff.count {
-            let result = try run(arguments, timeout: timeout)
+            let result = try run(arguments, executable: executable, timeout: timeout)
             if result.terminationStatus == 0,
                let mountPoint = parseMountPoint(plist: result.standardOutput) {
                 return URL(fileURLWithPath: mountPoint, isDirectory: true)
             }
-            lastDetail = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !detail.isEmpty { lastDetail = detail }
             if attempt < backoff.count {
                 Thread.sleep(forTimeInterval: backoff[attempt])
             }
@@ -191,7 +197,7 @@ public enum DMGImageTool: Sendable {
         throw InstallerError.mountFailed(detail: lastDetail)
     }
 
-    /// `hdiutil attach -plist` reports mount points inside `system-entities`.
+    /// `diskutil image attach --plist` reports mount points in `system-entities`.
     static func parseMountPoint(plist: String) -> String? {
         guard let data = plist.data(using: .utf8),
               let root = try? PropertyListSerialization.propertyList(
@@ -210,7 +216,11 @@ public enum DMGImageTool: Sendable {
 
     // MARK: - Process plumbing
 
-    static func run(_ arguments: [String], timeout: TimeInterval) throws -> ProcessResult {
+    static func run(
+        _ arguments: [String],
+        executable: String = hdiutil,
+        timeout: TimeInterval
+    ) throws -> ProcessResult {
         let stdoutURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ndm-hdiutil-out-\(UUID().uuidString)")
         let stderrURL = FileManager.default.temporaryDirectory
@@ -230,7 +240,7 @@ public enum DMGImageTool: Sendable {
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: hdiutil)
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardOutput = outHandle
         process.standardError = errHandle

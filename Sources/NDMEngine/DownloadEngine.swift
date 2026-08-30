@@ -487,6 +487,13 @@ public actor DownloadEngine {
         try replanConnections(count)
     }
 
+    /// Apply a new effective cap without stopping the active range workers.
+    /// BandwidthLimiter is lock-protected and resets its current token window,
+    /// so the next received chunk observes the new value immediately.
+    public func applyBandwidthLimit(_ bytesPerSecond: Int64) {
+        limiter.updateLimit(bytesPerSecond)
+    }
+
     /// Replan unfinished ranges to a new concurrency (pause soft-stop not required).
     private func replanConnections(_ count: Int) throws {
         let n = max(1, min(count, 32))

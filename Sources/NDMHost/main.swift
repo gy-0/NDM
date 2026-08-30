@@ -47,6 +47,7 @@ Task.detached(priority: .utility) {
 enum HostRequestError: LocalizedError {
     case collectionUnavailable
     case invalidProxyPort
+    case invalidInstaller
 
     var errorDescription: String? {
         switch self {
@@ -54,7 +55,29 @@ enum HostRequestError: LocalizedError {
             return "没有可加入队列的合集条目，请重新解析后再试"
         case .invalidProxyPort:
             return "代理端口必须是 1–65535 之间的整数"
+        case .invalidInstaller:
+            return "安装文件不存在，或不是 DMG 磁盘映像"
         }
+    }
+}
+
+/// Captures the candidates InstallerRunner discovers without forcing a UI
+/// decision into the host process. The Electron shell can present a native
+/// choice dialog and re-drive the same request with the chosen app.
+final class InstallerChoiceCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: [String] = []
+
+    func record(_ candidates: [String]) {
+        lock.lock()
+        value = candidates
+        lock.unlock()
+    }
+
+    func candidates() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
 
@@ -178,6 +201,22 @@ Task {
 
 // Start Browser WebSocket Bridge for Chrome / Edge / Firefox extensions
 let bridge = BrowserBridge(port: currentSettings.bridgePort)
+// Throttle focus requests: when a page dumps a burst of downloads at once,
+// the first one already shows the window — the rest would just steal focus
+// mid-task. Coalesce to one focus ping per second. Lock-protected because
+// concurrent bridge messages run in separate Tasks.
+final class BridgeFocusThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastAt: Date = .distantPast
+    func shouldFocus(now: Date = Date(), minInterval: TimeInterval = 1.0) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard now.timeIntervalSince(lastAt) >= minInterval else { return false }
+        lastAt = now
+        return true
+    }
+}
+let bridgeFocusThrottle = BridgeFocusThrottle()
 bridge.onDownloadMessage = { msg in
     Task {
         do {
@@ -206,6 +245,12 @@ bridge.onDownloadMessage = { msg in
             }
             try? await manager.start(taskID: task.id)
             broadcast(["op": "snapshot", "tasks": await snapshot()])
+            // A new file just entered the queue — make sure the user can see it.
+            // Without this, downloads silently pile up while the user stares at
+            // the browser wondering if anything happened.
+            if bridgeFocusThrottle.shouldFocus() {
+                broadcast(["op": "focusApp"])
+            }
         } catch {
             FileHandle.standardError.write(Data("NDMHost: browser bridge error: \(error)\n".utf8))
         }
@@ -493,6 +538,84 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 "ok": true,
                 "artifacts": completionStackJSON(for: task)
             ])
+        case "installDMG":
+            guard let rawPath = request["path"] as? String else {
+                throw HostRequestError.invalidInstaller
+            }
+            let imageURL = URL(fileURLWithPath: rawPath)
+            guard imageURL.pathExtension.lowercased() == "dmg",
+                  FileManager.default.fileExists(atPath: imageURL.path) else {
+                throw HostRequestError.invalidInstaller
+            }
+
+            let selectedApp = (request["selectedApp"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            let capturedChoices = InstallerChoiceCapture()
+            let reportStep: @Sendable (InstallerRunner.Step) -> Void = { step in
+                var payload: [String: Any] = [
+                    "op": "installProgress",
+                    "path": imageURL.path
+                ]
+                switch step {
+                case .mounting:
+                    payload["phase"] = "mounting"
+                case .enumerating:
+                    payload["phase"] = "scanning"
+                case .copying(let app):
+                    payload["phase"] = "copying"
+                    payload["appName"] = app
+                case .detaching:
+                    payload["phase"] = "finishing"
+                }
+                sendJSON(connection, payload)
+            }
+            let outcome = try await InstallerRunner.process(
+                dmgURL: imageURL,
+                destination: URL(fileURLWithPath: "/Applications", isDirectory: true),
+                replaceExisting: request["replaceExisting"] as? Bool ?? false,
+                licenseAccepted: request["licenseAccepted"] as? Bool ?? false,
+                onStep: reportStep,
+                askChoose: { candidates in
+                    capturedChoices.record(candidates)
+                    guard let selectedApp,
+                          !selectedApp.isEmpty,
+                          candidates.contains(selectedApp) else { return nil }
+                    return selectedApp
+                }
+            )
+
+            switch outcome {
+            case .installed(let appName, let installedURL):
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": true,
+                    "outcome": "installed",
+                    "appName": appName,
+                    "installedPath": installedURL.path
+                ])
+            case .needsReplaceConsent(let appName):
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": true,
+                    "outcome": "needsReplaceConsent",
+                    "appName": appName
+                ])
+            case .needsLicenseHandoff:
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": true,
+                    "outcome": "needsLicenseHandoff"
+                ])
+            case .noAppFound:
+                let candidates = capturedChoices.candidates()
+                sendJSON(connection, [
+                    "id": id,
+                    "ok": true,
+                    "outcome": candidates.isEmpty ? "noAppFound" : "needsAppChoice",
+                    "candidates": candidates
+                ])
+            }
         case "findDuplicate":
             let urls = (request["urls"] as? [String])
                 ?? (request["url"] as? String).map { [$0] }
@@ -527,6 +650,9 @@ func handle(request: [String: Any], connection: NWConnection) async {
             }
             if let conns = request["maxConnections"] as? Int, conns > 0 {
                 currentSettings.maxConnections = conns
+            }
+            if let allAtOnce = request["downloadAllAtOnce"] as? Bool {
+                currentSettings.downloadAllAtOnce = allAtOnce
             }
             if let speed = request["bandwidthLimitBytesPerSecond"] as? Int64 ?? (request["bandwidthLimitBytesPerSecond"] as? Int).map(Int64.init) {
                 currentSettings.bandwidthLimitBytesPerSecond = speed

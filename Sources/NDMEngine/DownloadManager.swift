@@ -63,9 +63,42 @@ public actor DownloadManager {
         self.onTaskCompleted = onTaskCompleted
     }
 
-    public func updateSettings(_ settings: AppSettings) {
+    public func updateSettings(_ settings: AppSettings) async {
+        let wasAllAtOnce = self.settings.downloadAllAtOnce
         self.settings = settings
+        for (taskID, engine) in engines {
+            let taskLimit = (try? task(id: taskID))?.bandwidthLimit ?? 0
+            let effectiveLimit = taskLimit > 0
+                ? taskLimit
+                : settings.bandwidthLimitBytesPerSecond
+            await engine.applyBandwidthLimit(effectiveLimit)
+        }
+        // Switching from one-by-one to parallel is an immediate product
+        // action: queued rows should begin without asking the user to pause,
+        // close settings, and press Continue on every row. Never auto-resume
+        // explicitly paused/incomplete rows, and keep collection entries
+        // serialized so a playlist cannot fan out into dozens of processes.
+        if settings.downloadAllAtOnce && !wasAllAtOnce {
+            await startWaitingTasksAfterQueueModeChange()
+        }
         onSettingsChanged?(settings)
+    }
+
+    private func startWaitingTasksAfterQueueModeChange() async {
+        guard let tasks = try? store.allDownloads() else { return }
+        let ordinaryWaiting = tasks.filter {
+            $0.status == .waiting && !Self.isCollectionEntry($0)
+        }
+        for task in ordinaryWaiting {
+            try? await start(taskID: task.id)
+        }
+
+        // A collection is represented by many waiting rows, but its next item
+        // is intentionally advanced one at a time by clearRunning(). Start
+        // only the head here; the collection callback owns the rest.
+        if let collectionHead = Self.queuedCollectionCandidate(in: tasks) {
+            try? await start(taskID: collectionHead.id)
+        }
     }
 
     public func setCompletionHandler(_ handler: (@Sendable (DownloadTask) -> Void)?) {
@@ -1224,12 +1257,16 @@ public actor DownloadManager {
         try await engines[taskID]?.applyConnectionsCount(n)
     }
 
-    /// Persist a per-task cap. Live HTTP engines pick this up on the next
-    /// start; a running transfer keeps its current limiter until then.
-    public func applyBandwidth(taskID: Int64, bytesPerSecond: Int64) throws {
+    /// Persist a per-task cap and apply it to an active HTTP transfer now.
+    /// Setting zero falls back to the current global cap.
+    public func applyBandwidth(taskID: Int64, bytesPerSecond: Int64) async throws {
         guard var task = try task(id: taskID) else { throw ManagerError.taskNotFound }
         task.bandwidthLimit = max(0, bytesPerSecond)
         try store.update(task)
+        let effectiveLimit = task.bandwidthLimit > 0
+            ? task.bandwidthLimit
+            : settings.bandwidthLimitBytesPerSecond
+        await engines[taskID]?.applyBandwidthLimit(effectiveLimit)
     }
 
     /// A08 — renew expired URL while keeping task id / partial segments.
