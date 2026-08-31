@@ -1,5 +1,7 @@
 import Foundation
 import Network
+import AppKit
+import QuickLookThumbnailing
 import NDMCore
 import NDMEngine
 import NDMBridge
@@ -79,6 +81,69 @@ final class InstallerChoiceCapture: @unchecked Sendable {
         defer { lock.unlock() }
         return value
     }
+}
+
+func pngDataURL(_ image: NSImage, maxDimension: CGFloat? = nil) -> String? {
+    let output: NSImage
+    if let maxDimension {
+        let sourceSize = image.size
+        let longest = max(sourceSize.width, sourceSize.height, 1)
+        let scale = min(1, maxDimension / longest)
+        let targetSize = NSSize(
+            width: max(1, sourceSize.width * scale),
+            height: max(1, sourceSize.height * scale)
+        )
+        let rasterized = NSImage(size: targetSize)
+        rasterized.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image.draw(
+            in: NSRect(origin: .zero, size: targetSize),
+            from: NSRect(origin: .zero, size: sourceSize),
+            operation: .sourceOver,
+            fraction: 1
+        )
+        rasterized.unlockFocus()
+        output = rasterized
+    } else {
+        output = image
+    }
+    guard let tiff = output.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          let png = bitmap.representation(using: .png, properties: [:]) else {
+        return nil
+    }
+    return "data:image/png;base64,\(png.base64EncodedString())"
+}
+
+@MainActor
+func workspaceIconArtwork(path: String) -> [String: Any]? {
+    let image = NSWorkspace.shared.icon(forFile: path)
+    guard let dataURL = pngDataURL(image, maxDimension: 128) else { return nil }
+    return ["dataURL": dataURL, "kind": "icon"]
+}
+
+func fileArtwork(path: String, preferIcon: Bool) async -> [String: Any]? {
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    if preferIcon {
+        return await workspaceIconArtwork(path: path)
+    }
+    let request = QLThumbnailGenerator.Request(
+        fileAt: URL(fileURLWithPath: path),
+        size: CGSize(width: 640, height: 360),
+        scale: 2,
+        representationTypes: .thumbnail
+    )
+    let representation: QLThumbnailRepresentation? = await withCheckedContinuation { continuation in
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { thumbnail, error in
+            continuation.resume(returning: error == nil ? thumbnail : nil)
+        }
+    }
+    if let representation,
+       let dataURL = pngDataURL(representation.nsImage) {
+        return ["dataURL": dataURL, "kind": "preview"]
+    }
+    // Files without a Quick Look generator still get their workspace icon.
+    return await workspaceIconArtwork(path: path)
 }
 
 func validatedProxyPort(
@@ -311,6 +376,7 @@ func settingsJSON(_ s: AppSettings) -> [String: Any] {
         "useCategoryFolders": s.useCategoryFolders,
         "downloadAllAtOnce": s.downloadAllAtOnce,
         "smartConnections": s.smartConnectionsEnabled,
+        "installerSourceDisposition": s.installerSourceDispositionValue.rawValue,
         "bridgePort": NSNumber(value: s.bridgePort)
     ]
     if let http = s.httpProxy {
@@ -547,6 +613,17 @@ func handle(request: [String: Any], connection: NWConnection) async {
                 "ok": true,
                 "artifacts": completionStackJSON(for: task)
             ])
+        case "fileArtwork":
+            guard let path = request["path"] as? String,
+                  !path.isEmpty,
+                  let artwork = await fileArtwork(
+                    path: path,
+                    preferIcon: request["preferIcon"] as? Bool ?? false
+                  ) else {
+                sendJSON(connection, ["id": id, "ok": true, "artwork": NSNull()])
+                return
+            }
+            sendJSON(connection, ["id": id, "ok": true, "artwork": artwork])
         case "installDMG":
             guard let rawPath = request["path"] as? String else {
                 throw HostRequestError.invalidInstaller
@@ -668,6 +745,10 @@ func handle(request: [String: Any], connection: NWConnection) async {
             }
             if let catFolders = request["useCategoryFolders"] as? Bool {
                 currentSettings.useCategoryFolders = catFolders
+            }
+            if let rawDisposition = request["installerSourceDisposition"] as? String,
+               let disposition = InstallerSourceDisposition(rawValue: rawDisposition) {
+                currentSettings.installerSourceDisposition = disposition
             }
             if let update = httpProxyUpdate {
                 currentSettings.httpProxy = update.host.isEmpty
