@@ -124,6 +124,12 @@ func workspaceIconArtwork(path: String) -> [String: Any]? {
 
 func fileArtwork(path: String, preferIcon: Bool) async -> [String: Any]? {
     guard FileManager.default.fileExists(atPath: path) else { return nil }
+    let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+    if ext == "dmg" || ext == "iso" {
+        if let inner = await DiskImageArtworkCache.shared.artwork(for: path, support: support) {
+            return inner
+        }
+    }
     if preferIcon {
         return await workspaceIconArtwork(path: path)
     }

@@ -45,4 +45,35 @@ public enum InstallerPlan: Equatable, Sendable {
             return nil
         }
     }
+
+    /// Pick the app a list row should represent when a disk image carries more
+    /// than one bundle. Prefers a name that matches the image filename, then
+    /// skips uninstallers, then keeps archive order.
+    public static func preferredApp(candidates: [String], filename: String) -> String? {
+        guard !candidates.isEmpty else { return nil }
+        if candidates.count == 1 { return candidates[0] }
+        let stem = normalizedStem(filename)
+        if !stem.isEmpty {
+            if let exact = candidates.first(where: { normalizedStem($0) == stem }) {
+                return exact
+            }
+            if let fuzzy = candidates.first(where: { candidate in
+                let name = normalizedStem(candidate)
+                return !name.isEmpty && (stem.contains(name) || name.contains(stem))
+            }) {
+                return fuzzy
+            }
+        }
+        let usable = candidates.filter { !normalizedStem($0).contains("uninstall") }
+        return usable.first ?? candidates.first
+    }
+
+    private static func normalizedStem(_ path: String) -> String {
+        let last = (path as NSString).lastPathComponent
+        return ((last as NSString).deletingPathExtension as String)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+    }
 }

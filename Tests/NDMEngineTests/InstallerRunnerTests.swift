@@ -326,6 +326,31 @@ final class InstallerRunnerTests: XCTestCase {
         }
     }
 
+    func testPeeksPrimaryAppInsideDiskImage() async throws {
+        let volume = "NDMPeek-\(UUID().uuidString.prefix(6))"
+        let src = sources.appendingPathComponent("peek", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try makeAppBundle(named: "Fake.app", in: src, marker: "icon")
+        let dmg = try makeDMG(volumeName: volume, sourceDir: src, fileName: "Fake.dmg")
+
+        let seen = try await DiskImagePeek.withPrimaryApp(dmgURL: dmg) { $0.lastPathComponent }
+        XCTAssertEqual(seen, "Fake.app")
+        assertDetached(volumeName: volume)
+    }
+
+    func testPeekPrefersFilenameMatchedAppAmongSeveral() async throws {
+        let volume = "NDMPeek-\(UUID().uuidString.prefix(6))"
+        let src = sources.appendingPathComponent("peek-many", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try makeAppBundle(named: "Helper.app", in: src, marker: "h")
+        try makeAppBundle(named: "Wonder.app", in: src, marker: "w")
+        let dmg = try makeDMG(volumeName: volume, sourceDir: src, fileName: "Wonder-1.2.dmg")
+
+        let seen = try await DiskImagePeek.withPrimaryApp(dmgURL: dmg) { $0.lastPathComponent }
+        XCTAssertEqual(seen, "Wonder.app")
+        assertDetached(volumeName: volume)
+    }
+
     // MARK: - Volume enumerator (no hdiutil needed)
 
     func testVolumeEnumeratorPrunesJunkAndStopsInsideBundles() throws {

@@ -54,4 +54,32 @@ final class InstallerPlanTests: XCTestCase {
         )
         XCTAssertEqual(plan, .noAppFound)
     }
+
+    func testPreferredAppMatchesImageFilename() {
+        XCTAssertEqual(
+            InstallerPlan.preferredApp(
+                candidates: ["Helper.app", "Wonder.app", "Uninstall Wonder.app"],
+                filename: "Wonder-1.2.dmg"
+            ),
+            "Wonder.app"
+        )
+    }
+
+    func testPreferredAppSkipsUninstallerWhenNothingMatches() {
+        XCTAssertEqual(
+            InstallerPlan.preferredApp(
+                candidates: ["Uninstall Foo.app", "Foo.app"],
+                filename: "archive.dmg"
+            ),
+            "Foo.app"
+        )
+    }
+
+    func testPreferredAppSingleCandidate() {
+        XCTAssertEqual(
+            InstallerPlan.preferredApp(candidates: ["Only.app"], filename: "Other.dmg"),
+            "Only.app"
+        )
+        XCTAssertNil(InstallerPlan.preferredApp(candidates: [], filename: "Empty.dmg"))
+    }
 }
