@@ -351,6 +351,45 @@ final class InstallerRunnerTests: XCTestCase {
         assertDetached(volumeName: volume)
     }
 
+    func testPeeksAppInsidePackageDiskImage() async throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/pkgbuild") else {
+            throw XCTSkip("pkgbuild is not available")
+        }
+        let volume = "NDMPeekPkg-\(UUID().uuidString.prefix(6))"
+        let appRoot = sources.appendingPathComponent("peek-pkg-app", isDirectory: true)
+        try FileManager.default.createDirectory(at: appRoot, withIntermediateDirectories: true)
+        try makeAppBundle(named: "EasyConnect.app", in: appRoot, marker: "vpn")
+        let pkg = root.appendingPathComponent("Install EasyConnect.pkg")
+        let pkgbuild = Process()
+        pkgbuild.executableURL = URL(filePath: "/usr/bin/pkgbuild")
+        pkgbuild.arguments = [
+            "--root", appRoot.path,
+            "--identifier", "com.sangfor.EasyConnect",
+            "--install-location", "/Applications",
+            pkg.path,
+        ]
+        pkgbuild.standardOutput = FileHandle.nullDevice
+        pkgbuild.standardError = FileHandle.nullDevice
+        try pkgbuild.run()
+        pkgbuild.waitUntilExit()
+        XCTAssertEqual(pkgbuild.terminationStatus, 0, "pkgbuild failed")
+
+        let dmgSrc = sources.appendingPathComponent("peek-pkg-dmg", isDirectory: true)
+        try FileManager.default.createDirectory(at: dmgSrc, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: pkg,
+            to: dmgSrc.appendingPathComponent("Install EasyConnect.pkg")
+        )
+        let dmg = try makeDMG(
+            volumeName: volume,
+            sourceDir: dmgSrc,
+            fileName: "EasyConnect_7_6_7_4.dmg"
+        )
+        let seen = try await DiskImagePeek.withPrimaryApp(dmgURL: dmg) { $0.lastPathComponent }
+        XCTAssertEqual(seen, "EasyConnect.app")
+        assertDetached(volumeName: volume)
+    }
+
     // MARK: - Volume enumerator (no hdiutil needed)
 
     func testVolumeEnumeratorPrunesJunkAndStopsInsideBundles() throws {

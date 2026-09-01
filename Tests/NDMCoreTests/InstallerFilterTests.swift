@@ -94,4 +94,25 @@ final class InstallerFilterTests: XCTestCase {
             []
         )
     }
+
+    func testPackageDetection() {
+        XCTAssertTrue(InstallerFilter.isPackage(name: "Install EasyConnect.pkg"))
+        XCTAssertTrue(InstallerFilter.isPackage(name: "Foo.mpkg"))
+        XCTAssertTrue(InstallerFilter.isPackage(name: "FOO.PKG"))
+        XCTAssertFalse(InstallerFilter.isPackage(name: "Foo.app"))
+        XCTAssertFalse(InstallerFilter.isPackage(name: "Foo.pkgx"))
+    }
+
+    func testPackageCandidatesIgnoreNestedAndJunk() {
+        let entries = [
+            "Install EasyConnect.pkg",
+            ".Trashes/Install.pkg",
+            "Foo.app/Contents/Resources/helper.pkg",
+            "Nested/Setup.pkg",
+        ]
+        XCTAssertEqual(
+            InstallerFilter.packageCandidates(entries: entries),
+            ["Install EasyConnect.pkg", "Nested/Setup.pkg"]
+        )
+    }
 }

@@ -38,6 +38,38 @@ public enum InstallerFilter: Sendable {
         name.lowercased().hasSuffix(".app")
     }
 
+    /// Whether a path component is an installer package (`.pkg` / `.mpkg`).
+    public static func isPackage(name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.hasSuffix(".pkg") || lower.hasSuffix(".mpkg")
+    }
+
+    /// Installer packages among archive entries, stopping at the first `.pkg`
+    /// and ignoring packages nested inside an app bundle.
+    public static func packageCandidates(entries: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for entry in entries {
+            guard !isJunkEntry(path: entry) else { continue }
+            let components = entry.split(separator: "/", omittingEmptySubsequences: true)
+            var pkgIndex: Int?
+            for (index, component) in components.enumerated() {
+                let name = String(component)
+                if isAppBundle(name: name) { break }
+                if isPackage(name: name) {
+                    pkgIndex = index
+                    break
+                }
+            }
+            guard let pkgIndex else { continue }
+            let candidate = components[0...pkgIndex].joined(separator: "/")
+            guard !seen.contains(candidate) else { continue }
+            seen.insert(candidate)
+            result.append(candidate)
+        }
+        return result
+    }
+
     /// Top-level app bundles among archive entries.
     ///
     /// An archive entry can be `Foo.app`, `Foo.app/Contents/...`, or

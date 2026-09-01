@@ -17,14 +17,14 @@ actor DiskImageArtworkCache {
     func artwork(for path: String, support: URL) async -> [String: Any]? {
         let key = Self.cacheKey(path: path)
         if let dataURL = memory[key] {
-            return ["dataURL": dataURL, "kind": "icon"]
+            return dataURL.isEmpty ? nil : ["dataURL": dataURL, "kind": "icon"]
         }
         if let dataURL = Self.readDisk(key: key, support: support) {
             memory[key] = dataURL
             return ["dataURL": dataURL, "kind": "icon"]
         }
         if let existing = inflight[key] {
-            guard let dataURL = await existing.value else { return nil }
+            guard let dataURL = await existing.value, !dataURL.isEmpty else { return nil }
             return ["dataURL": dataURL, "kind": "icon"]
         }
         let previous = tail
@@ -37,8 +37,8 @@ actor DiskImageArtworkCache {
         tail = Task { _ = await task.value }
         let dataURL = await task.value
         inflight[key] = nil
-        guard let dataURL else { return nil }
-        memory[key] = dataURL
+        memory[key] = dataURL ?? ""
+        guard let dataURL, !dataURL.isEmpty else { return nil }
         Self.writeDisk(key: key, support: support, dataURL: dataURL)
         return ["dataURL": dataURL, "kind": "icon"]
     }
@@ -46,20 +46,44 @@ actor DiskImageArtworkCache {
     private static func peek(path: String) async -> String? {
         do {
             return try await DiskImagePeek.withPrimaryApp(dmgURL: URL(fileURLWithPath: path)) { appURL in
-                let appPath = appURL.path
                 guard let dataURL = await MainActor.run(body: {
-                    pngDataURL(
-                        NSWorkspace.shared.icon(forFile: appPath),
-                        maxDimension: 128
-                    )
+                    pngDataURL(appBundleIcon(at: appURL), maxDimension: 128)
                 }) else {
                     throw InstallerError.enumerationFailed(detail: "no app icon")
                 }
                 return dataURL
             }
         } catch {
+            fputs("NDMHost: disk-image peek failed for \(URL(fileURLWithPath: path).lastPathComponent): \(error)\n", stderr)
             return nil
         }
+    }
+
+    /// Prefer the icns inside the bundle. `NSWorkspace.icon(forFile:)` on a
+    /// just-mounted (or reconstructed) app often returns the generic purple
+    /// placeholder before Launch Services has registered it.
+    private static func appBundleIcon(at appURL: URL) -> NSImage {
+        let resources = appURL.appendingPathComponent("Contents/Resources")
+        let info = appURL.appendingPathComponent("Contents/Info.plist")
+        if let plist = NSDictionary(contentsOf: info) {
+            for key in ["CFBundleIconFile", "CFBundleIconName"] {
+                guard let raw = plist[key] as? String, !raw.isEmpty else { continue }
+                let name = raw.lowercased().hasSuffix(".icns") ? raw : "\(raw).icns"
+                if let image = NSImage(contentsOf: resources.appendingPathComponent(name)), image.isValid {
+                    return image
+                }
+            }
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: resources,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        for file in files where file.pathExtension.lowercased() == "icns" {
+            if let image = NSImage(contentsOf: file), image.isValid {
+                return image
+            }
+        }
+        return NSWorkspace.shared.icon(forFile: appURL.path)
     }
 
     private static func cacheKey(path: String) -> String {

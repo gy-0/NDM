@@ -30,7 +30,9 @@ public enum VolumeEnumerator: Sendable {
             let values = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             let isDirectory = values?.isDirectory ?? false
             let isSymlink = values?.isSymbolicLink ?? false
-            if isDirectory, !isSymlink, !InstallerFilter.isAppBundle(name: name) {
+            if isDirectory, !isSymlink,
+               !InstallerFilter.isAppBundle(name: name),
+               !InstallerFilter.isPackage(name: name) {
                 walk(item, prefix: relative, into: &result)
             }
         }

@@ -129,6 +129,10 @@ func fileArtwork(path: String, preferIcon: Bool) async -> [String: Any]? {
         if let inner = await DiskImageArtworkCache.shared.artwork(for: path, support: support) {
             return inner
         }
+        // A generic disk-image glyph looks like peek never ran. Leave the
+        // row on its type mark until an inner app icon is actually found.
+        fputs("NDMHost: no inner app icon in \(URL(fileURLWithPath: path).lastPathComponent)\n", stderr)
+        return nil
     }
     if preferIcon {
         return await workspaceIconArtwork(path: path)
