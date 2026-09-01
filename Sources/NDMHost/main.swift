@@ -436,6 +436,10 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
     let connections = progress.map {
         $0.currentConnections > 0 ? $0.currentConnections : task.connections
     } ?? task.connections
+    let effectiveBandwidthLimit = progress?.effectiveBandwidthLimitBytesPerSecond
+        ?? (task.bandwidthLimit > 0
+            ? task.bandwidthLimit
+            : currentSettings.bandwidthLimitBytesPerSecond)
     let isHLS = task.linkType.lowercased() == "hls"
         || task.url.lowercased().contains(".m3u8")
     let segments = (progress?.segmentStates ?? []).map { segment in
@@ -474,6 +478,7 @@ func taskJSON(_ task: DownloadTask, progress: DownloadProgress?) -> [String: Any
         "bytesPerSecond": speed,
         "connections": connections,
         "bandwidthLimit": NSNumber(value: task.bandwidthLimit),
+        "effectiveBandwidthLimit": NSNumber(value: effectiveBandwidthLimit),
         "segments": segments,
         "folderPath": task.folderPath ?? ""
     ]

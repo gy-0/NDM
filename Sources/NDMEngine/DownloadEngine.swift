@@ -114,13 +114,14 @@ public actor DownloadEngine {
         self.tuneConfig = tuneConfig
         self.connectionCap = max(1, min(request.connections, 32))
         self.currentConnections = max(1, min(request.connections, 32))
+        let perTask = request.bandwidthLimitBytesPerSecond
+        let limit = perTask > 0 ? perTask : globalBandwidthLimit
         self.progress = DownloadProgress(
             taskID: taskID,
             status: .waiting,
-            currentConnections: self.currentConnections
+            currentConnections: self.currentConnections,
+            effectiveBandwidthLimitBytesPerSecond: limit
         )
-        let perTask = request.bandwidthLimitBytesPerSecond
-        let limit = perTask > 0 ? perTask : globalBandwidthLimit
         self.limiter = BandwidthLimiter(bytesPerSecond: limit)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 60
@@ -468,7 +469,9 @@ public actor DownloadEngine {
     /// BandwidthLimiter is lock-protected and resets its current token window,
     /// so the next received chunk observes the new value immediately.
     public func applyBandwidthLimit(_ bytesPerSecond: Int64) {
-        limiter.updateLimit(bytesPerSecond)
+        let limit = max(0, bytesPerSecond)
+        progress.effectiveBandwidthLimitBytesPerSecond = limit
+        limiter.updateLimit(limit)
     }
 
     /// Replan unfinished ranges to a new concurrency (pause soft-stop not required).

@@ -25,6 +25,9 @@ public struct DownloadProgress: Sendable, Equatable {
     /// `0` means the engine has not reported yet — UI falls back to
     /// `DownloadTask.connections` (configured ceiling), never a magic max.
     public var currentConnections: Int
+    /// The cap the engine is actually enforcing after resolving the task
+    /// override against the global setting. `0` means genuinely unlimited.
+    public var effectiveBandwidthLimitBytesPerSecond: Int64
 
     public init(
         taskID: Int64,
@@ -37,7 +40,8 @@ public struct DownloadProgress: Sendable, Equatable {
         phase: DownloadPhase? = nil,
         journeyFraction: Double? = nil,
         tuning: ConnectionTuning? = nil,
-        currentConnections: Int = 0
+        currentConnections: Int = 0,
+        effectiveBandwidthLimitBytesPerSecond: Int64 = 0
     ) {
         self.taskID = taskID
         self.totalBytes = totalBytes
@@ -50,6 +54,7 @@ public struct DownloadProgress: Sendable, Equatable {
         self.journeyFraction = journeyFraction
         self.tuning = tuning
         self.currentConnections = max(0, currentConnections)
+        self.effectiveBandwidthLimitBytesPerSecond = max(0, effectiveBandwidthLimitBytesPerSecond)
     }
 
     public var fractionCompleted: Double {
