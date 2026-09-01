@@ -307,9 +307,9 @@ final class DownloadEngineIntegrationTests: XCTestCase {
         let task = try await manager.addURL(server.baseURL.absoluteString, connections: 2)
 
         try await manager.start(taskID: task.id)
-        try await waitUntil(timeout: 5) { server.recordedRanges.count >= 3 }
+        try await waitUntil(timeout: 5) { server.recordedRanges.count >= 2 }
         let rangesBeforeApply = server.recordedRanges
-        XCTAssertTrue(rangesBeforeApply.contains { $0.contains("bytes=0-524287") })
+        XCTAssertTrue(rangesBeforeApply.contains { $0.contains("bytes=0-1048575") })
 
         try await manager.applyConnections(taskID: task.id, count: 4)
         try await manager.startAndWait(taskID: task.id)
@@ -326,7 +326,7 @@ final class DownloadEngineIntegrationTests: XCTestCase {
 
         let work = support.appendingPathComponent("\(task.id)", isDirectory: true)
         let persisted = try XCTUnwrap(try SegmentFileFormat.loadSegmentsBin(from: work))
-        XCTAssertGreaterThanOrEqual(persisted.count, 5) // completed bootstrap prefix + four live holes
+        XCTAssertGreaterThanOrEqual(persisted.count, 4)
         let log = try String(contentsOf: work.appendingPathComponent("LogFile.txt"), encoding: .utf8)
         XCTAssertTrue(log.contains("cancelling active Range round for live replan"))
         XCTAssertTrue(log.contains("Replanned active transfers: MaxAllowedConnection = 4"))

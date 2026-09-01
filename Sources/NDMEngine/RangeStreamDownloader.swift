@@ -1,4 +1,5 @@
 import Foundation
+import NDMCore
 
 /// Streams an HTTP Range (or full GET) into a file with append + progress callbacks.
 /// Partial `seg.xN` files remain on cancel so the engine can resume.
@@ -18,6 +19,8 @@ enum RangeStreamDownloader {
         isCancelled: @escaping @Sendable () -> Bool,
         cancellationTokens: [CancelToken] = [],
         limiter: BandwidthLimiter?,
+        httpProxy: ProxySettings? = nil,
+        socksProxy: SocksProxySettings? = nil,
         onBytes: @escaping @Sendable (Int64) -> Void
     ) async throws -> Result {
         try await withCheckedThrowingContinuation { continuation in
@@ -28,6 +31,8 @@ enum RangeStreamDownloader {
                 isCancelled: isCancelled,
                 cancellationTokens: cancellationTokens,
                 limiter: limiter,
+                httpProxy: httpProxy,
+                socksProxy: socksProxy,
                 onBytes: onBytes,
                 continuation: continuation
             )
@@ -44,6 +49,8 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
     private let isCancelled: @Sendable () -> Bool
     private let cancellationTokens: [CancelToken]
     private let limiter: BandwidthLimiter?
+    private let httpProxy: ProxySettings?
+    private let socksProxy: SocksProxySettings?
     private let onBytes: @Sendable (Int64) -> Void
     private var continuation: CheckedContinuation<RangeStreamDownloader.Result, Error>?
     private var session: URLSession!
@@ -68,6 +75,8 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
         isCancelled: @escaping @Sendable () -> Bool,
         cancellationTokens: [CancelToken],
         limiter: BandwidthLimiter?,
+        httpProxy: ProxySettings?,
+        socksProxy: SocksProxySettings?,
         onBytes: @escaping @Sendable (Int64) -> Void,
         continuation: CheckedContinuation<RangeStreamDownloader.Result, Error>
     ) {
@@ -77,13 +86,48 @@ private final class SessionBox: NSObject, URLSessionDataDelegate, @unchecked Sen
         self.isCancelled = isCancelled
         self.cancellationTokens = cancellationTokens
         self.limiter = limiter
+        self.httpProxy = httpProxy
+        self.socksProxy = socksProxy
         self.onBytes = onBytes
         self.continuation = continuation
         super.init()
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 60
         config.httpAdditionalHeaders = ["Accept-Encoding": "identity"]
+        config.connectionProxyDictionary = Self.proxyDictionary(
+            http: httpProxy,
+            socks: socksProxy
+        )
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
+
+    private static func proxyDictionary(
+        http: ProxySettings?,
+        socks: SocksProxySettings?
+    ) -> [AnyHashable: Any]? {
+        if let socks, socks.enabled, !socks.host.isEmpty {
+            var dict: [AnyHashable: Any] = [
+                kCFStreamPropertySOCKSProxyHost as String: socks.host,
+                kCFStreamPropertySOCKSProxyPort as String: NSNumber(value: socks.port),
+                kCFStreamPropertySOCKSVersion as String: socks.version == .v5
+                    ? kCFStreamSocketSOCKSVersion5
+                    : kCFStreamSocketSOCKSVersion4,
+            ]
+            if let username = socks.username { dict[kCFStreamPropertySOCKSUser as String] = username }
+            if let password = socks.password { dict[kCFStreamPropertySOCKSPassword as String] = password }
+            return dict
+        }
+        if let http, http.enabled, !http.host.isEmpty {
+            return [
+                kCFNetworkProxiesHTTPEnable as String: true,
+                kCFNetworkProxiesHTTPProxy as String: http.host,
+                kCFNetworkProxiesHTTPPort as String: NSNumber(value: http.port),
+                kCFNetworkProxiesHTTPSEnable as String: true,
+                kCFNetworkProxiesHTTPSProxy as String: http.host,
+                kCFNetworkProxiesHTTPSPort as String: NSNumber(value: http.port),
+            ]
+        }
+        return nil
     }
 
     func start() {

@@ -740,6 +740,9 @@ func handle(request: [String: Any], connection: NWConnection) async {
             if let allAtOnce = request["downloadAllAtOnce"] as? Bool {
                 currentSettings.downloadAllAtOnce = allAtOnce
             }
+            if let smart = request["smartConnections"] as? Bool {
+                currentSettings.smartConnections = smart
+            }
             if let speed = request["bandwidthLimitBytesPerSecond"] as? Int64 ?? (request["bandwidthLimitBytesPerSecond"] as? Int).map(Int64.init) {
                 currentSettings.bandwidthLimitBytesPerSecond = speed
             }

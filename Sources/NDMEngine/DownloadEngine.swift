@@ -27,6 +27,7 @@ public actor DownloadEngine {
     private var authAuthorization: String?
     private var authIsProxy = false
     private let httpProxyCredentials: ProxySettings?
+    private let socksProxySettings: SocksProxySettings?
     /// Mutable runtime equivalent of MaxAllowedConnection.
     private var currentConnections: Int
     /// Cancels only the active transfer round; pause/cancel continue to use `token`.
@@ -34,7 +35,6 @@ public actor DownloadEngine {
     /// Automatic tail stealing may need fewer workers than the user's ceiling.
     private var pendingTailConnectionTarget: Int?
     private var planGeneration: UInt64 = 0
-    private var isBootstrappingDynamicPlan = false
     /// Smart connection tuning: probe upward from a low count, stop honestly.
     private let autoTune: Bool
     private let tuneConfig: AutoTuneConfig
@@ -109,6 +109,7 @@ public actor DownloadEngine {
         self.capacityProvider = capacityProvider
         self.sameVolumeProvider = sameVolumeProvider
         self.httpProxyCredentials = httpProxy
+        self.socksProxySettings = socksProxy
         self.autoTune = autoTuneConnections
         self.tuneConfig = tuneConfig
         self.connectionCap = max(1, min(request.connections, 32))
@@ -246,40 +247,18 @@ public actor DownloadEngine {
                 if let existing = try loadSegmentsForResume(total: total) {
                     segments = existing
                 } else if currentConnections > 1 {
-                    // The original starts Range 0-, lets socket 1 make progress, then
-                    // fills MaxAllowedConnection. URLSession cannot mid-flight shorten
-                    // socket 1, so a short closed prefix stands in for that first
-                    // socket; the remaining pool opens immediately afterwards.
-                    let bootstrapBytes = dynamicBootstrapBytes(total: total)
-                    let bootstrap = SegmentRecord(
-                        order: 0,
-                        segmentId: 0,
-                        nextId: SegmentRecord.endOfList,
-                        start: 0,
-                        end: bootstrapBytes - 1
-                    )
-                    installProgressPlan([bootstrap])
-                    try writeSegmentsBin([bootstrap])
-                    log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = 1")
-                    log("SegmentManager Created a New Segment and now has 1 Segments.")
-                    isBootstrappingDynamicPlan = true
-                    do {
-                        try await downloadSegmentStreaming(bootstrap, planToken: nil)
-                    } catch {
-                        isBootstrappingDynamicPlan = false
-                        throw error
-                    }
-                    isBootstrappingDynamicPlan = false
-                    try throwIfStopped()
-
+                    // The probe already established the final byte length. Plan
+                    // every useful Range now so workers can ramp immediately;
+                    // waiting for a synthetic 960 KiB prefix made high-latency
+                    // VPN paths visibly slower than a browser's single stream.
+                    let planningConnections = tuningActive ? connectionCap : currentConnections
                     segments = SegmentFileFormat.planDynamicConnections(
                         totalBytes: total,
-                        connections: currentConnections,
-                        completedPrefixBytes: bootstrapBytes
+                        connections: planningConnections,
+                        completedPrefixBytes: 0
                     )
                     installProgressPlan(segments)
                     try writeSegmentsBin(segments)
-                    log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(min(currentConnections, segments.count))")
                     log("SegmentManager Created a New Segment and now has \(segments.count) Segments.")
                 } else {
                     segments = SegmentFileFormat.planEqualSegments(totalBytes: total, connections: 1)
@@ -309,7 +288,6 @@ public actor DownloadEngine {
             } catch EngineError.notResumable {
                 tuneTask?.cancel()
                 tuneTask = nil
-                isBootstrappingDynamicPlan = false
                 if autoTune {
                     setCurrentConnections(1)
                     progress.tuning = ConnectionTuning(
@@ -324,7 +302,6 @@ public actor DownloadEngine {
             } catch {
                 tuneTask?.cancel()
                 tuneTask = nil
-                isBootstrappingDynamicPlan = false
                 throw error
             }
         } else {
@@ -499,10 +476,6 @@ public actor DownloadEngine {
         let n = max(1, min(count, 32))
         setCurrentConnections(n)
         planGeneration &+= 1
-        if isBootstrappingDynamicPlan {
-            log("applyConnectionsCount: \(n) — deferred until initial Range bootstrap completes.")
-            return
-        }
         if let activePlanToken {
             log("applyConnectionsCount: \(n) — cancelling active Range round for live replan.")
             activePlanToken.cancel()
@@ -678,12 +651,12 @@ public actor DownloadEngine {
 
             if let next = SmartConnectionTuner.nextConnections(cap: connectionCap, steps: steps) {
                 log("SmartTune: raising connections \(currentConnections) → \(next)")
-                try? replanConnections(next)
+                adjustTunedConnections(next)
                 try? await Task.sleep(nanoseconds: tuneConfig.settleNanos)
             } else {
                 if let back = SmartConnectionTuner.revertTarget(steps: steps) {
                     log("SmartTune: no gain at \(currentConnections); reverting to \(back)")
-                    try? replanConnections(back)
+                    adjustTunedConnections(back)
                 }
                 publishTuning(steps: steps, outcome: SmartConnectionTuner.outcome(cap: connectionCap, steps: steps))
                 return
@@ -725,6 +698,14 @@ public actor DownloadEngine {
         progress.currentConnections = capped
     }
 
+    /// Auto-tuning changes how many already-planned ranges may run next. It does
+    /// not cancel healthy transfers; the worker pool converges as each Range
+    /// finishes, avoiding the multi-second stop/reconnect gaps seen on VPNs.
+    private func adjustTunedConnections(_ n: Int) {
+        setCurrentConnections(n)
+        log("SmartTune: worker target changed to \(currentConnections) without interrupting active ranges.")
+    }
+
     // MARK: - Download
 
     private func downloadSegmentsWithReplanning(
@@ -740,9 +721,12 @@ public actor DownloadEngine {
             let roundToken = CancelToken()
             activePlanToken = roundToken
             do {
+                let roundCap = autoTune && !tuneAborted
+                    ? connectionCap
+                    : currentConnections
                 try await downloadRound(
                     segments,
-                    maxConcurrent: currentConnections,
+                    maxConcurrent: roundCap,
                     allowTailRebalance: allowsAutomaticTailRebalance,
                     planToken: roundToken
                 )
@@ -840,7 +824,7 @@ public actor DownloadEngine {
             SegmentFileFormat.existingByteCount(for: $0, in: workDirectory) < $0.length
         }
         guard !pending.isEmpty else { return }
-        let limit = max(1, min(maxConcurrent, pending.count))
+        let limit = max(1, min(currentConnections, maxConcurrent, pending.count))
         log("New Socket(s) Created. MaxAllowedConnection = \(currentConnections) And ActiveSockets = \(limit)")
         let failureBox = RoundFailureBox()
 
@@ -873,14 +857,16 @@ public actor DownloadEngine {
                 while let segmentID = try await group.next() {
                     active -= 1
                     markSegmentFinished(segmentID)
-                    if next < pending.count {
+                    let desiredActive = max(1, min(currentConnections, maxConcurrent, pending.count))
+                    while next < pending.count, active < desiredActive {
                         enqueue(pending[next])
                         next += 1
                         active += 1
-                    } else if allowTailRebalance, let plan = tailRebalancePlan(
+                    }
+                    if next >= pending.count, allowTailRebalance, let plan = tailRebalancePlan(
                         segments,
                         activeConnections: active,
-                        targetConnections: maxConcurrent,
+                        targetConnections: currentConnections,
                         useSetupPayback: autoTune
                     ) {
                         pendingTailConnectionTarget = plan.desiredConnections
@@ -1005,6 +991,8 @@ public actor DownloadEngine {
                         },
                         cancellationTokens: cancellationTokens,
                         limiter: limiter,
+                        httpProxy: httpProxyCredentials,
+                        socksProxy: socksProxySettings,
                         onBytes: { deltaWritten in
                             Task {
                                 await engine.noteSegmentProgress(
@@ -1136,12 +1124,6 @@ public actor DownloadEngine {
         try writeSegmentsBin(replanned)
         installProgressPlan(replanned)
         return replanned
-    }
-
-    /// 960 KiB is the exact observed socket-1 prefix for fixture 4125. For small
-    /// files use one quarter so the second socket still gets meaningful work.
-    private func dynamicBootstrapBytes(total: Int64) -> Int64 {
-        min(960 * 1024, max(1, total / 4))
     }
 
     /// Servers that do not support Range still get a safe download path. It is
