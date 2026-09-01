@@ -633,10 +633,10 @@ public enum L10n: Sendable {
         t("Finishing the file…", "正在整理文件…")
     }
     public static var ytdlpMerging: String {
-        t("Download finished — combining video and audio…", "下载已完成，正在合并视频和音频…")
+        t("Download finished — packaging video and audio…", "下载已完成，正在封装视频和音频…")
     }
     public static var ytdlpMergingShort: String {
-        t("Combining video and audio…", "正在合并音视频…")
+        t("Packaging video and audio…", "正在封装…")
     }
     public static var ytdlpPreparingSubtitles: String {
         t("Preparing subtitles for the finished video…", "正在为成品视频整理字幕…")

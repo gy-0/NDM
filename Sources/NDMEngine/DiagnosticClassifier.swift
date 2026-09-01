@@ -34,21 +34,7 @@ public extension DownloadDiagnostic {
         case .invalidResponse:
             return .generic(detail: "Invalid HTTP response")
         case .mergeFailed(let message):
-            // YtDlpTool throws every resolver failure as `mergeFailed`; only
-            // downgrade to generic when the message looks like a yt-dlp
-            // resolver/downloader startup problem, not a real mux failure.
-            // Real FFmpeg/MKVMerge errors must keep their classification so
-            // triage surfaces the correct diagnostic.
-            let lowered = message.lowercased()
-            let isResolverNoise = lowered.contains("yt-dlp")
-                || lowered.contains("no usable video info")
-                || lowered.contains("no usable collection info")
-                || lowered.contains("aria2c exited")
-                || lowered.contains("yt-dlp not found")
-                || lowered.contains("no file appeared")
-            return isResolverNoise
-                ? .generic(detail: message)
-                : .mergeFailed(detail: message)
+            return .classifyEngineMessage(message)
         case .insufficientStorage:
             return .diskFull
         case .cancelled, .paused:

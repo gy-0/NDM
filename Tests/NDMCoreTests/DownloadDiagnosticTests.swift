@@ -60,6 +60,7 @@ final class DownloadDiagnosticTests: XCTestCase {
             .sslFailure,
             .diskFull,
             .mergeFailed(detail: "ffmpeg exited 1"),
+            .mediaFetchFailed(status: 403),
             .generic(detail: "weird: thing | with separators"),
         ]
         for diag in cases {
@@ -80,12 +81,12 @@ final class DownloadDiagnosticTests: XCTestCase {
         let diag = DownloadDiagnostic.linkExpired(status: 403)
 
         L10n.apply(.english)
-        XCTAssertEqual(diag.title, "This download link has expired")
-        XCTAssertTrue(diag.rowSummary.hasPrefix("Link expired"))
+        XCTAssertEqual(diag.title, "The download address is no longer valid")
+        XCTAssertTrue(diag.rowSummary.hasPrefix("Address expired"))
 
         L10n.apply(.simplifiedChinese)
-        XCTAssertEqual(diag.title, "这个下载地址过期了")
-        XCTAssertTrue(diag.rowSummary.hasPrefix("链接已过期"))
+        XCTAssertEqual(diag.title, "下载地址已失效")
+        XCTAssertTrue(diag.rowSummary.hasPrefix("地址已失效"))
 
         // Raw label never localizes.
         XCTAssertEqual(diag.rawLabel, "HTTP 403")
@@ -96,7 +97,7 @@ final class DownloadDiagnosticTests: XCTestCase {
             .linkExpired(status: 403), .signInRequired(status: 401), .rangeNotSupported,
             .serverThrottled, .serverError(status: 500), .httpError(status: 418),
             .offline, .timeout, .connectionLost, .sslFailure, .diskFull,
-            .mergeFailed(detail: "d"), .generic(detail: "d"),
+            .mergeFailed(detail: "d"), .mediaFetchFailed(status: 403), .generic(detail: "d"),
         ]
         for mode in [AppLanguageMode.english, .simplifiedChinese] {
             L10n.apply(mode)
@@ -210,5 +211,44 @@ final class DownloadDiagnosticTests: XCTestCase {
         let row = TaskRowPresentation.make(task: task, progress: nil)
         XCTAssertNil(row.diagnostic)
         XCTAssertEqual(row.errorText, "410 Gone")
+    }
+
+    func testStoredYtDlp403IsNotPresentedAsPackagingFailure() {
+        L10n.apply(.simplifiedChinese)
+        let stored = "#diag:mergeFailed|ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        XCTAssertEqual(
+            DownloadDiagnostic.fromStoredErrorText(stored),
+            .mediaFetchFailed(status: 403)
+        )
+        XCTAssertEqual(
+            DownloadDiagnostic.classifyEngineMessage(
+                "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+            ),
+            .mediaFetchFailed(status: 403)
+        )
+
+        let task = DownloadTask(
+            url: "https://www.youtube.com/watch?v=5KtlQYqVCAI",
+            linkType: "ytdlp",
+            status: .error,
+            errorText: stored
+        )
+        let row = TaskRowPresentation.make(task: task, progress: nil)
+        XCTAssertEqual(row.diagnostic, .mediaFetchFailed(status: 403))
+        XCTAssertEqual(row.diagnostic?.primaryAction, .retry)
+        XCTAssertEqual(TaskRecoveryAction.make(from: task), .retry)
+        XCTAssertEqual(row.diagnostic?.title, "未能获取视频数据")
+        XCTAssertTrue(row.errorText?.contains("未能获取视频") == true)
+        XCTAssertFalse(row.errorText?.contains("只能") == true)
+        XCTAssertFalse(row.diagnostic?.message.contains("只能") == true)
+    }
+
+    func testPackagingCopyDoesNotSoundLikeChat() {
+        L10n.apply(.simplifiedChinese)
+        let diag = DownloadDiagnostic.mergeFailed(detail: "ffmpeg exited 1")
+        XCTAssertEqual(diag.title, "视频封装未完成")
+        XCTAssertEqual(diag.rowSummary, "封装未完成 · 分轨已保留，可重试封装")
+        XCTAssertFalse(diag.message.contains("只能"))
+        XCTAssertTrue(diag.message.contains("重试将仅重新封装"))
     }
 }

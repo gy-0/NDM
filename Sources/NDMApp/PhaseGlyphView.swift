@@ -24,7 +24,7 @@ enum PhaseVerb {
         case .recognizing: return L10n.ytdlpPreparingShort
         case .preparing: return L10n.ytdlpPreparingShort
         case .transferring: return L10n.downloading
-        case .merging: return L10n.t("Merging", "合并中")
+        case .merging: return L10n.t("Packaging", "封装中")
         case .subtitles: return L10n.t("Subtitles", "字幕整理")
         case .finalizing: return L10n.t("Finishing", "整理中")
         case .paused: return L10n.paused

@@ -1144,7 +1144,7 @@ final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     /// names itself; the byte-gap tail before it reads "即将完成".
     private static func phaseLabel(_ phase: DownloadPhase?) -> String {
         switch phase {
-        case .merging: return L10n.t("Merging", "合并中")
+        case .merging: return L10n.t("Packaging", "封装中")
         case .subtitles: return L10n.t("Subtitles", "字幕整理")
         case .finalizing: return L10n.t("Finishing", "整理中")
         default: return L10n.t("Almost done", "即将完成")

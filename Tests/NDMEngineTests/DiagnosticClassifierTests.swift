@@ -29,6 +29,18 @@ final class DiagnosticClassifierTests: XCTestCase {
         )
         XCTAssertEqual(
             DownloadDiagnostic.classify(
+                EngineError.mergeFailed("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+            ),
+            .mediaFetchFailed(status: 403)
+        )
+        XCTAssertEqual(
+            DownloadDiagnostic.classify(
+                EngineError.mergeFailed("yt-dlp finished but no file appeared")
+            ),
+            .generic(detail: "yt-dlp finished but no file appeared")
+        )
+        XCTAssertEqual(
+            DownloadDiagnostic.classify(
                 EngineError.insufficientStorage(requiredBytes: 2_000, availableBytes: 1_000)
             ),
             .diskFull

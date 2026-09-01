@@ -368,7 +368,7 @@ public enum YtDlpTool {
         }
         let output = try await run(
             bin,
-            pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + cookieArguments(cookieSource) + [
+            pluginArguments() + trustStoreArguments() + javascriptRuntimeArguments() + bundledMediaArguments() + cookieArguments(cookieSource) + siteExtractorArguments(url: url) + [
             "-J",
             "--no-download",
             "--no-warnings",
@@ -421,6 +421,15 @@ public enum YtDlpTool {
             .contains { host == $0 || host.hasSuffix(".\($0)") }
     }
 
+    /// YouTube's default web client often answers 403 on the media URL even
+    /// after a successful probe. Asking several player clients keeps format
+    /// itags like 136+140 available while preferring clients that still
+    /// return direct googlevideo addresses.
+    static func siteExtractorArguments(url: String) -> [String] {
+        guard isYouTubeMediaURL(url) else { return [] }
+        return ["--extractor-args", "youtube:player_client=tv,android,web"]
+    }
+
     private static func infoJSONCacheDirectory() -> URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -450,7 +459,7 @@ public enum YtDlpTool {
             hash ^= UInt64(byte)
             hash = hash &* 1_099_511_628_211
         }
-        let destination = directory.appendingPathComponent(String(format: "%016llx.info.json", hash))
+        let destination = directory.appendingPathComponent(String(format: "%016llx.yt1.info.json", hash))
         guard (try? jsonText.write(to: destination, atomically: true, encoding: .utf8)) != nil else {
             return nil
         }
@@ -1138,8 +1147,9 @@ public enum YtDlpTool {
                 if cancelToken?.isPaused == true { throw EngineError.paused }
                 if cancelToken?.isCancelled == true { throw EngineError.cancelled }
                 // Signed media URLs inside the replayed probe can expire or be
-                // bound to another network path. One clean re-extraction keeps
-                // the fast path an optimization, never a new failure mode.
+                // bound to another network path. Drop the poisoned cache so a
+                // later retry cannot reuse the same 403 address.
+                try? FileManager.default.removeItem(atPath: freshInfoJSON)
                 output = try await attempt(infoJSONPath: nil)
             }
         } else {
@@ -1293,7 +1303,10 @@ public enum YtDlpTool {
             "--print", "after_move:NDM_DEST|%(filepath)s",
             "--no-simulate",
             "--socket-timeout", "20",
+            "--retries", "10",
+            "--fragment-retries", "10",
         ]
+        args.append(contentsOf: siteExtractorArguments(url: url))
         if forceOverwrite {
             args.append("--force-overwrites")
         }

@@ -32,7 +32,7 @@ public enum DeliveryNote: Equatable, Sendable {
     public var title: String {
         switch self {
         case .audioTrackMissing:
-            return L10n.t("This video has no sound", "这个视频没有声音")
+            return L10n.t("This video has no audio track", "该视频不含音轨")
         }
     }
 
@@ -41,8 +41,8 @@ public enum DeliveryNote: Equatable, Sendable {
         switch self {
         case .audioTrackMissing:
             return L10n.t(
-                "The site served the audio separately and it did not arrive, so only the picture was saved.",
-                "网站把音频单独提供，但没有取到，所以只保存了画面。"
+                "The site served audio as a separate track and it was not written into the finished file. The picture was saved.",
+                "站点将音频单独提供，但未能写入最终文件。画面已保存。"
             )
         }
     }

@@ -245,6 +245,9 @@ final class YtDlpEngineProgressTests: XCTestCase {
         XCTAssertTrue(args.contains("--concurrent-fragments"))
         XCTAssertFalse(args.contains("--downloader"))
         XCTAssertFalse(args.contains("/opt/homebrew/bin/aria2c"))
+        XCTAssertEqual(args[args.firstIndex(of: "--extractor-args")! + 1], "youtube:player_client=tv,android,web")
+        XCTAssertTrue(args.contains("--retries"))
+        XCTAssertTrue(args.contains("--fragment-retries"))
     }
 
     func testDownloadArgumentsKeepAria2cForLargeTransfers() {
@@ -258,6 +261,7 @@ final class YtDlpEngineProgressTests: XCTestCase {
             estimatedBytes: YtDlpTool.aria2MinimumBytes
         )
         XCTAssertTrue(args.contains("/opt/homebrew/bin/aria2c"))
+        XCTAssertFalse(args.contains("--extractor-args"))
     }
 
     func testDownloadArgumentsReplayFreshProbeInsteadOfTheURL() {

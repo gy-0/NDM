@@ -60,8 +60,11 @@ public enum DownloadDiagnostic: Equatable, Sendable {
     case sslFailure
     /// Local disk is out of space.
     case diskFull
-    /// Segment merge failed after download.
+    /// Packaging failed after the pieces were already on disk.
     case mergeFailed(detail: String)
+    /// The site refused the media bytes (yt-dlp “unable to download video data”).
+    /// The page URL is typically still valid — retry re-extracts a fresh address.
+    case mediaFetchFailed(status: Int)
     /// Unclassified failure; carries the original message.
     case generic(detail: String)
 
@@ -80,7 +83,8 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .connectionLost: return "connection lost"
         case .sslFailure: return "TLS"
         case .diskFull: return "disk full"
-        case .mergeFailed: return "merge"
+        case .mergeFailed: return "package"
+        case .mediaFetchFailed(let s): return "HTTP \(s)"
         case .generic: return "error"
         }
     }
@@ -91,31 +95,33 @@ public enum DownloadDiagnostic: Equatable, Sendable {
     public var title: String {
         switch self {
         case .linkExpired:
-            return L10n.t("This download link has expired", "这个下载地址过期了")
+            return L10n.t("The download address is no longer valid", "下载地址已失效")
         case .signInRequired:
-            return L10n.t("The site wants you to sign in again", "网站要求重新登录")
+            return L10n.t("Sign-in required", "需要重新登录")
         case .rangeNotSupported:
-            return L10n.t("This server doesn't support segmented download", "该服务器不支持分段下载")
+            return L10n.t("This server does not support resumable downloads", "此服务器不支持分段下载")
         case .serverThrottled:
-            return L10n.t("The server is rate-limiting downloads", "服务器正在限制下载频率")
+            return L10n.t("The server is limiting download rate", "服务器限制了下载频率")
         case .serverError:
-            return L10n.t("The server had a problem", "服务器出了点问题")
+            return L10n.t("The server is temporarily unavailable", "服务器暂时不可用")
         case .httpError(let s):
-            return L10n.t("The server refused the request (HTTP \(s))", "服务器拒绝了请求（HTTP \(s)）")
+            return L10n.t("The request was refused (HTTP \(s))", "请求被拒绝（HTTP \(s)）")
         case .offline:
-            return L10n.t("No internet connection", "当前没有网络连接")
+            return L10n.t("No network connection", "网络未连接")
         case .timeout:
-            return L10n.t("The server took too long to respond", "服务器响应超时")
+            return L10n.t("The server timed out", "服务器响应超时")
         case .connectionLost:
-            return L10n.t("The connection was interrupted", "连接中断了")
+            return L10n.t("The connection was interrupted", "连接已中断")
         case .sslFailure:
-            return L10n.t("Couldn't establish a secure connection", "无法建立安全连接")
+            return L10n.t("Could not establish a secure connection", "无法建立安全连接")
         case .diskFull:
-            return L10n.t("Your disk is full", "磁盘空间不足")
+            return L10n.t("Not enough disk space", "磁盘空间不足")
         case .mergeFailed:
-            return L10n.t("Couldn't assemble the downloaded pieces", "已下载分段合并失败")
+            return L10n.t("Could not finish packaging", "视频封装未完成")
+        case .mediaFetchFailed:
+            return L10n.t("Could not retrieve the video", "未能获取视频数据")
         case .generic:
-            return L10n.t("Download failed", "下载失败")
+            return L10n.t("Download did not complete", "下载未完成")
         }
     }
 
@@ -132,74 +138,81 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .linkExpired:
             if !hasSavedData {
                 return L10n.t(
-                    "Open the source page and start the download there once. The fresh browser handoff will attach to this same task instead of creating a duplicate.",
-                    "打开来源页面并在那里再次开始下载。浏览器取得的新授权会自动接回这个任务，不会创建重复记录。"
+                    "The original address is no longer valid. Continue once from the source page; a fresh authorization attaches to this task instead of creating a duplicate.",
+                    "原始地址已失效。请从来源页面继续一次，新的授权会接回此任务，不会创建重复记录。"
                 )
             }
             return L10n.t(
-                "Open the source page and start the download there once. The fresh browser handoff will attach to this same task; downloaded segments stay in place.",
-                "打开来源页面并在那里再次开始下载。浏览器取得的新授权会自动接回这个任务，已经下载的分段原样保留。"
+                "The original address is no longer valid. Continue once from the source page; a fresh authorization attaches to this task and downloaded data is kept.",
+                "原始地址已失效。请从来源页面继续一次，新的授权会接回此任务，已下载内容会保留。"
             )
         case .signInRequired:
             return L10n.t(
-                "Sign in again in your browser, then start the download there once. The fresh browser session will continue this same task instead of creating a duplicate.",
-                "请在浏览器重新登录，然后在那里再次开始下载。新的浏览器会话会继续这个任务，不会再创建一条重复记录。"
+                "Sign in again in the browser, then continue once from the source page. The new session resumes this task instead of creating a duplicate.",
+                "请在浏览器中重新登录，然后从来源页面继续一次。新的会话会接回此任务，不会创建重复记录。"
             )
         case .rangeNotSupported:
             return L10n.t(
-                "It doesn't accept resume requests, so multi-connection can't help here. Downloads run on a single steady connection — the speed is whatever the server gives.",
-                "它不接受断点续传请求，多连接对它无效。已用单连接稳定下载——速度就是服务器给多少是多少。"
+                "This server does not accept resume requests, so multiple connections cannot be used. The transfer continues on a single connection at the rate the server allows.",
+                "该服务器不接受断点续传，因此无法使用多连接。已改为单连接下载，速度取决于服务器。"
             )
         case .serverThrottled:
             return L10n.t(
-                "It answered with “too many requests”. Waiting a minute before retrying usually clears it; lowering connections for this host can also help.",
-                "对方返回「请求过多」。通常等一分钟再重试即可；把该站点的连接数调低也有帮助。"
+                "The server reported too many requests. Waiting briefly before retrying usually clears it; lowering connections for this host can also help.",
+                "服务器返回请求过于频繁。稍候重试通常即可恢复；也可降低该站点的连接数。"
             )
         case .serverError:
             return L10n.t(
-                "This is on their side, not yours. These errors are usually temporary — retrying in a bit tends to work.",
-                "问题出在服务器一侧，不是你的网络。这类错误通常是暂时的，稍后重试大多能成功。"
+                "This is a server-side fault and is usually temporary. Retry shortly.",
+                "这是服务器端故障，通常是暂时性的。稍后重试即可。"
             )
         case .httpError:
             return L10n.t(
-                "The link may be wrong, region-locked, or require permissions this download doesn't have. Opening the page in your browser shows what the site expects.",
-                "链接可能有误、有地区限制，或需要额外权限。在浏览器中打开来源页面可以看到网站的具体要求。"
+                "The link may be incorrect, region-restricted, or require additional permission. Opening the source page in a browser shows what the site expects.",
+                "链接可能有误、受地区限制，或需要额外权限。可在浏览器中打开来源页面确认。"
             )
         case .offline:
             return L10n.t(
-                "Check Wi-Fi or your network cable. The download will resume from where it stopped once you're back online.",
-                "请检查 Wi-Fi 或网线。恢复联网后，下载会从断点自动继续。"
+                "Check the network connection. The download resumes from the last saved byte once connectivity returns.",
+                "请检查网络连接。恢复联网后，下载将从断点继续。"
             )
         case .timeout:
             return L10n.t(
-                "The server didn't answer in time. It may be overloaded or far away — retrying often works, and a proxy can help for distant servers.",
-                "服务器迟迟没有响应，可能过载或距离太远。重试通常有效；访问远端服务器时使用代理往往更快。"
+                "The server did not respond in time. Retry; a proxy is often more stable for distant hosts.",
+                "服务器未在时限内响应。可重试；访问远端站点时使用代理通常更稳定。"
             )
         case .connectionLost:
             return L10n.t(
-                "The transfer was cut off mid-way. Nothing is lost — retry and it resumes from the last byte that made it to disk.",
-                "传输中途被切断。已下载内容不会丢失——重试后会从最后落盘的字节继续。"
+                "The transfer was interrupted. Downloaded data is kept; retry resumes from the last byte written to disk.",
+                "传输过程中连接中断。已下载内容会保留，重试将从断点继续。"
             )
         case .sslFailure:
             return L10n.t(
-                "The server's certificate couldn't be verified. If you're on public Wi-Fi or behind a proxy, that's the usual culprit.",
-                "无法验证服务器证书。如果你在公共 Wi-Fi 或代理网络中，通常是它们造成的。"
+                "The server certificate could not be verified. Public Wi-Fi and proxy networks commonly cause this.",
+                "无法验证服务器证书。公共 Wi-Fi 或代理网络常会导致此问题。"
             )
         case .diskFull:
             return L10n.t(
-                "Free up space (or change the download folder in Settings), then retry — the finished part is kept.",
-                "请清理磁盘空间（或在设置中更换下载目录）后重试——已完成的部分会保留。"
+                "Free some disk space, or change the download folder in Settings, then retry. Completed data is kept.",
+                "请清理磁盘空间，或在设置中更换下载目录后重试。已完成部分会保留。"
             )
         case .mergeFailed(let detail):
+            let lead = L10n.t(
+                "The tracks are on disk, but packaging did not produce the final file. They are kept; retry packages them again without re-downloading.",
+                "音视频分轨已下载。封装未能生成最终文件，分轨已保留。重试将仅重新封装。"
+            )
+            return detail.isEmpty ? lead : "\(lead)\n\(detail)"
+        case .mediaFetchFailed(let status):
             return L10n.t(
-                "The segments downloaded fine but couldn't be joined. Retrying re-runs just the merge. (\(detail))",
-                "分段本身下载完好，但合并失败。重试只会重新执行合并。（\(detail)）"
+                "The site refused this media request (HTTP \(status)). Partial files are kept. Retry fetches a fresh address and continues.",
+                "站点拒绝了本次媒体请求（HTTP \(status)）。已下载部分会保留。重试将重新获取地址并继续。"
             )
         case .generic(let detail):
-            return L10n.t(
-                "Retrying is worth a shot. Technical detail: \(detail)",
-                "可以先重试一次。技术细节：\(detail)"
+            let lead = L10n.t(
+                "The download did not complete. Retry is available; partial files are kept.",
+                "下载未能完成。可重试，已下载部分会保留。"
             )
+            return detail.isEmpty ? lead : "\(lead)\n\(detail)"
         }
     }
 
@@ -216,44 +229,46 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .linkExpired:
             if hasSavedData {
                 return L10n.t(
-                    "Link expired · continue from the source page, saved data is kept",
-                    "链接已过期 · 从来源页面继续，已下载内容会保留"
+                    "Address expired · continue from the source page, saved data is kept",
+                    "地址已失效 · 从来源页继续，已下载内容会保留"
                 )
             }
             return L10n.t(
-                "Link expired · continue this task from the source page",
-                "链接已过期 · 从来源页面继续此任务"
+                "Address expired · continue this task from the source page",
+                "地址已失效 · 从来源页继续此任务"
             )
         case .signInRequired:
             return L10n.t(
-                "Sign-in expired · continue once from the browser",
-                "登录已失效 · 在浏览器重新登录并继续一次"
+                "Sign-in expired · continue from the browser",
+                "登录已失效 · 请在浏览器登录后继续"
             )
         case .rangeNotSupported:
             return L10n.t(
-                "No resume support · single connection only on this server",
+                "Resume unsupported · single connection only on this server",
                 "不支持断点续传 · 该服务器仅能单连接下载"
             )
         case .serverThrottled:
-            return L10n.t("Rate-limited by server · retry in a minute", "服务器限流 · 稍等一分钟再重试")
+            return L10n.t("Rate-limited by server · retry shortly", "服务器限流 · 稍候可重试")
         case .serverError:
-            return L10n.t("Server-side error · usually temporary, retry later", "服务器故障 · 通常是暂时的，稍后重试")
+            return L10n.t("Server unavailable · retry shortly", "服务器暂不可用 · 稍后可重试")
         case .httpError(let s):
-            return L10n.t("Request refused (HTTP \(s)) · check the source page", "请求被拒 HTTP \(s) · 检查来源页面")
+            return L10n.t("Request refused (HTTP \(s)) · check the source page", "请求被拒绝 HTTP \(s) · 请来源页确认")
         case .offline:
-            return L10n.t("No internet · resumes automatically when back online", "无网络 · 恢复联网后自动续传")
+            return L10n.t("No network · resumes automatically when back online", "网络未连接 · 恢复联网后自动续传")
         case .timeout:
-            return L10n.t("Server timed out · retry, or use a proxy", "服务器超时 · 可重试，远端站点建议代理")
+            return L10n.t("Server timed out · retry", "服务器超时 · 可重试")
         case .connectionLost:
-            return L10n.t("Connection dropped · retry resumes from last byte", "连接中断 · 重试将从断点继续")
+            return L10n.t("Connection interrupted · retry resumes from last byte", "连接已中断 · 重试将从断点继续")
         case .sslFailure:
-            return L10n.t("Secure connection failed · check Wi-Fi / proxy", "安全连接失败 · 检查 Wi-Fi 或代理")
+            return L10n.t("Secure connection failed · check network or proxy", "安全连接失败 · 请检查网络或代理")
         case .diskFull:
-            return L10n.t("Disk full · free space and retry", "磁盘已满 · 清理空间后重试")
+            return L10n.t("Disk full · free space and retry", "磁盘空间不足 · 清理后可重试")
         case .mergeFailed:
-            return L10n.t("Merge failed · retry re-runs the merge only", "合并失败 · 重试只重新合并")
+            return L10n.t("Packaging incomplete · tracks kept, retry packages only", "封装未完成 · 分轨已保留，可重试封装")
+        case .mediaFetchFailed:
+            return L10n.t("Could not retrieve video · retry keeps partial files", "未能获取视频 · 可重试，已下载部分会保留")
         case .generic:
-            return L10n.t("Failed · retry available", "下载失败 · 可重试")
+            return L10n.t("Download incomplete · retry available", "下载未完成 · 可重试")
         }
     }
 
@@ -263,7 +278,7 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .linkExpired: return .renew
         case .signInRequired: return .openPage
         case .serverThrottled, .serverError, .timeout, .connectionLost,
-             .diskFull, .mergeFailed, .generic:
+             .diskFull, .mergeFailed, .mediaFetchFailed, .generic:
             return .retry
         case .httpError: return .openPage
         case .rangeNotSupported, .offline, .sslFailure: return .none
@@ -330,6 +345,7 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case .sslFailure: body = "sslFailure"
         case .diskFull: body = "diskFull"
         case .mergeFailed(let d): body = "mergeFailed|\(d)"
+        case .mediaFetchFailed(let s): body = "mediaFetchFailed:\(s)"
         case .generic(let d): body = "generic|\(d)"
         }
         return Self.storagePrefix + body
@@ -358,15 +374,107 @@ public enum DownloadDiagnostic: Equatable, Sendable {
         case "sslFailure": self = .sslFailure
         case "diskFull": self = .diskFull
         case "mergeFailed": self = .mergeFailed(detail: detail)
+        case "mediaFetchFailed": self = .mediaFetchFailed(status: code ?? 403)
         case "generic": self = .generic(detail: detail)
         default: return nil
         }
     }
 
     /// Parse persisted `task.errorText`. Returns nil for legacy plain-text errors.
+    ///
+    /// Earlier builds stored every yt-dlp failure as `mergeFailed`. Re-read the
+    /// carried message so a 403 during fetch is not presented as a packaging
+    /// failure after the app updates.
     public static func fromStoredErrorText(_ text: String?) -> DownloadDiagnostic? {
         guard let text else { return nil }
-        return DownloadDiagnostic(storageString: text)
+        guard let stored = DownloadDiagnostic(storageString: text) else { return nil }
+        if case .mergeFailed(let detail) = stored {
+            return classifyEngineMessage(detail)
+        }
+        return stored
+    }
+
+    /// Map a downloader / muxer stderr line (often carried on
+    /// `EngineError.mergeFailed`) onto the diagnostic the UI should show.
+    public static func classifyEngineMessage(_ message: String) -> DownloadDiagnostic {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased()
+        if looksLikeMuxFailure(lowered) {
+            return .mergeFailed(detail: trimmed)
+        }
+        if let status = httpStatus(in: trimmed) {
+            if looksLikeMediaFetchFailure(lowered) || (403...410).contains(status) {
+                switch status {
+                case 401, 407:
+                    return .signInRequired(status: status)
+                case 429:
+                    return .serverThrottled
+                case 500...599:
+                    return .serverError(status: status)
+                case 403, 404, 410:
+                    return .mediaFetchFailed(status: status)
+                default:
+                    return fromHTTPStatus(status)
+                }
+            }
+            return fromHTTPStatus(status)
+        }
+        if looksLikeResolverNoise(lowered) {
+            return .generic(detail: trimmed)
+        }
+        return .generic(detail: trimmed)
+    }
+
+    private static func httpStatus(in message: String) -> Int? {
+        let patterns = [
+            #"HTTP Error (\d{3})"#,
+            #"HTTP (\d{3})"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+                  match.numberOfRanges >= 2,
+                  let range = Range(match.range(at: 1), in: message),
+                  let code = Int(message[range]),
+                  (400...599).contains(code) else {
+                continue
+            }
+            return code
+        }
+        return nil
+    }
+
+    private static func looksLikeMuxFailure(_ lowered: String) -> Bool {
+        let markers = [
+            "ffmpeg", "mkvmerge", "merger", "merging", "mux", "remux",
+            "assemble", "concat", "封装", "合并",
+            "failed on merging",
+            "could not inspect downloaded media",
+            "could not read media duration",
+            "media component",
+            "could not create the media process log",
+            "error opening output",
+            "error muxing",
+            "could not write header",
+            "invalid data found when processing input",
+            "matches no streams",
+        ]
+        return markers.contains { lowered.contains($0) }
+    }
+
+    private static func looksLikeMediaFetchFailure(_ lowered: String) -> Bool {
+        lowered.contains("unable to download")
+            || lowered.contains("http error")
+            || lowered.contains("got http")
+    }
+
+    private static func looksLikeResolverNoise(_ lowered: String) -> Bool {
+        lowered.contains("yt-dlp")
+            || lowered.contains("no usable video info")
+            || lowered.contains("no usable collection info")
+            || lowered.contains("aria2c exited")
+            || lowered.contains("no file appeared")
+            || lowered.contains("parsing timed out")
     }
 }
 
